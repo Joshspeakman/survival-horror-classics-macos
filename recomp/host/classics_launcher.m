@@ -20,7 +20,10 @@
  * card, also without a shot; GTAC_LAUNCHER_OPEN=1 the Graphics Options panel open, GTAC_LAUNCHER_HOVER=<code> an item lit);
  * GTAC_LAUNCHER_PLAY=1 presses Play at once; GTAC_LAUNCHER_DRY=1 prints what Play would run instead of running it. */
 #import <Cocoa/Cocoa.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static NSColor *accent(void) { return [NSColor colorWithSRGBRed:0.98 green:0.70 blue:0.20 alpha:1]; }       /* the games' menu amber */
@@ -675,28 +678,51 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
         for (NSString *a in args) printf("'%s' ", a.UTF8String);
         printf("2>>'%s'\n", log.UTF8String); fflush(stdout); exit(0);
     }
-    [fm createDirectoryAtPath:g.data withIntermediateDirectories:YES attributes:nil error:nil];
-    if ([[fm attributesOfItemAtPath:log error:nil] fileSize] > 5000000) {   /* keep the log small: the previous one as .old */
-        NSString *old = [[log stringByDeletingPathExtension] stringByAppendingString:@".old.log"];
-        [fm removeItemAtPath:old error:nil]; [fm moveItemAtPath:log toPath:old error:nil];
-    }
-    for (NSString *k in env) setenv(k.UTF8String, [env[k] UTF8String], 1);
+    /* The game runs in a fresh instance of the app that never shows a window: it execs the game at once (main below).
+     * A full-screen game window from the process that showed this window can stay black and off the front (as in the
+     * Diablo II port), and opened through LaunchServices the instance is still this app, so Game Mode turns on. */
+    NSMutableDictionary *all = [NSProcessInfo.processInfo.environment mutableCopy];
+    [all addEntriesFromDictionary:env];
+    [all addEntriesFromDictionary:@{@"GTAC_PLAY_BIN": g.binPath, @"GTAC_PLAY_EXE": g.exePath, @"GTAC_PLAY_GAME": g.game, @"GTAC_PLAY_DATA": g.data}];
+    [all removeObjectForKey:@"GTAC_LAUNCHER_PLAY"];
+    NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
+    cfg.createsNewApplicationInstance = YES; cfg.environment = all; cfg.activates = YES;
     [self.window orderOut:nil];
-    const char **argv = calloc(args.count + 1, sizeof *argv);
-    for (NSUInteger k = 0; k < args.count; k++) argv[k] = strdup(args[k].fileSystemRepresentation);
-    int saved = fcntl(2, F_DUPFD_CLOEXEC, 3), fd = open(log.fileSystemRepresentation, O_WRONLY | O_APPEND | O_CREAT, 0644);
-    if (fd >= 0) { dup2(fd, 2); close(fd); }
-    execv(argv[0], (char *const *)argv);
-    int err = errno;                                                     /* still here: the game did not start */
-    if (saved >= 0) { dup2(saved, 2); close(saved); }
-    [self.window makeKeyAndOrderFront:nil];
-    [alert(@"The game did not start", [NSString stringWithFormat:@"%@: %s", g.binPath, strerror(err)]) runModal];
+    [[NSWorkspace sharedWorkspace] openApplicationAtURL:NSBundle.mainBundle.bundleURL configuration:cfg completionHandler:^(NSRunningApplication *app, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (app) { [NSApp terminate:nil]; return; }
+            [self.window makeKeyAndOrderFront:nil];
+            [alert(@"The game did not start", err.localizedDescription ?: @"") runModal];
+        });
+    }];
 }
 @end
+
+/* the game's instance (see play): straight into the game, its stderr in the game's log (the previous one kept as .old
+ * past 5 MB) */
+static void exec_game(void)
+{
+    const char *bin = getenv("GTAC_PLAY_BIN"), *log = getenv("DS_LOG_FILE");
+    const char *argv[] = {bin, "--exe", getenv("GTAC_PLAY_EXE"), "--game", getenv("GTAC_PLAY_GAME"), "--data", getenv("GTAC_PLAY_DATA"), 0};
+    for (int k = 2; k < 7; k += 2) if (!argv[k]) return;
+    mkdir(argv[6], 0755);
+    if (log) {
+        struct stat st;
+        if (!stat(log, &st) && st.st_size > 5000000) { char old[2048]; snprintf(old, sizeof old, "%.*s.old.log", (int)(strlen(log) - 4), log); rename(log, old); }
+        int fd = open(log, O_WRONLY | O_APPEND | O_CREAT, 0644); if (fd >= 0) { dup2(fd, 2); close(fd); }
+    }
+    char *keep[4]; const char *names[4] = {"GTAC_PLAY_BIN", "GTAC_PLAY_EXE", "GTAC_PLAY_GAME", "GTAC_PLAY_DATA"};
+    for (int k = 0; k < 4; k++) { keep[k] = strdup(getenv(names[k])); }
+    argv[0] = keep[0]; argv[2] = keep[1]; argv[4] = keep[2]; argv[6] = keep[3];
+    for (int k = 0; k < 4; k++) unsetenv(names[k]);
+    execv(argv[0], (char *const *)argv);
+    fprintf(stderr, "GTA Classics: %s did not start: %s\n", argv[0], strerror(errno));
+}
 
 int main(int argc, const char **argv)
 {
     (void)argc; (void)argv;
+    if (getenv("GTAC_PLAY_BIN")) { exec_game(); return 1; }
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         app.activationPolicy = NSApplicationActivationPolicyRegular;
