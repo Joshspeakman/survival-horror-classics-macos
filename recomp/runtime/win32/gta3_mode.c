@@ -1,16 +1,21 @@
-/* GTA III: the launch window's Resolution. psSelectDevice (0x582970) takes the video mode saved in gta3.set (the menu's
- * m_nPrefsVideoMode, 0x906c10) when it is a usable one, else looks for 640x480. GTA_MODE=WxH (host/gta3_launcher.m)
- * puts RenderWare's index of that 32-bit full-screen mode there first (tools/lift.py GTA3_HOOKS), so the game opens
- * at it and its Display Setup shows it; without the variable the saved choice stands ("As Set in Game"). */
+/* The launch window's Resolution, GTA III and San Andreas. psSelectDevice takes the video mode saved in the settings file
+ * (the menu's m_nPrefsVideoMode: GTA III 0x906c10 in gta3.set, San Andreas 0xb880c8 in gta_sa.set) when it is a usable
+ * one, else looks for 640x480 (GTA III) or 800x600 (San Andreas). GTA_MODE=WxH (the launchers) puts RenderWare's index
+ * of that 32-bit full-screen mode there first (tools/lift.py GTA3_HOOKS / GTASA_HOOKS), so the game opens at it and its
+ * Display Setup shows it; without the variable (or empty) the saved choice stands ("As Set in Game"). */
 #include "w32.h"
 #include "edition.h"
 
 #ifdef GTA_EDITION
+#if defined(GTA3_EDITION) || defined(GTASA_EDITION)
 #ifdef GTA3_EDITION
 enum { PICK_MODE = 0x005829f8u,             /* psSelectDevice: just before the saved mode is read */
        RW_NUM_MODES = 0x005a2460u,          /* RwEngineGetNumVideoModes(void) */
        RW_MODE_INFO = 0x005a24d0u,          /* RwEngineGetVideoModeInfo(RwVideoMode *, index): width, height, depth, flags */
        PREFS_MODE = 0x00906c10u };
+#else
+enum { PICK_MODE = 0x0074daecu, RW_NUM_MODES = 0x007fa680u, RW_MODE_INFO = 0x007fa6b0u, PREFS_MODE = 0x00b880c8u };   /* San Andreas 3.0 */
+#endif
 
 /* a cdecl guest call from a hook: arguments, a return address the callee's ret pops, the registers kept */
 static uint32_t guest_call(Ctx *c, uint32_t fn, int n, const uint32_t *args)
@@ -46,6 +51,6 @@ int gta3_hook(Ctx *c, uint32_t addr)
     return 0;
 }
 #else
-int gta3_hook(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }   /* Vice City, San Andreas: none yet */
+int gta3_hook(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }   /* Vice City: none yet */
 #endif
 #endif
