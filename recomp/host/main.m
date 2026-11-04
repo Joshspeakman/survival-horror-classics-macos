@@ -732,6 +732,7 @@ static int bundle_launch(const char *argv0, const char **exe, const char **game,
 
 int main(int argc, char **argv)
 {
+    if (getenv("DS_LOG_FILE")) setvbuf(stderr, NULL, _IOLBF, 0);   /* a launcher sent stderr to the log: keep lines on a kill */
     @autoreleasepool {
         const char *exe = 0, *game = 0, *data = 0;
         for (int k = 1; k + 1 < argc; k += 2) {
