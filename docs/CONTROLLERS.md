@@ -5,7 +5,11 @@ after the game started. The controller used last is the one read, 250 times a se
 app.
 
 The games read a DirectInput gamepad and come with a default joypad layout made for the PS2's buttons; the controller
-is presented to them in that order, so it plays like the PS2 versions:
+is presented to them in that order. The launcher's **Controls** row picks the layout: **Classic** plays like the PS2
+versions, **Modern** like the Definitive Edition's Modern scheme.
+
+## Classic (PS2)
+
 
 | Controller | PS2 button | Main uses (all three games) |
 |---|---|---|
@@ -23,6 +27,34 @@ is presented to them in that order, so it plays like the PS2 versions:
 | Right stick click | R3 | look behind |
 | D-pad | D-pad | menus, radio stations, mission and conversation choices |
 | Menu | Start | the pause menu |
+
+## Modern (Definitive Edition)
+
+Laid out as the Definitive Edition's Modern scheme (its Xbox control tables). The games themselves only know the PS2
+pad, so each button is given the PS2 button its action is on, by where the player is: on foot, in a vehicle, on a
+bicycle or in an aircraft (San Andreas), read from the game (the player's in-vehicle flag and vehicle class). Menus keep
+the PS2's layout.
+
+| Controller | On foot | Cars, motorbikes, boats | Bicycles (San Andreas) | Aircraft (San Andreas) |
+|---|---|---|---|---|
+| RT | attack | accelerate | — | ascend, thrust |
+| LT | aim, target | brake, reverse | — | descend |
+| RB | phone, swap weapons, reset camera | handbrake | handbrake | rudder right |
+| LB | next weapon | fire | bunny hop (hold: higher) | rudder left |
+| A | run (hold), sprint (tap) | nitrous | pedal (hold), pedal faster (tap) | main weapon |
+| B | attack | look right | fire | other weapon |
+| X | jump, climb | look left | brake | — |
+| Y | enter a vehicle | leave | leave | leave |
+| Left stick click | crouch | horn, siren | bell | landing gear |
+| Right stick click | look behind | look behind | look behind | look behind |
+| D-pad up | (as the PS2) | sub-missions | (as the PS2) | sub-missions |
+| D-pad right | (as the PS2) | radio station | (as the PS2) | radio |
+
+As in the Definitive Edition, a bicycle is pedalled with A: holding it pedals, tapping it pedals faster, as the
+originals' tap-to-go-faster works (the trigger would make that a hold). The Definitive Edition's weapon and radio wheels
+have no counterpart in these games: LB steps to the next weapon, the D-pad changes station.
+
+## Notes
 
 (The exact actions differ a little between the three games, as on the PS2; each game's Controller Setup shows and
 changes its joypad layout.) The triggers are buttons, as on the PS2. Menu is the Escape key, as the PC versions can't

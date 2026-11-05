@@ -28,7 +28,9 @@ macOS; this port takes the Windows executables from inside them.
   trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
 - **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
   display's Retina pixels), 16-bit or 32-bit colour, antialiasing (2x or 4x MSAA), draw distance, frame limiter.
-- **Modern controllers** out of the box (Xbox, PlayStation, Switch Pro, any MFi pad), laid out as on the PS2.
+- **Modern controllers** out of the box (Xbox, PlayStation, Switch Pro, any MFi pad), laid out as on the PS2
+  (Classic) or as the Definitive Edition's Modern scheme (triggers to drive, aim and shoot; A to pedal a bicycle, tap
+  for speed).
 - **Sound**: radio, effects and cutscenes in all three (Miles for GTA III and Vice City, DirectSound for San Andreas),
   and the intro movies.
 - **Mods**: a Mods window that browses GameBanana, installs file mods and orders them. For San Andreas, *Restore
@@ -78,7 +80,7 @@ GTA Vice City | GTA San Andreas> User Files`.
 - **Graphics Options**, for every game: Display (Full Screen / Window), Notch (Below It / Around It), Resolution
   (Standard / Retina / As Set in Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD
   (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA; 4x costs frame rate at Retina sizes), VSync, Frame Rate (60 / the display's rate / 30
-  Original) and Lighting (PS2 / PC as released). The choices are given to the game each time it starts; what you
+  Original), Lighting (PS2 / PC as released) and Controls (Classic PS2 / Modern, as the Definitive Edition). The choices are given to the game each time it starts; what you
   change in a game's own Display Setup lasts for that session (choose *As Set in Game* to keep the game's resolution).
 - **Mods** opens the Mods window. **Saves** and **Game Files** open the chosen game's folders.
 - **Updates** rebuilds every installed game from the newest commit of the app's branch; saves and settings are kept.

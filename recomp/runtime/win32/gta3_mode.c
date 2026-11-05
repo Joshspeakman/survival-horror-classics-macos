@@ -153,6 +153,99 @@ static void frustum_half(Ctx *c)   /* st(0): the half angle across the view (rad
     double a = screen_aspect(); if (wide(a)) ST(0) = atan(tan(ST(0)) * a * 0.75);
 }
 
+/* ---- Controls (the launcher's Controls; GTA_CONTROLS=modern|classic) ----
+ * Classic: the controller as the PS2's pad (host main.m: B A X Y, LT RT LB RB, View, L3, R3, the D-pad as buttons 1-16,
+ * the order the games' default joypad layout expects). Modern: the Definitive Edition's Modern scheme (its control
+ * tables: on foot, in vehicles, on bicycles, in aircraft), each of its buttons given the PS2 button its action is on.
+ * The games' own bindings can't do it (they read fire in every situation: fire on the accelerator would fire as a car
+ * drives), so it is decided here by where the player is: CWorld::Players[PlayerInFocus].m_pPed, its in-vehicle flag
+ * and vehicle, and (San Andreas) the vehicle's class: a bicycle keeps the PS2's buttons as the Definitive Edition does
+ * (hold A to pedal, tap it to pedal faster, LB bunny hop), aircraft have their own. Menus keep the PS2's layout. */
+#if defined(GTA3_EDITION)
+enum { PLAYERS = 0x00952628u, PLAYER_FOCUS = 0x0096e099u, PLAYER_SIZE = 0x13c, PED_IN_VEHICLE = 0x314, PED_VEHICLE = 0x310 };
+#elif defined(GTAVC_EDITION)
+enum { PLAYERS = 0x00949d30u, PLAYER_FOCUS = 0x00a0fb03u, PLAYER_SIZE = 0x170, PED_IN_VEHICLE = 0x3ac, PED_VEHICLE = 0x3a8 };
+#else
+enum { PLAYERS = 0x00b64788u, PLAYER_FOCUS = 0x00b6477cu, PLAYER_SIZE = 0x190, PED_IN_VEHICLE = 0x46d, PED_VEHICLE = 0x58c,   /* m_nPedFlags bit 8 */
+       VEH_SUBCLASS = 0x594 };   /* CVehicle: 3 helicopter, 4 plane, 9 motorbike, 10 bicycle */
+#endif
+enum { CTX_FOOT, CTX_VEHICLE, CTX_BICYCLE, CTX_AIRCRAFT };
+static int pad_context(void)
+{
+    uint8_t f = G_MEM[PLAYER_FOCUS]; if (f > 1) f = 0;
+    uint32_t ped = rt_r32(G_MEM, PLAYERS + f * PLAYER_SIZE); if (ped < 0x10000u) return CTX_FOOT;
+#ifdef GTASA_EDITION
+    int in = G_MEM[ped + PED_IN_VEHICLE] & 1;
+#else
+    int in = G_MEM[ped + PED_IN_VEHICLE] != 0;
+#endif
+    uint32_t veh = rt_r32(G_MEM, ped + PED_VEHICLE);
+    if (!in || veh < 0x10000u) return CTX_FOOT;
+#ifdef GTASA_EDITION
+    uint8_t k = G_MEM[veh + VEH_SUBCLASS];
+    if (k == 10) return CTX_BICYCLE;
+    if (k == 3 || k == 4) return CTX_AIRCRAFT;
+#endif
+    return CTX_VEHICLE;
+}
+uint32_t gta_pad_layout(uint32_t b)   /* the controller's buttons -> the PS2 pad's (same bit numbering) */
+{
+    static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
+    if (!modern) return b;
+    enum { B = 1 << 0, A = 1 << 1, X = 1 << 2, Y = 1 << 3, LT = 1 << 4, RT = 1 << 5, LB = 1 << 6, RB = 1 << 7, VIEW = 1 << 8, L3 = 1 << 9, R3 = 1 << 10,
+           UP = 1 << 12, RIGHT = 1 << 13, DOWN = 1 << 14, LEFT = 1 << 15 };
+    enum { CIRCLE = B, CROSS = A, SQUARE = X, TRIANGLE = Y, L2 = LT, R2 = RT, L1 = LB, R1 = RB };   /* the PS2's, in the same bits */
+    int gta_menu_frame(void);   /* d3d9.c: no 3D drawn (a menu or loading screen) */
+    if (gta_menu_frame()) return b;
+#ifdef GTASA_EDITION
+    const uint32_t RADIO = UP;                          /* the radio: San Andreas' D-pad up, the others' L1 */
+#else
+    const uint32_t RADIO = L1;
+#endif
+    uint32_t o = 0; int ctx = pad_context();
+    switch (ctx) {
+    case CTX_FOOT:
+        o = b & (VIEW | L3 | R3 | UP | RIGHT | DOWN | LEFT | A | X | Y);   /* sprint (tap: faster), jump, enter */
+        if (b & (B | RT)) o |= CIRCLE;                   /* attack */
+        if (b & LT) o |= R1;                             /* aim, target */
+        if (b & LB) o |= R2;                             /* next weapon */
+        if (b & RB) o |= L1;                             /* phone, swap weapons, reset camera */
+        break;
+    case CTX_VEHICLE:                                    /* cars, motorbikes, boats (and GTA III's and Vice City's aircraft) */
+        o = b & (VIEW | L3 | DOWN | LEFT | Y);           /* horn, exit */
+        if (b & RT) o |= CROSS;                          /* accelerate */
+        if (b & LT) o |= SQUARE;                         /* brake, reverse */
+        if (b & RB) o |= R1;                             /* handbrake */
+        if (b & LB) o |= CIRCLE;                         /* fire */
+        if (b & A) o |= CIRCLE | CROSS;                  /* nitrous (and what Cross does: skip a cutscene) */
+        if (b & X) o |= L2;                              /* look left */
+        if (b & B) o |= R2;                              /* look right */
+        if (b & R3) o |= L2 | R2;                        /* look behind */
+        if (b & UP) o |= R3;                             /* sub-missions */
+        if (b & RIGHT) o |= RADIO;                       /* radio */
+        break;
+    case CTX_BICYCLE:                                    /* the PS2's buttons: hold A to pedal, tap to pedal faster */
+        o = b & (VIEW | L3 | UP | RIGHT | DOWN | LEFT | A | X | Y | B | RB | LB);   /* pedal, brake, exit, fire, handbrake, bunny hop */
+        if (b & R3) o |= L2 | R2;                        /* look behind */
+        break;
+    case CTX_AIRCRAFT:
+        o = b & (VIEW | L3 | DOWN | LEFT | RIGHT | Y);   /* landing gear, radio, exit */
+        if (b & RT) o |= CROSS;                          /* ascend, thrust */
+        if (b & LT) o |= SQUARE;                         /* descend */
+        if (b & LB) o |= L2;                             /* rudder left */
+        if (b & RB) o |= R2;                             /* rudder right */
+        if (b & A) o |= R1;                              /* main weapon */
+        if (b & B) o |= CIRCLE;                          /* other weapon */
+        if (b & R3) o |= L2 | R2;                        /* look behind */
+        if (b & UP) o |= R3;                             /* sub-missions */
+        break;
+    }
+    { static int lg = -1, was_c = -1; static uint32_t was_b; if (lg < 0) lg = getenv("GTA_PADLOG") != 0;   /* development */
+      if (lg && (ctx != was_c || b != was_b)) { static const char *const n[] = {"on foot", "vehicle", "bicycle", "aircraft"};
+          fprintf(stderr, "pad: %s, buttons %04x -> %04x\n", n[ctx], b, o); was_c = ctx; was_b = b; } }
+    return o;
+}
+
 /* ---- Frame rate (the launchers' Frame Rate; GTA_FPS=<n> caps at n frames a second, GTA_FPS=0 uncapped; unset: as set
  * in the game). The games limit themselves to RsGlobal.maxFPS (30) while Display Setup's Frame Limiter is on; both are
  * set once a frame (from the D3D9 layer's Present), so the game's own menu can't undo the choice. */

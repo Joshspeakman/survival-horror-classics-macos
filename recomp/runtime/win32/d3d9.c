@@ -637,6 +637,7 @@ static void run_extent(float *x0, float *x1, float y0, float y1)   /* the last f
         if (fabsf(r->y0 - y0) <= 0.3f * h + 1 && fabsf(r->y1 - y1) <= 0.3f * h + 1 && *x0 >= r->x0 - 1 && *x1 <= r->x1 + 1) { *x0 = r->x0; *x1 = r->x1; return; }   /* (y: a shadowed line's box is a little taller) */
     }
 }
+int gta_menu_frame(void) { return !gta_last3d; }   /* the last frame drew no 3D: a menu or loading screen (gta3_mode.c) */
 /* the PS2's radiosity over the frame drawn so far (gta3_mode.c, San Andreas with PS2 lighting) */
 void gta_glow(uint32_t limit, uint32_t strength)
 {
