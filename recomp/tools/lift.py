@@ -258,6 +258,8 @@ GTA3_HOOKS = {
 GTA3_OVERRIDES = {0x0050e630: 'CParticle::Update: 30 times a second at high frame rates (gta3_mode.c gta3_override)'}
 GTAVC_HOOKS = {
     0x00600a95: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
+    0x0048fdbf: 'CMBlur::BlurOn = 0 at start (the PC release): the PS2 trails kept on (gta3_mode.c vc_trails)',
+    0x0049975f: 'CMBlur::BlurOn = 0 (the PC release): the PS2 trails kept on',
     0x0040840a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
     0x00580690: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
     0x0046c2dc: 'CCamera::CalculateDerivedValues: the frustum half angle widened (widescreen)',

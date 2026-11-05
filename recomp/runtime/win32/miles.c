@@ -20,7 +20,13 @@ enum { V_2D = 1, V_3D, V_STREAM };
 static int alog = -1;
 #define ALOG(...) do { if (alog < 0) alog = getenv("W32_AUDIOLOG") != 0; if (alog) fprintf(stderr, "audio: " __VA_ARGS__); } while (0)
 
-typedef struct Pcm { float *data; uint32_t frames, cap; int ch; double rate; uint32_t src_bytes; volatile int done; int refs; } Pcm;
+/* ring: a stream's frames from `base` on, decoded ahead of the play position into `cap` frames (frame base + k at
+ * data[k % cap]); played: the frames the mixer is past (the decoder doesn't overwrite them) */
+typedef struct Pcm { float *data; uint32_t frames, cap; int ch; double rate; uint32_t src_bytes; volatile int done; int refs;
+                     int ring; double base; volatile uint32_t played; volatile int stop; } Pcm;
+/* a stream's source: its file on this Mac, or the bytes the game's file callbacks gave (Vice City); its format and
+ * length from the header, read when it is opened (the games open every stream at start to learn their lengths) */
+typedef struct Stream { char *path; uint8_t *bytes; uint32_t nbytes; double rate; int ch; double total; pthread_t th; int running; } Stream;
 typedef struct Voice {
     int kind, used; uint32_t handle;
     Pcm *pcm; double pos; int status, loops, volume, rate_hz;
@@ -29,6 +35,7 @@ typedef struct Voice {
     int pan;                                             /* 2D: 0 (left) .. 64 .. 127 (right) */
     uint32_t raw_fmt;                                    /* AIL_set_sample_type: DIG_F_MONO_8 0, MONO_16 1, STEREO_8 2, STEREO_16 3 */
     double loop_a, loop_b;                               /* loop block in frames (loop_b 0: the end) */
+    Stream *st;                                          /* a stream's source (AIL_open_stream) */
 } Voice;
 #define MAXV 512
 static Voice voices[MAXV];
@@ -188,12 +195,28 @@ static void render(void *u, void *buffer, uint32_t n)
             float rl = sqrtf(rx * rx + ry * ry + rz * rz), pan = (d > 1e-3f && rl > 1e-6f) ? (dx * rx + dy * ry + dz * rz) / (d * rl) : 0;
             gl = g * att * sqrtf(0.5f * (1 - pan)) * 1.41421f; gr = g * att * sqrtf(0.5f * (1 + pan)) * 1.41421f;
         }
-        else if (v->kind == V_2D && v->pan != 64) {              /* AIL_set_sample_pan: equal power */
+        else if ((v->kind == V_2D || v->kind == V_STREAM) && v->pan != 64) {              /* AIL_set_sample_pan: equal power */
             float pan = (v->pan < 0 ? 0 : v->pan > 127 ? 127 : v->pan) / 127.0f;
             gl = g * sqrtf(1 - pan) * 1.41421f; gr = g * sqrtf(pan) * 1.41421f;
         }
         double step = (v->rate_hz > 0 ? v->rate_hz : p->rate) / OUT_RATE;
         uint32_t frames = __atomic_load_n(&p->frames, __ATOMIC_ACQUIRE); int done = __atomic_load_n(&p->done, __ATOMIC_ACQUIRE);
+        if (p->ring) {                                           /* a stream: from the ring, as far as it is decoded */
+            for (uint32_t i = 0; i < n; i++) {
+                double rel = v->pos - p->base; uint32_t a = rel > 0 ? (uint32_t)rel : 0; float t = (float)(rel - a);
+                if (a + 1 >= frames) {                           /* the end, or not decoded this far yet (silence) */
+                    if (done) { v->status = SMP_DONE; if (v->eos_cb && nend < MAXV) ended[nend++] = v->handle; }
+                    break;
+                }
+                uint32_t ia = a % p->cap, ib = (a + 1) % p->cap; float l, r;
+                if (p->ch == 2) { l = p->data[2 * ia] + (p->data[2 * ib] - p->data[2 * ia]) * t; r = p->data[2 * ia + 1] + (p->data[2 * ib + 1] - p->data[2 * ia + 1]) * t; }
+                else { l = r = p->data[ia] + (p->data[ib] - p->data[ia]) * t; }
+                out[2 * i] += l * gl; out[2 * i + 1] += r * gr;
+                v->pos += step;
+            }
+            double rel = v->pos - p->base; __atomic_store_n(&p->played, rel > 0 ? (uint32_t)rel : 0, __ATOMIC_RELEASE);
+            continue;
+        }
         uint32_t end = v->loops != 1 && v->loop_b > 0 && v->loop_b < frames ? (uint32_t)v->loop_b : frames;   /* a loop block ends early */
         for (uint32_t i = 0; i < n; i++) {
             if (v->pos >= end) {
@@ -386,17 +409,30 @@ IMPL(mss32, AIL_set_sample_pan) { Voice *v = V(ARG(0)); if (v) v->pan = (int)ARG
 IMPL(mss32, AIL_register_EOS_callback) { Voice *v = V(ARG(0)); uint32_t o = v ? v->eos_cb : 0; if (v) v->eos_cb = ARG(1); RET(o, 2); }
 
 /* 3D: one provider ("Miles Fast 2D Positional Audio"), one listener */
+/* the 3D providers a Windows PC of the time listed, all this one mixer: Vice City wants a DirectSound3D one (with only
+ * Miles' own it turns its sound off), GTA III takes any */
+static const char *const provider_names[] = {"DirectSound3D Hardware Support", "DirectSound3D Software Emulation", "Miles Fast 2D Positional Audio"};
 IMPL(mss32, AIL_enumerate_3D_providers)
 {
-    uint32_t next = ARG(0), dest = ARG(1), name = ARG(2);
-    if (rt_r32(G_MEM, next) != 0) RET(0, 3);
-    rt_w32(G_MEM, next, 1); rt_w32(G_MEM, dest, provider_h); rt_w32(G_MEM, name, str_in_guest("Miles Fast 2D Positional Audio"));
+    uint32_t next = ARG(0), dest = ARG(1), name = ARG(2), k = rt_r32(G_MEM, next);
+    if (k >= sizeof provider_names / sizeof *provider_names) RET(0, 3);
+    rt_w32(G_MEM, next, k + 1); rt_w32(G_MEM, dest, provider_h + k); static uint32_t g_names[3]; if (!g_names[k]) { g_names[k] = heap_alloc(w32_process_heap, 8, 64); snprintf((char *)GP(g_names[k]), 64, "%s", provider_names[k]); }   /* kept: the game may keep the name */
+    rt_w32(G_MEM, name, g_names[k]);
     RET(1, 3);
 }
 IMPL(mss32, AIL_open_3D_provider) { start_output(); ensure_service(); RET(0, 1); }   /* M3D_NOERR */
 IMPL(mss32, AIL_close_3D_provider) { RET(0, 1); }
 IMPL(mss32, AIL_set_3D_provider_preference) { RET(0, 3); }    /* (provider, name, value *) */
-IMPL(mss32, AIL_3D_provider_attribute) { if (ARG(2)) rt_w32(G_MEM, ARG(2), 0); RET(0, 3); }
+/* (provider, name, value *). GTA III and Vice City ask how many samples the provider plays at once and turn their sound
+ * off when it is one or none: as many as this mixer has voices to spare (Miles' Fast 2D provider says 64) */
+IMPL(mss32, AIL_3D_provider_attribute)
+{
+    const char *name = ARG(1) ? GS(ARG(1)) : "";
+    uint32_t v = !strcmp(name, "Maximum supported samples") ? 64 : 0;
+    ALOG("3D provider attribute \"%s\" = %u\n", name, v);
+    if (ARG(2)) rt_w32(G_MEM, ARG(2), v);
+    RET(0, 3);
+}
 IMPL(mss32, AIL_3D_room_type) { RET(0, 1); }
 IMPL(mss32, AIL_set_3D_speaker_type) { RET(0, 2); }
 IMPL(mss32, AIL_set_3D_room_type) { RET(0, 2); }
@@ -456,7 +492,121 @@ IMPL(mss32, AIL_set_3D_orientation)
     RET(0, 7);
 }
 
-/* streams: read the whole file through the game's callbacks (from its archives), decode on a worker thread */
+/* ---- streams: the header read at open; decoded from the play position on a thread of their own while playing, a few
+ * seconds ahead into a ring (GTA III's radio stations are files of up to 110 MB, and it opens all ~400 of its streams
+ * at start to learn their lengths) */
+#ifdef __APPLE__
+static OSStatus open_source(Stream *st, Mem *m, AudioFileID *af, ExtAudioFileRef *ef)
+{
+    *af = 0; *ef = 0;
+    if (st->path) {
+        CFURLRef u = CFURLCreateFromFileSystemRepresentation(0, (const UInt8 *)st->path, (CFIndex)strlen(st->path), false);
+        OSStatus e = ExtAudioFileOpenURL(u, ef); CFRelease(u); return e;
+    }
+    m->p = st->bytes; m->n = st->nbytes;
+    AudioFileTypeID hint = st->nbytes >= 4 && !memcmp(st->bytes, "RIFF", 4) ? kAudioFileWAVEType : kAudioFileMP3Type;
+    OSStatus e = AudioFileOpenWithCallbacks(m, mem_read, 0, mem_size, 0, hint, af);
+    return e ? e : ExtAudioFileWrapAudioFileID(*af, false, ef);
+}
+static void close_source(AudioFileID af, ExtAudioFileRef ef) { if (ef) ExtAudioFileDispose(ef); if (af) AudioFileClose(af); }
+static int stream_header(Stream *st)                     /* format and length: 0 if it can't be read */
+{
+    Mem m; AudioFileID af; ExtAudioFileRef ef;
+    if (open_source(st, &m, &af, &ef)) { close_source(af, ef); return 0; }
+    AudioStreamBasicDescription f; UInt32 sz = sizeof f; SInt64 total = 0;
+    ExtAudioFileGetProperty(ef, kExtAudioFileProperty_FileDataFormat, &sz, &f);
+    sz = sizeof total; ExtAudioFileGetProperty(ef, kExtAudioFileProperty_FileLengthFrames, &sz, &total);
+    close_source(af, ef);
+    st->rate = f.mSampleRate; st->ch = f.mChannelsPerFrame > 1 ? 2 : 1; st->total = total > 0 ? (double)total : 0;
+    return st->rate > 0;
+}
+typedef struct StreamJob { Stream *st; Pcm *p; int loops; } StreamJob;
+static void *stream_thread(void *arg)
+{
+    StreamJob *j = arg; Stream *st = j->st; Pcm *p = j->p; int loops = j->loops; free(j);
+    Mem m; AudioFileID af; ExtAudioFileRef ef;
+    if (open_source(st, &m, &af, &ef)) { close_source(af, ef); __atomic_store_n(&p->done, 1, __ATOMIC_RELEASE); return 0; }
+    int ch = p->ch;
+    AudioStreamBasicDescription dst = {0};
+    dst.mSampleRate = p->rate; dst.mFormatID = kAudioFormatLinearPCM; dst.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    dst.mChannelsPerFrame = (UInt32)ch; dst.mBitsPerChannel = 32; dst.mBytesPerFrame = dst.mBytesPerPacket = 4u * (UInt32)ch; dst.mFramesPerPacket = 1;
+    ExtAudioFileSetProperty(ef, kExtAudioFileProperty_ClientDataFormat, sizeof dst, &dst);
+    if (p->base > 0) ExtAudioFileSeek(ef, (SInt64)p->base);
+    float tmp[4096 * 2];
+    while (!__atomic_load_n(&p->stop, __ATOMIC_ACQUIRE)) {
+        uint32_t have = __atomic_load_n(&p->frames, __ATOMIC_ACQUIRE), played = __atomic_load_n(&p->played, __ATOMIC_ACQUIRE);
+        if (have >= played + p->cap - 4096 - 2) { usleep(5000); continue; }   /* far enough ahead */
+        AudioBufferList bl; bl.mNumberBuffers = 1; bl.mBuffers[0].mNumberChannels = (UInt32)ch;
+        UInt32 n = 4096; bl.mBuffers[0].mDataByteSize = n * 4u * (UInt32)ch; bl.mBuffers[0].mData = tmp;
+        if (ExtAudioFileRead(ef, &n, &bl) || !n) {
+            if (loops != 1) { if (loops > 1) loops--; ExtAudioFileSeek(ef, 0); continue; }   /* loop: on from the start */
+            break;
+        }
+        for (UInt32 k = 0; k < n; k++) { uint32_t at = (have + k) % p->cap; for (int c2 = 0; c2 < ch; c2++) p->data[at * (uint32_t)ch + (uint32_t)c2] = tmp[k * (uint32_t)ch + (uint32_t)c2]; }
+        __atomic_store_n(&p->frames, have + n, __ATOMIC_RELEASE);
+    }
+    close_source(af, ef);
+    __atomic_store_n(&p->done, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+/* stop the voice's decoding (the ring stays until it is replaced) */
+static void stream_halt(Voice *v)
+{
+    Stream *st = v->st; if (!st || !st->running) return;
+    pthread_mutex_lock(&mix_lock); Pcm *p = v->pcm; v->pcm = 0; pthread_mutex_unlock(&mix_lock);
+    if (p) { __atomic_store_n(&p->stop, 1, __ATOMIC_RELEASE); pthread_join(st->th, 0); free(p->data); free(p); }
+    st->running = 0;
+}
+/* play from v->pos (frames): a new ring, decoded from there */
+static void stream_go(Voice *v)
+{
+    Stream *st = v->st; if (!st || st->rate <= 0) return;
+    stream_halt(v);
+    Pcm *p = calloc(1, sizeof *p); p->ring = 1; p->ch = st->ch; p->rate = st->rate; p->refs = 1;
+    p->cap = (uint32_t)(st->rate * 6) + 8192; p->data = calloc((size_t)p->cap * (size_t)st->ch, 4);
+    p->base = v->pos > 0 && (st->total <= 0 || v->pos < st->total) ? floor(v->pos) : 0;
+    StreamJob *j = calloc(1, sizeof *j); j->st = st; j->p = p; j->loops = v->loops;
+    pthread_mutex_lock(&mix_lock); v->pcm = p; v->pos = p->base; v->status = SMP_PLAYING; pthread_mutex_unlock(&mix_lock);
+    if (pthread_create(&st->th, 0, stream_thread, j)) { free(j); return; }
+    st->running = 1;
+}
+static void stream_free(Voice *v)
+{
+    stream_halt(v); Stream *st = v->st; v->st = 0;
+    if (st) { free(st->path); free(st->bytes); free(st); }
+}
+IMPL(mss32, AIL_open_stream)
+{
+    uint32_t name = ARG(1);
+    ALOG("open_stream %s\n", GS(name));
+    Stream *st = calloc(1, sizeof *st);
+    if (!file_open) {                                        /* no file callbacks (GTA III): the file itself */
+        char path[2048];
+        if (w32_host_path(GS(name), path, sizeof path, 0) == 0) { FILE *f = fopen(path, "rb"); if (f) { fclose(f); st->path = strdup(path); } }
+    } else {                                                 /* through the game's callbacks (they may decode the file) */
+        uint32_t scratch = heap_alloc(w32_process_heap, 8, 16), oa[2] = {name, scratch};
+        if (w32_callback(c, file_open, 2, oa)) {
+            uint32_t fh = rt_r32(G_MEM, scratch), sa[3] = {fh, 0, 2}; uint32_t size = w32_callback(c, file_seek, 3, sa);
+            sa[2] = 0; w32_callback(c, file_seek, 3, sa);
+            uint32_t buf = size ? heap_alloc(w32_process_heap, 0, size) : 0, got = 0;
+            if (buf) { uint32_t ra[3] = {fh, buf, size}; got = w32_callback(c, file_read, 3, ra); }
+            w32_callback(c, file_close, 1, &fh);
+            if (got) { st->bytes = malloc(got); memcpy(st->bytes, GP(buf), got); st->nbytes = got; }
+            if (buf) heap_free(w32_process_heap, buf);
+        }
+        heap_free(w32_process_heap, scratch);
+    }
+    if ((!st->path && !st->bytes) || !stream_header(st)) { ALOG("  cannot open\n"); free(st->path); free(st->bytes); free(st); RET(0, 3); }
+    LOCK; uint32_t h = new_handle(V_STREAM); Voice *v = V(h);
+    if (!v) { UNLOCK; free(st->path); free(st->bytes); free(st); RET(0, 3); }
+    v->st = st; v->status = SMP_STOPPED;                     /* open and paused: AIL_pause_stream(s, 0) or AIL_start_stream plays it */
+    UNLOCK; RET(h, 3);
+}
+#else
+static void stream_halt(Voice *v) { (void)v; }
+static void stream_go(Voice *v) { pthread_mutex_lock(&mix_lock); v->status = SMP_PLAYING; pthread_mutex_unlock(&mix_lock); }
+static void stream_free(Voice *v) { (void)v; }
+/* (Linux) streams: read the whole file through the game's callbacks (from its archives), decode on a worker thread */
 IMPL(mss32, AIL_open_stream)
 {
     uint32_t name = ARG(1), scratch = heap_alloc(w32_process_heap, 8, 16), fh = 0;
@@ -494,12 +644,16 @@ IMPL(mss32, AIL_open_stream)
     pthread_t t; pthread_create(&t, 0, decode_thread, j); pthread_detach(t);
     UNLOCK; RET(h, 3);
 }
-IMPL(mss32, AIL_close_stream) { LOCK; Voice *v = V(ARG(0)); if (v) voice_free(v); UNLOCK; RET(0, 1); }
-IMPL(mss32, AIL_start_stream) { LOCK; Voice *v = V(ARG(0)); if (v) { pthread_mutex_lock(&mix_lock); v->pos = 0; v->status = SMP_PLAYING; pthread_mutex_unlock(&mix_lock); } UNLOCK; RET(0, 1); }
-IMPL(mss32, AIL_pause_stream)
+#endif
+IMPL(mss32, AIL_close_stream) { LOCK; Voice *v = V(ARG(0)); if (v) { stream_free(v); voice_free(v); } UNLOCK; RET(0, 1); }
+IMPL(mss32, AIL_start_stream) { LOCK; Voice *v = V(ARG(0)); if (v) { v->pos = 0; stream_go(v); } UNLOCK; RET(0, 1); }   /* from the start */
+IMPL(mss32, AIL_pause_stream)                           /* (stream, 1 pause / 0 play): GTA III and Vice City start their streams so */
 {
     LOCK; Voice *v = V(ARG(0));
-    if (v) { if (ARG(1) && v->status == SMP_PLAYING) set_status(v, SMP_STOPPED); else if (!ARG(1) && v->status == SMP_STOPPED) set_status(v, SMP_PLAYING); }
+    if (v) {
+        if (ARG(1) && v->status == SMP_PLAYING) set_status(v, SMP_STOPPED);
+        else if (!ARG(1) && v->status == SMP_STOPPED) { if (v->pcm && v->pcm->ring) set_status(v, SMP_PLAYING); else stream_go(v); }
+    }
     UNLOCK; RET(0, 2);
 }
 IMPL(mss32, AIL_set_stream_volume) { Voice *v = V(ARG(0)); if (v) v->volume = (int)ARG(1); RET(0, 2); }
@@ -508,11 +662,21 @@ IMPL(mss32, AIL_set_stream_loop_count) { Voice *v = V(ARG(0)); if (v) v->loops =
 IMPL(mss32, AIL_stream_status) { LOCK; Voice *v = V(ARG(0)); uint32_t s = v ? (uint32_t)v->status : SMP_FREE; UNLOCK; RET(s, 1); }
 IMPL(mss32, AIL_service_stream) { RET(0, 2); }
 IMPL(mss32, AIL_set_stream_pan) { Voice *v = V(ARG(0)); if (v) v->pan = (int)ARG(1); RET(0, 2); }
-IMPL(mss32, AIL_set_stream_ms_position) { Voice *v = V(ARG(0)); if (v && v->pcm && v->pcm->rate > 0) v->pos = ARG(1) * v->pcm->rate / 1000.0; RET(0, 2); }
+IMPL(mss32, AIL_set_stream_ms_position)                /* a playing stream decodes on from there */
+{
+    LOCK; Voice *v = V(ARG(0));
+    if (v && v->st && v->st->rate > 0) { int playing = v->status == SMP_PLAYING; v->pos = ARG(1) * v->st->rate / 1000.0; if (playing || (v->pcm && v->pcm->ring)) { stream_go(v); if (!playing) set_status(v, SMP_STOPPED); } }
+    else if (v && v->pcm && v->pcm->rate > 0) v->pos = ARG(1) * v->pcm->rate / 1000.0;
+    UNLOCK; RET(0, 2);
+}
 IMPL(mss32, AIL_stream_ms_position)                    /* (stream, total ms *, current ms *) */
 {
     Voice *v = V(ARG(0)); uint32_t tot = 0, cur = 0;
-    if (v && v->pcm && v->pcm->rate > 0) {
+    if (v && v->st && v->st->rate > 0) {
+        double rate = v->st->rate, pos = v->pos;
+        if (v->st->total > 0) { tot = (uint32_t)(v->st->total * 1000.0 / rate); pos = fmod(pos, v->st->total); }
+        cur = (uint32_t)(pos * 1000.0 / rate);
+    } else if (v && v->pcm && v->pcm->rate > 0) {
         double rate = v->pcm->rate, frames = __atomic_load_n(&v->pcm->done, __ATOMIC_ACQUIRE) ? v->pcm->frames : v->pcm->src_bytes / 4.0;
         tot = (uint32_t)(frames * 1000.0 / rate); cur = (uint32_t)(v->pos * 1000.0 / rate);
     }

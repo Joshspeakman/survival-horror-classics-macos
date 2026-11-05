@@ -468,8 +468,10 @@ static void set_vp(Dev9 *d, const uint32_t *v)
     if (d->rec) { RecEnt e = {REC_VP, 0, 0}; memcpy(e.m, v, 24); rec_put(d->rec, e); return; }
     memcpy(d->vp, v, 24); uint32_t *p = cmd_begin(DSR_VIEWPORT, 24); memcpy(p, v, 24); cmd_end();
 }
+static int frame_log;   /* development: D3D9_FRAMELOG=<frame> logs that frame's targets, copies and 2D draws */
 static void set_rt(Dev9 *d)
 {
+    if (frame_log) fprintf(stderr, "flog: target %u (%ux%u%s) depth %u\n", d->rt ? d->rt->id : 0, d->rt ? d->rt->w : 0, d->rt ? d->rt->h : 0, d->rt && d->rt == d->back ? ", back buffer" : "", d->ds ? d->ds->id : 0);
     { static int lg = -1, n; if (lg < 0) lg = getenv("D3D9_RTLOG") != 0;
       if (lg && n++ < 400) fprintf(stderr, "rtlog: rt %u %ux%u fmt %u x%u | ds %u %ux%u fmt %u x%u\n", d->rt ? d->rt->id : 0, d->rt ? d->rt->w : 0, d->rt ? d->rt->h : 0,
           d->rt ? d->rt->fmt : 0, d->rt ? d->rt->samples : 0, d->ds ? d->ds->id : 0, d->ds ? d->ds->w : 0, d->ds ? d->ds->h : 0, d->ds ? d->ds->fmt : 0, d->ds ? d->ds->samples : 0); }
@@ -688,6 +690,12 @@ static void emit(Dev9 *d, uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_
         }
     } else if ((fvf & 0xe) != 4) gta_frame3d++;
 #endif
+    if (frame_log && (fvf & 0xe) == 4) {
+        float x0 = 1e9f, x1 = -1e9f; for (uint32_t i = 0; i < nv; i++) { float x = *(const float *)(v + (size_t)i * st); if (x < x0) x0 = x; if (x > x1) x1 = x; }
+        uint32_t col = (fvf & 0x40) ? *(const uint32_t *)(v + 16 + ((fvf & 0x10) ? 12 : 0)) : 0;
+        fprintf(stderr, "flog: 2D prim %u nv %u x %.0f..%.0f into %u tex %u | blend %u src %u dst %u op %u | colorop %u arg %u,%u alphaop %u | colour %08x\n", prim, nv, x0, x1,
+                d->rt ? d->rt->id : 0, d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0, d->rs[27], d->rs[19], d->rs[20], d->rs[171], d->tss[0][1], d->tss[0][2], d->tss[0][3], d->tss[0][4], col);
+    }
     uint32_t *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
     p[0] = prim; p[1] = fvf; p[2] = nv; p[3] = ni;
     memcpy(p + 4, v, vb); if (ni) memcpy((uint8_t *)(p + 4) + vb, idx, ni * 2);
@@ -960,6 +968,7 @@ static void dev_present(Ctx *c, Dev9 *d)
     cursor_overlay(d); dsr_present(c, d->back->id);
 #ifdef GTA_EDITION
     gta_last3d = gta_frame3d; gta_frame3d = 0; runs_frame(); gta_frames++;
+    { static int at = -2; if (at == -2) at = getenv("D3D9_FRAMELOG") ? atoi(getenv("D3D9_FRAMELOG")) : -1; frame_log = at >= 0 && gta_frames == at; if (frame_log) fprintf(stderr, "flog: frame %d\n", gta_frames); }
     { void gta_frame_prefs(int); gta_frame_prefs(!gta_last3d); }   /* gta3_mode.c: frame limiter, widescreen */
 #endif
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
@@ -1036,7 +1045,9 @@ M(dv_UpdateTexture, 3)
     RET(D3D_OK, 3);
 END
 M(dv_GetRenderTargetData, 3)
-    Surf9 *s = obj(ARG(1), O9_SURF), *t = obj(ARG(2), O9_SURF); if (!s || !t || d9_fmt_bytes(t->fmt) != 4) RET(D3DERR_INVALIDCALL, 3);
+    Surf9 *s = obj(ARG(1), O9_SURF), *t = obj(ARG(2), O9_SURF);
+    if (frame_log) fprintf(stderr, "flog: GetRenderTargetData %u -> %u\n", s ? s->id : 0, t ? t->id : 0);
+    if (!s || !t || d9_fmt_bytes(t->fmt) != 4) RET(D3DERR_INVALIDCALL, 3);
     int32_t r[4] = {0, 0, (int32_t)s->w, (int32_t)s->h}; cmd_readback(s->id, r, G_MEM + t->mem, t->pitch, 4); RET(D3D_OK, 3);
 END
 M(dv_GetFrontBufferData, 3) DEV_ME
@@ -1046,6 +1057,7 @@ END
 static void rect_of(Surf9 *s, uint32_t g, int32_t *r) { if (g) memcpy(r, GP(g), 16); else { r[0] = 0; r[1] = 0; r[2] = (int32_t)s->w; r[3] = (int32_t)s->h; } }
 M(dv_StretchRect, 6)                                   /* (src, src rect, dst, dst rect, filter) */
     Surf9 *s = obj(ARG(1), O9_SURF), *t = obj(ARG(3), O9_SURF); if (!s || !t) RET(D3DERR_INVALIDCALL, 6);
+    if (frame_log) fprintf(stderr, "flog: StretchRect %u (%ux%u) -> %u (%ux%u)%s%s\n", s->id, s->w, s->h, t->id, t->w, t->h, ARG(2) ? " src rect" : "", ARG(4) ? " dst rect" : "");
     uint32_t *p = cmd_begin(DSR_BLT, 48); p[0] = t->id; rect_of(t, ARG(4), (int32_t *)p + 1); p[5] = s->id; rect_of(s, ARG(2), (int32_t *)p + 6); p[10] = 0; p[11] = 0; cmd_end();
     t->gpu_newer = 1; RET(D3D_OK, 6);
 END
@@ -1502,7 +1514,10 @@ static void fill_caps(uint32_t out)                    /* D3DCAPS9: a Radeon 850
     v[15] = 0x1 | 0x4 | 0x40 | 0x400 | 0x800 | 0x2000 | 0x4000 | 0x8000 | 0x10000;
     v[16] = v[17] = v[18] = 0x200 | 0x100 | 0x400 | 0x10000 | 0x20000 | 0x1000000 | 0x2000000;
     v[19] = v[20] = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20; v[21] = 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
-    v[22] = v[23] = 4096; v[24] = 512; v[25] = 8192; v[26] = 4096; v[27] = 16;
+    v[22] = v[23] = 4096; v[24] = 512;
+#ifdef GTA_EDITION
+    v[22] = v[23] = 16384;   /* the Trails' copy of the screen is a texture the next power of two up: 8192 at Retina sizes */
+#endif v[25] = 8192; v[26] = 4096; v[27] = 16;
     memcpy(&v[28], &(float){1e10f}, 4); memcpy(&v[29], &(float){-1e8f}, 4); memcpy(&v[30], &(float){-1e8f}, 4); memcpy(&v[31], &(float){1e8f}, 4); memcpy(&v[32], &(float){1e8f}, 4);
     v[34] = 0x1ff; v[35] = 0x80000 | 8; v[36] = 0x3fffffff; v[37] = 8; v[38] = 8; v[39] = 0x1 | 0x2 | 0x8 | 0x10 | 0x20;
     v[40] = 8; v[41] = 6; v[42] = 4; v[43] = 0; memcpy(&v[44], &(float){256.0f}, 4); v[45] = 0xfffff; v[46] = 0xfffff; v[47] = 16; v[48] = 255;

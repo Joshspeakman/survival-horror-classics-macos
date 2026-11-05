@@ -166,7 +166,8 @@ enum { WIDE_PREF = 0x0096e05bu };      /* CMenuManager::m_PrefsUseWideScreen */
 #elif defined(GTAVC_EDITION)
 enum { WIDE_PREF = 0x0086865au };
 #else
-enum { WIDE_PREF = 0x00b8803bu };      /* FrontEndMenuManager.m_bWidescreenOn */
+enum { WIDE_PREF = 0x00b8803bu,        /* FrontEndMenuManager.m_bWidescreenOn */
+       SA_RADIOSITY = 0x00c3031cu };   /* CPostEffects::m_bRadiosity (CPostEffects::Radiosity 0x7173d0, from Render 0x719a30) */
 #endif
 static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, else the cap */
 {
@@ -185,6 +186,12 @@ void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in 
         if (first) G_MEM[PREF_LIMITER] = fps > 0;
         if (fps) rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)fps);
     }
+#ifdef GTASA_EDITION
+    /* radiosity (CPostEffects::m_bRadiosity: the PS2's soft glow of bright areas, its "trails"; on the PC only some
+     * missions' scripts switch it on). Development only (GTA_RADIOSITY=1 keeps it on): drawn here it darkens the frame
+     * (its passes don't come out as on Windows yet), so it isn't part of PS2 lighting until that is fixed. */
+    { static int on = -1; if (on < 0) on = getenv("GTA_RADIOSITY") && atoi(getenv("GTA_RADIOSITY")) > 0; if (on) G_MEM[SA_RADIOSITY] = 1; }
+#endif
     gta_wide();
     if (menu) { if (first || !was_menu) G_MEM[WIDE_PREF] = (uint8_t)wide_state; else wide_state = G_MEM[WIDE_PREF] != 0; }
     else { if (was_menu && !first) wide_state = G_MEM[WIDE_PREF] != 0; G_MEM[WIDE_PREF] = 0; }
@@ -378,8 +385,19 @@ int gta_filter_pass;
 static int ps2_light(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_LIGHTING"); on = e && !strcmp(e, "ps2"); } return on; }
 #endif
 
+#ifdef GTAVC_EDITION
+/* Trails: the PS2's motion blur in the time cycle's colour (CMBlur, CCamera::RenderMotionBlur), which the PC release
+ * switches off where it sets CMBlur::BlurOn (0x696d5c) to 0 (two places, the condition patched out). With PS2 lighting
+ * (GTA_LIGHTING=ps2) those writes store 1: the copy of the screen is made and drawn over the next frame as on the PS2.
+ * (GTA III's Trails are its own Display Setup setting.) */
+enum { VC_BLUR_OFF1 = 0x0048fdbfu, VC_BLUR_OFF2 = 0x0049975fu };
+static int vc_trails(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_LIGHTING"); on = !e || !strcmp(e, "ps2"); } return on; }
+#endif
 int gta3_hook(Ctx *c, uint32_t addr)
 {
+#ifdef GTAVC_EDITION
+    if (addr == VC_BLUR_OFF1 || addr == VC_BLUR_OFF2) { if (vc_trails()) c->eax = (c->eax & ~0xffu) | 1; return 1; }   /* mov [BlurOn], al */
+#endif
 #ifdef GTASA_EDITION
     if (addr == FILTER_PASS1 || addr == FILTER_PASS2 || addr == FILTER_DONE) {
         gta_filter_pass = !ps2_light() ? 0 : addr == FILTER_PASS1 ? 1 : addr == FILTER_PASS2 ? 2 : 0;
