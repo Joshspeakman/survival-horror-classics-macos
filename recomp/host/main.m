@@ -161,6 +161,10 @@ static int captured;
 static double raw_fx, raw_fy, cursor_fx, cursor_fy;
 extern void w32_raw_mouse_move(int dx, int dy);
 extern void w32_raw_mouse_sample(int32_t *dx, int32_t *dy, int consume);
+/* DirectInput 8's system mouse and keyboard (runtime/win32/dinput8.c), fed from the same events as the window
+ * messages: San Andreas reads its mouse (menu pointer, camera) only from DirectInput */
+extern void w32_di_key(int dik, int down), w32_di_mouse_move(int dx, int dy), w32_di_mouse_wheel(int dz), w32_di_mouse_button(int b, int down);
+static void di_key_vk(int vk, int down);
 static void capture(int on);
 static void rel_motion(double gx, double gy);   /* relative motion in game pixels, the real-input path */
 static uint32_t pos_lp(void);
@@ -233,11 +237,11 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
         if (!strcmp(a->kind, "click") || !strcmp(a->kind, "rclick")) {
             int r = a->kind[0] == 'r';
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
-            if (fno == a->frame + 20) post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp());
-            if (fno == a->frame + 24) post(r ? 0x205 : 0x202, 0, pos_lp());
+            if (fno == a->frame + 20) { w32_di_mouse_button(r, 1); post(r ? 0x204 : 0x201, r ? 2 : 1, pos_lp()); }
+            if (fno == a->frame + 24) { w32_di_mouse_button(r, 0); post(r ? 0x205 : 0x202, 0, pos_lp()); }
         } else if (!strcmp(a->kind, "press")) {           /* press:x,y: the left button pressed and held (until a later click) */
             if (fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
-            if (fno == a->frame + 20) post(0x201, 1, pos_lp());
+            if (fno == a->frame + 20) { w32_di_mouse_button(0, 1); post(0x201, 1, pos_lp()); }
         } else if (!strcmp(a->kind, "move") && fno == a->frame) { mot_home = 8; mot_dx = a->x; mot_dy = a->y; }
         else if (!strcmp(a->kind, "rel") && fno >= a->frame && fno < a->frame + 60) rel_motion(a->x / 60.0, a->y / 60.0);   /* x,y over 60 frames, like a trackpad swipe */
         else if (!strcmp(a->kind, "glide") && fno == a->frame) {   /* glide:x,y: the same motion over half a second, 1000 times a second
@@ -247,18 +251,18 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
                 for (int k = 0; k < 500; k++) { dispatch_async(dispatch_get_main_queue(), ^{ rel_motion(gx / 500.0, gy / 500.0); }); usleep(1000); } });
         }
         else if (!strcmp(a->kind, "key")) {
-            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
-            if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
+            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; di_key_vk(a->x, 1); post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
+            if (fno == a->frame + 3) { w32_keys[a->x & 0xff] = 0; di_key_vk(a->x, 0); post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "hold")) {            /* hold:vk,frames: a key held down (the modifier of a chord) */
-            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
-            if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
+            if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; di_key_vk(a->x, 1); post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
+            if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; di_key_vk(a->x, 0); post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
             fprintf(stderr, "DungeonSiegeNative: peek %s = 0x%08x (byte 0x%02x)\n", a->path, v, v & 0xff);
         }
-        else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
+        else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) w32_di_mouse_wheel(a->x > 0 ? 120 : -120), post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
         else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* real NSEvents through the window (keyboard path) */
             NSString *text = @(a->path);
             dispatch_async(dispatch_get_main_queue(), ^{ type_text(text); });
@@ -294,6 +298,10 @@ static uint32_t key_scan(int vk)
     for (int k = 0; k < 128; k++) if (keymap[k].vk == vk) return (uint32_t)keymap[k].scan << 16 | (uint32_t)keymap[k].ext << 24;
     return 0;
 }
+static void di_key_vk(int vk, int down)                 /* DIK codes are the scan codes, extended keys with bit 7 */
+{
+    for (int k = 0; k < 128; k++) if (keymap[k].vk == vk) { w32_di_key(keymap[k].scan | (keymap[k].ext ? 0x80 : 0), down); return; }
+}
 static uint32_t buttons;               // MK_ flags
 static void post(uint32_t msg, uint32_t wp, uint32_t lp) { if (game_hwnd) w32_post(w32_window_tid(game_hwnd), game_hwnd, msg, wp, lp); }
 static uint32_t mk(void)
@@ -314,6 +322,7 @@ static void key_event(uint16_t code, int down, int repeat)
     if (k.vk == 0x12) w32_keys[k.ext ? 0xa5 : 0xa4] = w32_keys[0x12];
     uint32_t lp = 1u | ((uint32_t)k.scan << 16) | ((uint32_t)k.ext << 24) | (prev << 30) | (down ? 0 : 0x80000000u);
     int sys = alt || k.vk == 0x12;
+    if (!repeat) w32_di_key(k.scan | (k.ext ? 0x80 : 0), down);
     post(down ? (sys ? 0x104u : 0x100u) : (sys ? 0x105u : 0x101u), k.vk, lp);
 }
 
@@ -362,6 +371,7 @@ static void rel_motion(double gx, double gy)
     int ry = (int)fmax(-2147483647.0, fmin(2147483647.0, raw_fy));
     raw_fx -= rx; raw_fy -= ry;
     w32_raw_mouse_move(rx, ry);
+    if (rx || ry) w32_di_mouse_move(rx, ry);
     uint32_t mw, mh; dsr_mode_size(&mw, &mh);
     NSSize size = (game_view ?: win.contentView).bounds.size;
     double scale = fmax(mw / fmax(size.width, 1), mh / fmax(size.height, 1));
@@ -377,12 +387,12 @@ static void rel_motion(double gx, double gy)
 - (void)mouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)rightMouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)otherMouseDragged:(NSEvent *)e { [self moved:e]; }
-- (void)mouseDown:(NSEvent *)e { buttons |= 1; w32_keys[1] = 0x80; post(e.clickCount == 2 ? 0x203 : 0x201, mk(), pos_lp()); }
-- (void)mouseUp:(NSEvent *)e { buttons &= ~1u; w32_keys[1] = 0; post(0x202, mk(), pos_lp()); }
-- (void)rightMouseDown:(NSEvent *)e { buttons |= 2; w32_keys[2] = 0x80; post(e.clickCount == 2 ? 0x206 : 0x204, mk(), pos_lp()); }
-- (void)rightMouseUp:(NSEvent *)e { buttons &= ~2u; w32_keys[2] = 0; post(0x205, mk(), pos_lp()); }
-- (void)otherMouseDown:(NSEvent *)e { buttons |= 0x10; w32_keys[4] = 0x80; post(0x207, mk(), pos_lp()); }
-- (void)otherMouseUp:(NSEvent *)e { buttons &= ~0x10u; w32_keys[4] = 0; post(0x208, mk(), pos_lp()); }
+- (void)mouseDown:(NSEvent *)e { w32_di_mouse_button(0, 1); buttons |= 1; w32_keys[1] = 0x80; post(e.clickCount == 2 ? 0x203 : 0x201, mk(), pos_lp()); }
+- (void)mouseUp:(NSEvent *)e { w32_di_mouse_button(0, 0); buttons &= ~1u; w32_keys[1] = 0; post(0x202, mk(), pos_lp()); }
+- (void)rightMouseDown:(NSEvent *)e { w32_di_mouse_button(1, 1); buttons |= 2; w32_keys[2] = 0x80; post(e.clickCount == 2 ? 0x206 : 0x204, mk(), pos_lp()); }
+- (void)rightMouseUp:(NSEvent *)e { w32_di_mouse_button(1, 0); buttons &= ~2u; w32_keys[2] = 0; post(0x205, mk(), pos_lp()); }
+- (void)otherMouseDown:(NSEvent *)e { w32_di_mouse_button(2, 1); buttons |= 0x10; w32_keys[4] = 0x80; post(0x207, mk(), pos_lp()); }
+- (void)otherMouseUp:(NSEvent *)e { w32_di_mouse_button(2, 0); buttons &= ~0x10u; w32_keys[4] = 0; post(0x208, mk(), pos_lp()); }
 - (void)scrollWheel:(NSEvent *)e
 {
     static double acc; acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 10.0 : e.scrollingDeltaY;
@@ -399,7 +409,7 @@ static void rel_motion(double gx, double gy)
         return;
     }
 #endif
-    while (acc >= 1 || acc <= -1) { int d = acc > 0 ? 1 : -1; acc -= d; post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16) | mk(), pos_lp()); }
+    while (acc >= 1 || acc <= -1) { int d = acc > 0 ? 1 : -1; acc -= d; w32_di_mouse_wheel(120 * d); post(0x20a, ((uint32_t)(int16_t)(120 * d) << 16) | mk(), pos_lp()); }
 }
 - (void)keyDown:(NSEvent *)e
 {
