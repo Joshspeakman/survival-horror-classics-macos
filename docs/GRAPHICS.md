@@ -58,24 +58,26 @@ each pass that draws into them ends, so what the games read (their copies for po
 screenshots) is the smoothed picture. On Apple's GPUs the costly part of a Retina-sized multisampled pass is loading and
 storing its samples (175 MB for a 4112×2658 4x picture), so the samples live only in the GPU's tile memory: each pass
 resolves them as it ends, and a later pass starts by drawing the picture so far back into them (or by clearing, when
-the game clears first). Draws that use no depth (the trails, the HUD) don't take the depth buffer into their pass, a
-depth buffer no later pass reads isn't stored, and copies at the same size copy only their rectangle. The launcher's
+the game clears first). Draws that use no depth (the trails, the HUD) don't take the depth buffer into their pass, and
+copies at the same size copy only their rectangle. The launcher's
 default is 2x. San Andreas' own Anti-Aliasing setting works; GTA III and Vice City have none, so the launcher's applies
 to them.
 
 The fixed-function texture stages are drawn by shaders made for each combination of the stages' operations, arguments
 and alpha test (Metal function constants), not by one shader that chooses them for every pixel: at Retina sizes that
-choosing was most of the GPU's time.
+choosing was most of the GPU's time. Metal compiles each new combination the first time it is drawn and keeps it, so
+the first minutes after an update can hitch now and then.
 
 What an M1 Pro holds at 4112×2658 with 4x antialiasing and PS2 lighting, capped at 120, driving:
 
 | | GTA III | Vice City | San Andreas |
 |---|---|---|---|
-| Before | 60 | 60 (43 uncapped) | 60 |
-| Now | 120 | 120 | 75 |
+| Before | held at 60 by the runtime's cap | 60 (43 without it) | held at 60 by the runtime's cap |
+| Now | 120 | 120 (2x: 120) | 75 |
 
-San Andreas' own game code takes about 13 ms a frame on this Mac (the same at any resolution or antialiasing), so it
-runs at about 75; with *Frame Rate: 60* it holds 60 evenly.
+(Measured with the picture drawn off screen, as fast as it goes up to the cap.) San Andreas' own game code takes about
+13 ms a frame on this Mac, the same at any resolution or antialiasing, so it runs at about 75; at a 120 cap with VSync
+those frames show for one or two refreshes in turn, so *Frame Rate: 60* (kept for each game) may look steadier.
 
 ## Frame rate
 

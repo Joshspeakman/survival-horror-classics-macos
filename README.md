@@ -80,7 +80,7 @@ GTA Vice City | GTA San Andreas> User Files`.
 - **Graphics Options**, for every game: Display (Full Screen / Window), Notch (Below It / Around It), Resolution
   (Standard / Retina / As Set in Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD
   (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA; 4x costs frame rate at Retina sizes), VSync, Frame Rate (60 / the display's rate / 30
-  Original), Lighting (PS2 / PC as released) and Controls (Classic PS2 / Modern, as the Definitive Edition). The choices are given to the game each time it starts; what you
+  Original; kept for each game), Lighting (PS2 / PC as released) and Controls (Classic PS2 / Modern, as the Definitive Edition). The choices are given to the game each time it starts; what you
   change in a game's own Display Setup lasts for that session (choose *As Set in Game* to keep the game's resolution).
 - **Mods** opens the Mods window. **Saves** and **Game Files** open the chosen game's folders.
 - **Updates** rebuilds every installed game from the newest commit of the app's branch; saves and settings are kept.

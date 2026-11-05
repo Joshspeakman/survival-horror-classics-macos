@@ -535,6 +535,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
 @property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *controls, *updates;
 @property NSString *home, *plistPath;
+@property (strong) NSMutableDictionary *fpsByGame; @property NSInteger fpsGame;   /* Frame Rate is kept for each game */
 @end
 
 @implementation Launcher
@@ -631,7 +632,9 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                       @"note": @"As fast as the display shows: smoothest (San Andreas' physics have quirks this high)"},
                     @{@"value": @"30", @"label": @"30 (Original)", @"short": @"30 fps", @"note": @"The games' own frame limiter, as released"}];
     if (hz <= 60) fps.choices = @[fps.choices[0], fps.choices[2]];
-    fps.index = index_of(fps.choices, saved[@"fps"], 0);
+    self.fpsByGame = [saved[@"fps_by_game"] isKindOfClass:NSDictionary.class] ? [saved[@"fps_by_game"] mutableCopy] : [NSMutableDictionary new];
+    self.fpsGame = v.game;   /* (San Andreas may want 60 while GTA III and Vice City run at the display's rate) */
+    fps.index = index_of(fps.choices, self.fpsByGame[@(GAMES[v.game].id)] ?: saved[@"fps"], 0);
     GCTile *light = self.light = [GCTile new];
     light.title = @"Lighting";
     light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
@@ -698,7 +701,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     __weak Launcher *ws = self;
     v.onPlay = ^{ [ws play]; };
     v.onQuit = ^{ [NSApp terminate:nil]; };
-    v.onChange = ^{ [ws save]; };
+    v.onChange = ^{ [ws changed]; };
 
     const char *shot = getenv("GTAC_LAUNCHER_SHOT");
     if (getenv("GTAC_LAUNCHER_GAME")) v.game = MAX(0, MIN(NGAMES - 1, atoi(getenv("GTAC_LAUNCHER_GAME"))));   /* development */
@@ -762,7 +765,16 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"light": val(self.light), @"controls": val(self.controls)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"fps_by_game": self.fpsByGame ?: @{}, @"light": val(self.light), @"controls": val(self.controls)};
+}
+- (void)changed   /* a tile or the game changed: the chosen game's Frame Rate */
+{
+    if (self.view.game != self.fpsGame) {
+        self.fpsGame = self.view.game;
+        NSString *f = self.fpsByGame[@(GAMES[self.view.game].id)];
+        if (f) { self.fps.index = index_of(self.fps.choices, f, self.fps.index); self.view.needsDisplay = YES; }
+    } else self.fpsByGame[@(GAMES[self.view.game].id)] = val(self.fps);
+    [self save];
 }
 - (void)save
 {
