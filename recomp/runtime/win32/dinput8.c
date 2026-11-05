@@ -4,6 +4,7 @@
  * gamepad: six axes (left stick X/Y, the right stick as Z/Rz and again as Rx/Ry), sixteen buttons in the order
  * the host gives them, and the D-pad as a point-of-view hat. */
 #include "w32.h"
+#include "edition.h"
 #include <pthread.h>
 
 #define DI_OK 0
@@ -76,8 +77,14 @@ static Dev *joy;
 /* host: the pad's state (axes -1..1: X right, Y down; Z/Rz and Rx/Ry the right stick), buttons, the hat
  * in hundredths of a degree (-1 centred); connected 0: no controller */
 uint32_t w32_di_pad_buttons(void) { return pad.connected ? pad.buttons : 0; }   /* (the intro movies' skip, gta_imports.c) */
+#ifdef GTA_EDITION
+uint32_t gta_pad_layout(uint32_t buttons);   /* gta3_mode.c: the launcher's Controls (Classic or Modern) */
+#endif
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov)
 {
+#ifdef GTA_EDITION
+    buttons = gta_pad_layout(buttons);
+#endif
     pthread_mutex_lock(&di_lock);
     pad.connected = connected; memcpy(pad.ax, ax, sizeof pad.ax); pad.buttons = buttons; pad.pov = pov;
     pthread_mutex_unlock(&di_lock);

@@ -15,6 +15,7 @@
  *   GTA_MODES=WxH,...                       d3d9.c (the display's shapes in the games' Resolution lists)
  *   GTA_DEPTH=32|16                         gta3_mode.c (the mode's colour depth; 16: the renderer's 16-bit look)
  *   GTA_MSAA=<samples>                      d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' Antialiasing)
+ *   GTA_CONTROLS=classic|modern              gta3_mode.c (the controller's layout: the PS2's, or the Definitive Edition's)
  *   GTA_FPS=<n>                             gta3_mode.c (the frame limiter; above 30 the high-FPS fixes)
  *   GTA_LIGHTING=ps2|pc                     renderer.m, gta3_mode.c, d3d9.c (PS2 lighting and colour filter)
  *   DS_LOG_FILE=<data>/<BIN>.log            the game's log (stderr goes there too; over 5 MB it moves to <BIN>.old.log)
@@ -107,7 +108,7 @@ enum { W = 960, H = 660 };
 - (NSRect)quitRect { return NSMakeRect(W - 60 - 200 - 20 - 150, H - 66, 150, 46); }
 /* rows of 60 points with their notes under them; more than seven: rows of 40, the note of the row in focus at the foot */
 - (BOOL)compact { return self.rows.count > 7; }
-- (CGFloat)pitch { return self.compact ? 40 : 60; }
+- (CGFloat)pitch { return self.rows.count > 10 ? 37 : self.compact ? 40 : 60; }
 - (NSRect)panelRect { CGFloat h = 86 + self.pitch * (CGFloat)self.rows.count + (self.compact ? 34 : 0); return NSMakeRect(130, MAX(30, 486 - h), 700, h); }
 - (NSRect)rowRect:(NSInteger)k { NSRect p = self.panelRect; return NSMakeRect(p.origin.x + 30, p.origin.y + 70 + self.pitch * k, p.size.width - 60, self.pitch - 8); }
 - (NSRect)rowArrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 3, 30, 30); }
@@ -532,7 +533,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *controls, *updates;
 @property NSString *home, *plistPath;
 @end
 
@@ -636,10 +637,17 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
                       @{@"value": @"pc", @"label": @"PC (As Released)", @"short": @"PC light", @"note": @"The PC versions' own lighting and colour filter (brighter, flatter)"}];
     light.index = index_of(light.choices, saved[@"light"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light];
+    GCTile *controls = self.controls = [GCTile new];
+    controls.title = @"Controls";
+    controls.choices = @[@{@"value": @"classic", @"label": @"Classic (PS2)", @"short": @"Classic pad",
+                           @"note": @"The PS2's layout: A sprint and accelerate, X jump and brake, B fire, RB target"},
+                         @{@"value": @"modern", @"label": @"Modern", @"short": @"Modern pad",
+                           @"note": @"As the Definitive Edition: RT fire / accelerate, LT aim / brake, RB handbrake, LB/RB weapons"}];
+    controls.index = index_of(controls.choices, saved[@"controls"], 0);
+    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light, controls] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light, controls];
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate and lighting, for every game"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate, lighting and controls, for every game"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
         for (GCTile *t in @[display, resTile, wide, fps]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
@@ -754,7 +762,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"light": val(self.light)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"light": val(self.light), @"controls": val(self.controls)};
 }
 - (void)save
 {
@@ -787,7 +795,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                           @"GTA_MODES": modes_for_display(), @"GTA_DEPTH": c[@"depth"],   /* d3d9.c (the games' Resolution lists), gta3_mode.c */
                           @"GTA_MSAA": c[@"aa"],   /* d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' own setting) */
                           @"GTA_FPS": c[@"fps"],   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
-                          @"GTA_LIGHTING": c[@"light"]};   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
+                          @"GTA_LIGHTING": c[@"light"],
+                          @"GTA_CONTROLS": c[@"controls"]};   /* gta3_mode.c gta_pad_layout */   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];
     if (getenv("GTAC_LAUNCHER_DRY")) {                                   /* development: what Play runs */
         for (NSString *k in [env.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [env[k] UTF8String]);
