@@ -50,6 +50,10 @@ enum {
     DSR_MATERIAL,          /* D3DMATERIAL (diffuse, ambient, specular, emissive as float4 RGBA, float power): fixed-function lighting */
     DSR_LIGHT,             /* u32 index (0-7), u32 enabled, D3DLIGHT (type, diffuse, specular, ambient, position, direction, range,
                               falloff, attenuation 0-2, theta, phi; world space) */
+    DSR_MSL_CREATE,        /* u32 id, u32 nattr, u32 vs length, u32 ps length (0: the fixed-function texture stages), u32 texture
+                              kinds (2 bits per sampler: 0 2D, 1 cube, 2 3D), {u32 input register, u32 attribute slot}[nattr],
+                              vertex MSL, pixel MSL (each NUL-terminated, padded to 4): the game's own shader pair translated to
+                              Metal (d3d9_shader.c, macOS); its constants come as DSR_SHADER_CONST, its draws as DSR_DRAW_PROG */
 };
 #define DSR_VBUFS 65536
 #endif

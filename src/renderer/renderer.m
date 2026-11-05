@@ -52,6 +52,11 @@ struct DSRRenderer {
     id<MTLRenderPipelineState> graph_pso; const float *g_a, *g_b; int g_ha, g_hb, g_on;
     /* fixed-function lighting (DSR_MATERIAL, DSR_LIGHT): only for producers that send them (the Direct3D 8/9 layer) */
     int ff_light; float material[17]; struct { int on; uint32_t type; float v[25]; } light[32];
+    /* the game's own shader pairs (DSR_MSL_CREATE: d3d9_shader.c's MojoShader translation), by id - 0x10000; fs nil:
+     * the fixed-function texture stages (fs_main) finish the vertex shader */
+    struct { id<MTLFunction> vs, fs; uint32_t kinds, nattr; uint8_t reg[16], slot[16]; } mp[4096]; uint32_t cur_mp;   /* index + 1 */
+    uint8_t sconst[2][4096 * 16 + 4096]; uint32_t sconst_n[2]; float salpha[4];   /* the stages' constant structs (DSR_SHADER_CONST) */
+    uint64_t mpso_k[1024]; id<MTLRenderPipelineState> mpso_v[1024]; int mpso_n;
 };
 
 static void mat_ident(float *m) { memset(m, 0, 64); m[0] = m[5] = m[10] = m[15] = 1; }
@@ -592,6 +597,156 @@ static id<MTLRenderPipelineState> prog_pipeline(DSRRenderer *r, uint32_t mask, i
     if (r->ppso_n < 384) { r->ppso_k[h] = key; r->ppso_v[h] = pso; r->ppso_n++; }
     return pso;
 }
+/* ---- the game's own shaders (DSR_MSL_CREATE) ---- */
+static void msl_create(DSRRenderer *r, const uint32_t *p, uint32_t size)
+{
+    if (size < 20) return;
+    uint32_t pid = p[0], na = p[1], vl = p[2], pl = p[3], kinds = p[4];
+    if (pid < 0x10000 || pid >= 0x10000 + 4096 || na > 16 || 20 + 8ull * na + vl + pl > size) return;
+    typeof(r->mp[0]) *m = &r->mp[pid - 0x10000]; memset(m->reg, 0, 16); memset(m->slot, 0, 16);
+    m->nattr = na; m->kinds = kinds;
+    for (uint32_t k = 0; k < na; k++) { m->reg[k] = (uint8_t)p[5 + 2 * k]; m->slot[k] = (uint8_t)p[6 + 2 * k]; }
+    const char *vs = (const char *)(p + 5 + 2 * na), *ps = pl ? vs + ((vl + 4) & ~3u) : 0; NSError *err = nil;
+    double t0 = CACurrentMediaTime();
+    id<MTLLibrary> vlib = [r->dev newLibraryWithSource:[[NSString alloc] initWithBytes:vs length:vl encoding:NSUTF8StringEncoding] options:[MTLCompileOptions new] error:&err];
+    m->vs = [vlib newFunctionWithName:@"d3dvs"];
+    if (!m->vs) { fprintf(stderr, "dsr: shader program %u (vertex): %s\n", pid, err ? err.localizedDescription.UTF8String : "no d3dvs"); return; }
+    m->fs = nil;
+    if (ps) {
+        err = nil; id<MTLLibrary> plib = [r->dev newLibraryWithSource:[[NSString alloc] initWithBytes:ps length:pl encoding:NSUTF8StringEncoding] options:[MTLCompileOptions new] error:&err];
+        m->fs = [plib newFunctionWithName:@"d3dps"];
+        if (!m->fs) { fprintf(stderr, "dsr: shader program %u (pixel): %s\n", pid, err ? err.localizedDescription.UTF8String : "no d3dps"); m->vs = nil; return; }
+    }
+    if (getenv("DSR_PSOLOG")) fprintf(stderr, "dsr: shader program %u compiled in %.1f ms\n", pid, (CACurrentMediaTime() - t0) * 1000);
+}
+/* DSR_SHADER_CONST: counts (vs/ps float4, int4, bool), then the registers; each stage's struct as MojoShader's Metal
+ * declares it: float4 uniforms_float4[], int4 uniforms_int4[], bool uniforms_bool[] (one byte each) */
+static void shader_const(DSRRenderer *r, const uint32_t *p, uint32_t size)
+{
+    if (size < 24) return;
+    uint32_t nf[2] = {p[0], p[1]}, ni[2] = {p[2], p[3]}, nb[2] = {p[4], p[5]};
+    uint64_t need = 24 + 16ull * (nf[0] + nf[1] + ni[0] + ni[1]) + 4ull * (nb[0] + nb[1]) + 16;
+    if (need > size || nf[0] + ni[0] > 4096 || nf[1] + ni[1] > 4096 || nb[0] > 4096 || nb[1] > 4096) return;
+    const uint8_t *w = (const uint8_t *)(p + 6);
+    const uint8_t *f[2] = {w, w + 16 * nf[0]}; w += 16 * (nf[0] + nf[1]);
+    const uint8_t *in[2] = {w, w + 16 * ni[0]}; w += 16 * (ni[0] + ni[1]);
+    const uint32_t *b[2] = {(const uint32_t *)w, (const uint32_t *)w + nb[0]}; w += 4 * (nb[0] + nb[1]);
+    for (int st = 0; st < 2; st++) {
+        uint8_t *o = r->sconst[st]; uint32_t n = 0;
+        memcpy(o, f[st], 16 * nf[st]); n += 16 * nf[st];
+        memcpy(o + n, in[st], 16 * ni[st]); n += 16 * ni[st];
+        for (uint32_t k = 0; k < nb[st]; k++) o[n + k] = b[st][k] != 0;
+        n += nb[st]; n = (n + 15) & ~15u; if (!n) { memset(o, 0, 16); n = 16; }
+        r->sconst_n[st] = n;
+    }
+    memcpy(r->salpha, w, 16);
+}
+static id<MTLRenderPipelineState> mprog_pipeline(DSRRenderer *r, uint32_t mask, int has_depth, int atest)
+{
+    typeof(r->mp[0]) *m = &r->mp[r->cur_mp - 1];
+    uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? target_bf(r, r->rs[19]) : 2, db = blend ? target_bf(r, r->rs[20]) : 1, cw = r->rs[168] & 15;
+    uint64_t key = (uint64_t)r->cur_mp << 44 | (uint64_t)mask << 28 | (uint64_t)cw << 20 | blend << 16 | sb << 10 | db << 4 | (uint64_t)atest << 2 | (uint64_t)has_depth << 1 | 1;
+    uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
+    while (r->mpso_k[h] && r->mpso_k[h] != key) h = (h + 1) & 1023;
+    if (r->mpso_k[h]) return r->mpso_v[h];
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; NSError *err = nil;
+    d.vertexFunction = m->vs;
+    if (m->fs) d.fragmentFunction = m->fs;
+    else { MTLFunctionConstantValues *fc = [MTLFunctionConstantValues new]; bool at = atest; [fc setConstantValue:&at type:MTLDataTypeBool atIndex:0];
+           d.fragmentFunction = [r->lib newFunctionWithName:@"fs_main" constantValues:fc error:&err]; }
+    d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    d.colorAttachments[0].writeMask = (cw & 1 ? MTLColorWriteMaskRed : 0) | (cw & 2 ? MTLColorWriteMaskGreen : 0) | (cw & 4 ? MTLColorWriteMaskBlue : 0) | (cw & 8 ? MTLColorWriteMaskAlpha : 0);
+    if (has_depth) d.depthAttachmentPixelFormat = d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    if (blend) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].sourceAlphaBlendFactor = bf(sb);
+                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db); }
+    /* each input register from its slot in the draw's float4 vertex (slots in mask order), or zeros */
+    MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor]; int zeros = 0, ns = __builtin_popcount(mask);
+    for (uint32_t k = 0; k < m->nattr; k++) {
+        uint32_t reg = m->reg[k], sl = m->slot[k]; if (reg >= 16) continue;
+        v.attributes[reg].format = MTLVertexFormatFloat4;
+        if (mask >> sl & 1) { v.attributes[reg].bufferIndex = 30; v.attributes[reg].offset = 16u * (uint32_t)__builtin_popcount(mask & ((1u << sl) - 1)); }
+        else { v.attributes[reg].bufferIndex = 29; v.attributes[reg].offset = 0; zeros = 1; }
+    }
+    v.layouts[30].stride = 16u * (uint32_t)(ns ? ns : 1);
+    if (zeros) { v.layouts[29].stride = 16; v.layouts[29].stepFunction = MTLVertexStepFunctionConstant; v.layouts[29].stepRate = 0; }
+    d.vertexDescriptor = v;
+    id<MTLRenderPipelineState> pso = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!pso) { static int n; if (n++ < 10) fprintf(stderr, "dsr: shader pipeline (program %u): %s\n", r->cur_mp - 1 + 0x10000, err.localizedDescription.UTF8String); return nil; }
+    if (r->mpso_n < 768) { r->mpso_k[h] = key; r->mpso_v[h] = pso; r->mpso_n++; }
+    return pso;
+}
+static void draw_mprog(DSRRenderer *r, const uint32_t *p, uint32_t size)
+{
+    uint32_t prim = p[0], mask = p[1] & 0xffff, nv = p[2], ni = p[3], ns = (uint32_t)__builtin_popcount(mask), stride = 16 * ns, voff, ioff = 0;
+    dsr_stat[0]++;
+    if (!nv || !ns || 20 + (uint64_t)nv * stride + (uint64_t)ni * 2 > size) { dsr_stat[1]++; return; }
+    if (prim == 6 && (ni ? ni : nv) < 3) return;
+    typeof(r->mp[0]) *m = &r->mp[r->cur_mp - 1]; if (!m->vs) return;
+    Surf *rt = surf(r, r->rt), *ds = surf(r, r->ds); if (!rt) { dsr_stat[2]++; return; }
+    ring_room(r, (uint64_t)nv * stride + (uint64_t)ni * 2 + r->sconst_n[0] + r->sconst_n[1] + sizeof(Uniforms) + 256
+              + (prim == 6 ? (uint64_t)((ni ? ni : nv) - 2) * 6 : 0));
+    int atest = r->rs[15] != 0;
+    id<MTLRenderPipelineState> pso = mprog_pipeline(r, mask, ds != NULL, atest); if (!pso) { dsr_stat[3]++; return; }
+    void *vdst = ring_alloc(r, nv * stride, &voff); memcpy(vdst, p + 5, nv * stride);
+    if (ni) { void *idst = ring_alloc(r, ni * 2, &ioff); memcpy(idst, (const uint8_t *)(p + 5) + nv * stride, ni * 2); }
+    uint32_t c0off, c1off = 0, uoff = 0;
+    memcpy(ring_alloc(r, r->sconst_n[0], &c0off), r->sconst[0], r->sconst_n[0]);
+    if (m->fs) memcpy(ring_alloc(r, r->sconst_n[1], &c1off), r->sconst[1], r->sconst_n[1]);
+    float vpw = r->vp[2] ? r->vp[2] : rt->w, vph = r->vp[3] ? r->vp[3] : rt->h;
+    struct { float pixfix[4], fog[4]; } x; memset(&x, 0, sizeof x);
+    x.pixfix[0] = 1.0f / vpw; x.pixfix[1] = -1.0f / vph;            /* D3D9's pixel centres, as vs_main */
+    x.pixfix[2] = r->rs[28] ? 1 : 0;                                    /* D3DRS_FOGENABLE */
+    x.pixfix[3] = r->rs[35] && r->rs[35] <= 3 ? 1 : 0;                  /* D3DRS_FOGTABLEMODE: by depth, not the shader's oFog */
+    {   float fs, fe, dens; memcpy(&fs, &r->rs[36], 4); memcpy(&fe, &r->rs[37], 4); memcpy(&dens, &r->rs[38], 4);
+        uint32_t fm = r->rs[35] ? r->rs[35] : r->rs[140]; if (fm > 3 || (fm == 3 && fe == fs)) fm = 0;
+        x.fog[0] = fs; x.fog[1] = fe; x.fog[2] = r->rs[28] ? (float)fm : 0; x.fog[3] = dens; }
+    Surf *t0 = surf(r, r->tex[0]), *t1 = surf(r, r->tex[1]);
+    if (!m->fs) {   /* the fixed-function stages: fs_main's uniforms, as draw() sets them */
+        Uniforms u; memset(&u, 0, sizeof u);
+        u.vp[0] = r->vp[0]; u.vp[1] = r->vp[1]; u.vp[2] = vpw; u.vp[3] = vph;
+        memcpy(u.fog, x.fog, 16);
+        uint32_t fc = r->rs[34]; u.fogcolor[0] = ((fc >> 16) & 255) / 255.0f; u.fogcolor[1] = ((fc >> 8) & 255) / 255.0f; u.fogcolor[2] = (fc & 255) / 255.0f; u.fogcolor[3] = 1;
+        uint32_t tf = r->rs[60]; u.tfactor[0] = ((tf >> 16) & 255) / 255.0f; u.tfactor[1] = ((tf >> 8) & 255) / 255.0f; u.tfactor[2] = (tf & 255) / 255.0f; u.tfactor[3] = (tf >> 24) / 255.0f;
+        u.c0[0] = r->tss[0][1]; u.c0[1] = r->tss[0][2]; u.c0[2] = r->tss[0][3]; u.c0[3] = r->tss[0][4]; u.a0[0] = r->tss[0][5]; u.a0[1] = r->tss[0][6];
+        u.c1[0] = r->tss[1][1]; u.c1[1] = r->tss[1][2]; u.c1[2] = r->tss[1][3]; u.c1[3] = r->tss[1][4]; u.a1[0] = r->tss[1][5]; u.a1[1] = r->tss[1][6];
+        u.at[0] = (r->rs[24] & 255) / 255.0f; u.at[1] = r->rs[25]; u.at[2] = r->rs[15] ? 1 : 0;
+        u.misc[1] = 1; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
+        u.xrgb[0] = t0 && t0->fmt == 2; u.xrgb[1] = t1 && t1->fmt == 2;
+        memcpy(ring_alloc(r, sizeof u, &uoff), &u, sizeof u);
+    }
+    id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, r->ds); if (!e) { dsr_stat[4]++; return; }   /* (ring_alloc may have flushed) */
+    [e setRenderPipelineState:pso]; [e setDepthStencilState:depth_for(r)];
+    if (r->rs[52]) [e setStencilReferenceValue:r->rs[57] & 255];
+    uint32_t cull = r->rs[22]; [e setCullMode:cull == 2 ? MTLCullModeFront : cull == 3 ? MTLCullModeBack : MTLCullModeNone];
+    [e setViewport:(MTLViewport){r->vp[0], r->vp[1], vpw, vph, r->vp[4], r->vp[5] ? r->vp[5] : 1}];
+    [e setVertexBuffer:r->ring offset:voff atIndex:30]; [e setVertexBuffer:r->attr_defaults offset:0 atIndex:29];
+    [e setVertexBuffer:r->ring offset:c0off atIndex:0]; [e setVertexBytes:&x length:sizeof x atIndex:1];
+    if (m->fs) {
+        [e setFragmentBuffer:r->ring offset:c1off atIndex:0]; [e setFragmentBytes:r->salpha length:16 atIndex:1];
+        for (int k = 0; k < 8; k++) {
+            uint32_t kind = (m->kinds >> (2 * k)) & 3; Surf *t = surf(r, r->tex[k]);
+            id<MTLTexture> tx = kind == 1 ? r->dummy_cube : kind == 2 ? r->dummy_3d : (t ? tex2d(t) : r->dummy);
+            if (kind == 1 && t && t->tex.textureType == MTLTextureTypeCube) tx = t->tex;
+            [e setFragmentTexture:tx atIndex:(NSUInteger)k]; [e setFragmentSamplerState:sampler_for(r, k) atIndex:(NSUInteger)k];
+        }
+    } else {
+        [e setFragmentBuffer:r->ring offset:uoff atIndex:1];
+        [e setFragmentTexture:t0 ? tex2d(t0) : r->dummy atIndex:0]; [e setFragmentSamplerState:sampler_for(r, 0) atIndex:0];
+        [e setFragmentTexture:t1 ? tex2d(t1) : r->dummy atIndex:1]; [e setFragmentSamplerState:sampler_for(r, 1) atIndex:1];
+    }
+    memset(&r->es, 0, sizeof r->es); r->es.cull = -1;                     /* the fixed-function path sets its state again */
+    MTLPrimitiveType pt; uint32_t count = ni ? ni : nv;
+    switch (prim) { case 1: pt = MTLPrimitiveTypePoint; break; case 2: pt = MTLPrimitiveTypeLine; break; case 3: pt = MTLPrimitiveTypeLineStrip; break;
+                    case 5: pt = MTLPrimitiveTypeTriangleStrip; break; default: pt = MTLPrimitiveTypeTriangle; }
+    if (prim == 6) {   /* fans as triangle lists */
+        uint32_t tris = count - 2, ooff; uint16_t *ix = ring_alloc(r, tris * 6, &ooff);
+        const uint16_t *src = ni ? (const uint16_t *)((const uint8_t *)(p + 5) + nv * stride) : NULL;
+        for (uint32_t k = 0; k < tris; k++) { ix[k * 3] = src ? src[0] : 0; ix[k * 3 + 1] = src ? src[k + 1] : (uint16_t)(k + 1); ix[k * 3 + 2] = src ? src[k + 2] : (uint16_t)(k + 2); }
+        e = enc_for(r, r->rt, r->ds);
+        [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:tris * 3 indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ooff];
+    } else if (ni) [e drawIndexedPrimitives:pt indexCount:ni indexType:MTLIndexTypeUInt16 indexBuffer:r->ring indexBufferOffset:ioff];
+    else [e drawPrimitives:pt vertexStart:0 vertexCount:nv];
+}
 static void draw_prog(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t prim = p[0], mask = p[1] & 0xffff, nv = p[2], ni = p[3], pretrans = p[4], ns = (uint32_t)__builtin_popcount(mask), stride = 16 * ns, voff, ioff = 0;
@@ -819,9 +974,11 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
             uint32_t ort = r->rt; quad(r, p[0], d, (uint32_t)show, sr, 0, 0); r->rt = ort; } }
         r->present_ts = (size >= 16 && p[3]) ? (((uint64_t)p[2] << 32) | p[1]) / (double)p[3] : -1; return 1;
     case DSR_PROG_CREATE: prog_create(r, p, size); break;
-    case DSR_PROG_USE: r->cur_prog = p[0] < 1024 ? p[0] : 0; break;
+    case DSR_PROG_USE: r->cur_prog = p[0] < 1024 ? p[0] : 0; r->cur_mp = p[0] >= 0x10000 && p[0] < 0x10000 + 4096 ? p[0] - 0x10000 + 1 : 0; break;
+    case DSR_MSL_CREATE: msl_create(r, p, size); break;
+    case DSR_SHADER_CONST: shader_const(r, p, size); break;
     case DSR_PROG_CONST: if (size >= 4 && p[0] <= 4096 && 4 + 16 * (uint64_t)p[0] <= size) { memcpy(r->pconst, p + 1, 16 * (size_t)p[0]); r->npconst = p[0]; } break;
-    case DSR_DRAW_PROG: draw_prog(r, p, size); break;
+    case DSR_DRAW_PROG: if (r->cur_mp) draw_mprog(r, p, size); else draw_prog(r, p, size); break;
     case DSR_GAMMA: if (size >= 1536) { memcpy(r->gamma, p, 1536); r->gamma_dirty = 1; } break;
     case DSR_MATERIAL: if (size >= 68) { memcpy(r->material, p, 68); r->ff_light = 1; } break;
     case DSR_LIGHT: if (size >= 112 && p[0] < 32) { r->light[p[0]].on = p[1] != 0; r->light[p[0]].type = p[2]; memcpy(r->light[p[0]].v, p + 3, 100); r->ff_light = 1; } break;
