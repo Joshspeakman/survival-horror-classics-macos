@@ -6,10 +6,12 @@
 # installs them as one app, "GTA Classics.app" ("GTA Classics Nightly.app" with --branch nightly), in ~/Applications.
 # Its launch window has a card per game; Play starts the chosen one in the same process (Game Mode stays on).
 #
-# The games are the Mac Steam releases (TransGaming's wrapper around the Windows game: GTA III 12230, Vice City
-# 12240, San Andreas 12250), found under --steam-dir (default ~/Library/Application Support/Steam/steamapps/common),
-# or already imported by an earlier install, or given with --gta3-dir / --vc-dir / --sa-dir (the folder holding
-# gta3.exe, gta-vc.exe or gta_sa.exe). --games picks which to build (default: every game found); a game already in
+# The games are the Mac Steam releases (TransGaming's wrapper around the Windows game: GTA III 12230, San Andreas
+# 12250), found under --steam-dir (default ~/Library/Application Support/Steam/steamapps/common), or already imported
+# by an earlier install, or given with --gta3-dir / --vc-dir / --sa-dir (the folder holding gta3.exe, gta-vc.exe or
+# gta_sa.exe). Vice City is the Windows release (app 12110): the Mac release's gta-vc.exe carries SecuROM with online
+# activation, which this project does not touch. Download it from Steam's console (steam://open/console):
+# "download_depot 12110 12111"; the depot folder Steam reports is found by default. --games picks which to build (default: every game found); a game already in
 # the app and not named this time is kept as it is. A game whose port isn't in this checkout yet is skipped.
 # Each game is copied into its data folder (~/Games/GTA3Native, GTAVCNative, GTASANative: game-files/<folder>, an
 # APFS clone, no extra space), so the Steam copy can go afterwards; --in-place reads the found folders instead.
@@ -55,13 +57,16 @@ game_info() {
   esac
   G_STEAM_DIR="$STEAM/$G_STEAM/Contents/Resources/transgaming/c_drive/Program Files/Rockstar Games/$G_FOLDER"
   G_IMPORTED="$G_DATA/game-files/$G_FOLDER"
+  G_DEPOT=""   # Vice City: the Windows depot Steam's console downloads (the Mac copy's exe is SecuROM'd: never used)
+  [ "$1" = vc ] && G_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_12110/depot_12111"
 }
 given_dir() { case "$1" in gta3) echo "$DIR_gta3";; vc) echo "$DIR_vc";; sa) echo "$DIR_sa";; esac; }
 find_game() {   # find_game <id>: the game folder (an explicit one, else the imported copy, else Steam's), or nothing
   game_info "$1"; local d; d="$(given_dir "$1")"
   if [ -n "$d" ]; then if [ -f "$d/$G_EXE" ]; then (cd "$d" && pwd); fi
   elif [ -f "$G_IMPORTED/$G_EXE" ]; then echo "$G_IMPORTED"
-  elif [ -f "$G_STEAM_DIR/$G_EXE" ]; then echo "$G_STEAM_DIR"; fi
+  elif [ -n "$G_DEPOT" ] && [ -f "$G_DEPOT/$G_EXE" ]; then echo "$G_DEPOT"
+  elif [ -z "$G_DEPOT" ] && [ -f "$G_STEAM_DIR/$G_EXE" ]; then echo "$G_STEAM_DIR"; fi
   return 0
 }
 if [ -z "$WANT" ]; then

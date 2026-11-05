@@ -7,12 +7,14 @@
 #include "edition.h"
 
 #ifdef GTA_EDITION
-#if defined(GTA3_EDITION) || defined(GTASA_EDITION)
+#if defined(GTA3_EDITION) || defined(GTASA_EDITION) || defined(GTAVC_EDITION)
 #ifdef GTA3_EDITION
 enum { PICK_MODE = 0x005829f8u,             /* psSelectDevice: just before the saved mode is read */
        RW_NUM_MODES = 0x005a2460u,          /* RwEngineGetNumVideoModes(void) */
        RW_MODE_INFO = 0x005a24d0u,          /* RwEngineGetVideoModeInfo(RwVideoMode *, index): width, height, depth, flags */
        PREFS_MODE = 0x00906c10u };
+#elif defined(GTAVC_EDITION)
+enum { PICK_MODE = 0x00600a95u, RW_NUM_MODES = 0x00641af0u, RW_MODE_INFO = 0x00641b20u, PREFS_MODE = 0x00868698u };   /* Vice City (Steam) */
 #else
 enum { PICK_MODE = 0x0074daecu, RW_NUM_MODES = 0x007fa680u, RW_MODE_INFO = 0x007fa6b0u, PREFS_MODE = 0x00b880c8u };   /* San Andreas 3.0 */
 #endif
@@ -50,7 +52,5 @@ int gta3_hook(Ctx *c, uint32_t addr)
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
     return 0;
 }
-#else
-int gta3_hook(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }   /* Vice City: none yet */
 #endif
 #endif

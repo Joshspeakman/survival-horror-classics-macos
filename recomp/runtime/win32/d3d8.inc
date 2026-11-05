@@ -21,6 +21,7 @@ static uint32_t pp9_from8(uint32_t pp8)                 /* D3DPRESENT_PARAMETERS
     static uint32_t buf; if (!buf) buf = gmem(64);
     uint32_t v8[13], v9[14]; memcpy(v8, GP(pp8), 52);
     v9[0] = v8[0]; v9[1] = v8[1]; v9[2] = v8[2]; v9[3] = v8[3]; v9[4] = v8[4]; v9[5] = 0;   /* MultiSampleQuality */
+    if (v9[2] == 23) v9[2] = 22;                        /* a 16-bit mode (R5G6B5, listed for Vice City's 640x480x16 search): drawn in 32 */
     for (int k = 5; k < 13; k++) v9[k + 1] = v8[k];      /* SwapEffect, hDeviceWindow, Windowed, EnableAutoDepthStencil, AutoDepthStencilFormat, Flags, refresh, interval */
     memcpy(GP(buf), v9, 56); return buf;
 }
@@ -38,11 +39,14 @@ M(d8_GetAdapterIdentifier, 4)                          /* (adapter, flags, D3DAD
     memcpy(GP(o + 1048), guid, 16); rt_w32(G_MEM, o + 1064, 1);
     RET(D3D_OK, 4);
 END
-M(d8_GetAdapterModeCount, 2) uint32_t m[DS_DISPLAY_MODE_CAP][2]; RET((uint32_t)modes(m), 2); END
-M(d8_EnumAdapterModes, 4)                              /* (adapter, index, D3DDISPLAYMODE *): 32-bit modes */
-    uint32_t m[DS_DISPLAY_MODE_CAP][2]; int n = modes(m); if (ARG(2) >= (uint32_t)n) RET(D3DERR_INVALIDCALL, 4);
-    uint32_t v[4] = {m[ARG(2)][0], m[ARG(2)][1], (uint32_t)w32_screen_hz, 22}; memcpy(GP(ARG(3)), v, 16); RET(D3D_OK, 4);
+/* the modes in 32-bit colour, then the same in 16-bit (R5G6B5), as a Windows driver lists them: Vice City looks for
+ * 640x480x16 when it has no saved mode (GTA III for more than 16 bits); a 16-bit device is drawn in 32 (pp9_from8) */
+M(d8_GetAdapterModeCount, 2) uint32_t m[DS_DISPLAY_MODE_CAP][2]; RET(2 * (uint32_t)modes(m), 2); END
+M(d8_EnumAdapterModes, 4)                              /* (adapter, index, D3DDISPLAYMODE *) */
+    uint32_t m[DS_DISPLAY_MODE_CAP][2]; uint32_t n = (uint32_t)modes(m), i = ARG(2); if (i >= 2 * n) RET(D3DERR_INVALIDCALL, 4);
+    uint32_t v[4] = {m[i % n][0], m[i % n][1], (uint32_t)w32_screen_hz, i < n ? 22u : 23u}; memcpy(GP(ARG(3)), v, 16); RET(D3D_OK, 4);
 END
+M(d8_CheckDeviceType, 6) RET(ARG(3) == 22 || ARG(3) == 21 || ARG(3) == 23 ? D3D_OK : D3DERR_NOTAVAILABLE, 6); END   /* (adapter, type, display, back buffer, windowed) */
 M(d8_CheckDeviceMultiSampleType, 6) RET(ARG(5) == 0 ? D3D_OK : D3DERR_NOTAVAILABLE, 6); END   /* (adapter, type, format, windowed, multisample) */
 static void fill_caps8(uint32_t out)                   /* D3DCAPS8: the first 53 fields of D3DCAPS9 */
 {
@@ -200,7 +204,7 @@ static void init_vtables8(void)
     static int done; if (done) return; done = 1;
     init_vtables9();
     static const Fn9 d3d[] = { d9_QueryInterface, d9_AddRef, d9_Release, d9_RegisterSoftwareDevice, d9_GetAdapterCount, d8_GetAdapterIdentifier,
-        d8_GetAdapterModeCount, d8_EnumAdapterModes, d9_GetAdapterDisplayMode, d9_CheckDeviceType, d9_CheckDeviceFormat,
+        d8_GetAdapterModeCount, d8_EnumAdapterModes, d9_GetAdapterDisplayMode, d8_CheckDeviceType, d9_CheckDeviceFormat,
         d8_CheckDeviceMultiSampleType, d9_CheckDepthStencilMatch, d8_GetDeviceCaps, d9_GetAdapterMonitor, d8_CreateDevice };
     static const Fn9 dev[] = { dv_QueryInterface, dv_AddRef, dv_Release, dv_TestCooperativeLevel, dv_GetAvailableTextureMem, d8_ResourceManagerDiscardBytes,
         dv_GetDirect3D, d8_dvGetDeviceCaps, d8_GetDisplayMode, dv_GetCreationParameters, dv_SetCursorProperties, dv_SetCursorPosition,

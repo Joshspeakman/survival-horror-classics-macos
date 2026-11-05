@@ -65,7 +65,9 @@ static char *win_trim(char *t)
 static int host_path(const char *win, char *out, size_t cap, int mode, const char *overlay, const char *layer)
 {
     char full[2048], norm[2048];
-    if (((win[0] | 32) >= 'a' && (win[0] | 32) <= 'z') && win[1] == ':') snprintf(full, sizeof full, "%s", win);
+    if (((win[0] | 32) >= 'a' && (win[0] | 32) <= 'z') && win[1] == ':' && win[2] && win[2] != '\\' && win[2] != '/' && (win[0] | 32) == (w32_cwd[0] | 32))
+        snprintf(full, sizeof full, "%s\\%s", w32_cwd, win + 2);   /* "C:AUDIO\x": drive-relative, the drive's current folder (Vice City's CD probe) */
+    else if (((win[0] | 32) >= 'a' && (win[0] | 32) <= 'z') && win[1] == ':') snprintf(full, sizeof full, "%s", win);
     else if (win[0] == '\\' || win[0] == '/') snprintf(full, sizeof full, "C:%s", win);
     else snprintf(full, sizeof full, "%s\\%s", w32_cwd, win);
     if ((full[0] | 32) != 'c') return -1;
@@ -156,7 +158,9 @@ static uint32_t copy_out(Ctx *c, const char *s, uint32_t buf, uint32_t cap)   /*
 static void full_win_path(const char *in, char *out, size_t cap)
 {
     char tmp[2048];
-    if (((in[0] | 32) >= 'a' && (in[0] | 32) <= 'z') && in[1] == ':') snprintf(tmp, sizeof tmp, "%s", in);
+    if (((in[0] | 32) >= 'a' && (in[0] | 32) <= 'z') && in[1] == ':' && in[2] && in[2] != '\\' && in[2] != '/' && (in[0] | 32) == (w32_cwd[0] | 32))
+        snprintf(tmp, sizeof tmp, "%s\\%s", w32_cwd, in + 2);         /* drive-relative: the drive's current folder */
+    else if (((in[0] | 32) >= 'a' && (in[0] | 32) <= 'z') && in[1] == ':') snprintf(tmp, sizeof tmp, "%s", in);
     else if (in[0] == '\\' || in[0] == '/') snprintf(tmp, sizeof tmp, "C:%s", in);
     else snprintf(tmp, sizeof tmp, "%s\\%s", w32_cwd, in);
     char *parts[256]; int np = 0;

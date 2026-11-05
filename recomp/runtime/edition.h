@@ -14,9 +14,9 @@
 #define DS2_INI "gta3.ini"
 #define GAME_EXE "gta3.exe"
 #elif defined(GTAVC_EDITION)
-/* Grand Theft Auto: Vice City (the Mac Steam release, app 12240: gta-vc.exe from the Cider wrapper, SecuROM undone
- * locally by tools/securom_vc.py): RenderWare on Direct3D 8 */
-#define DS2_IMAGE_END 0x0167b000u
+/* Grand Theft Auto: Vice City (the Windows Steam release, app 12110 depot 12111: gta-vc.exe, unwrapped by
+ * tools/steamstub21.py; the Mac release's copy has SecuROM with online activation): RenderWare on Direct3D 8 */
+#define DS2_IMAGE_END 0x00a96000u
 #define DS2_TITLE "Grand Theft Auto: Vice City"
 #define DS2_DOCUMENTS "GTA Vice City User Files"
 #define DS2_INI "gta-vc.ini"

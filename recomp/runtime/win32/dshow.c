@@ -1,14 +1,16 @@
 /* DirectShow's filter graph (CLSID_FilterGraph) for what Fallout NV does with it: play its MP3 music. One object with
  * the interfaces the game asks for (IGraphBuilder, IMediaControl, IMediaEventEx, IMediaSeeking, IBasicAudio,
- * IMediaPosition); RenderFile opens the file, minimp3 (third_party) decodes it as it plays through the host audio
- * output, and the end of the stream is reported as EC_COMPLETE through the graph's event handle. */
+ * IMediaPosition, IVideoWindow); RenderFile opens the file, minimp3 (third_party) decodes it as it plays through the
+ * host audio output, and the end of the stream is reported as EC_COMPLETE through the graph's event handle.
+ * A video file (GTA Vice City's Logo.mpg, GTAtitles.mpg) is accepted and not shown: running it completes at once, so
+ * the game goes on as if the movie had ended (no MPEG-1 decoder yet). */
 #include "w32.h"
 #include "../host_audio.h"
 #include <pthread.h>
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3_ex.h"
 
-enum { I_GRAPH, I_CONTROL, I_EVENT, I_SEEKING, I_AUDIO, I_POSITION, NI };
+enum { I_GRAPH, I_CONTROL, I_EVENT, I_SEEKING, I_AUDIO, I_POSITION, I_VIDEO, NI };
 #define S_OK 0u
 #define S_FALSE 1u
 #define E_NOINTERFACE 0x80004002u
@@ -22,6 +24,7 @@ typedef struct Graph {
     uint64_t pos;                                      /* samples (all channels) played */
     float gain; uint32_t event; int complete_pending, complete_sent; uint32_t notify_hwnd, notify_msg;
     uint8_t *data;                                     /* a stream pulled from the game's own source filter (Render) */
+    int video;                                         /* a video file: not shown, complete when run */
 } Graph;
 static uint32_t vt[NI];
 static Graph *graphs[64]; static int ngraphs;
@@ -67,7 +70,7 @@ static uint32_t start_stream(Graph *gr, int err, const char *what)
 
 /* ---- IUnknown, shared by every interface ---- */
 static const uint32_t iid_first[NI][3] = {                     /* first dword of each IID this object answers */
-    {0x56a868a9u, 0x56a8689fu, 0}, {0x56a868b1u, 0, 0}, {0x56a868c0u, 0x56a868b6u, 0}, {0x36b73880u, 0, 0}, {0x56a868b3u, 0, 0}, {0x56a868b2u, 0, 0}};
+    {0x56a868a9u, 0x56a8689fu, 0}, {0x56a868b1u, 0, 0}, {0x56a868c0u, 0x56a868b6u, 0}, {0x36b73880u, 0, 0}, {0x56a868b3u, 0, 0}, {0x56a868b2u, 0, 0}, {0x56a868b4u, 0, 0}};
 static void qi(Ctx *c, int iface)
 {
     Graph *gr = of(c, iface); uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2);
@@ -87,8 +90,8 @@ static void release(Ctx *c, int iface)
 #define IUNK(pfx, k) static void pfx##_qi(Ctx *c) { qi(c, k); } static void pfx##_add(Ctx *c) { addref(c, k); } static void pfx##_rel(Ctx *c) { release(c, k); }
 #define DISPATCH(pfx) static void pfx##_tic(Ctx *c) { if (ARG(1)) rt_w32(G_MEM, ARG(1), 0); RET(S_OK, 2); } \
     static void pfx##_ti(Ctx *c) { RET(E_NOTIMPL, 4); } static void pfx##_ids(Ctx *c) { RET(E_NOTIMPL, 6); } static void pfx##_inv(Ctx *c) { RET(E_NOTIMPL, 9); }
-IUNK(gb, I_GRAPH) IUNK(mc, I_CONTROL) IUNK(me, I_EVENT) IUNK(ms, I_SEEKING) IUNK(ba, I_AUDIO) IUNK(mp, I_POSITION)
-DISPATCH(mc) DISPATCH(me) DISPATCH(ba) DISPATCH(mp)
+IUNK(gb, I_GRAPH) IUNK(mc, I_CONTROL) IUNK(me, I_EVENT) IUNK(ms, I_SEEKING) IUNK(ba, I_AUDIO) IUNK(mp, I_POSITION) IUNK(vw, I_VIDEO)
+DISPATCH(mc) DISPATCH(me) DISPATCH(ba) DISPATCH(mp) DISPATCH(vw)
 
 /* ---- IGraphBuilder ---- */
 static uint32_t render_file(Graph *gr, uint32_t wname)
@@ -96,6 +99,12 @@ static uint32_t render_file(Graph *gr, uint32_t wname)
     char a[1024]; int k = 0; for (; k < 1023 && rt_r16(G_MEM, wname + 2u * (uint32_t)k); k++) a[k] = (char)rt_r16(G_MEM, wname + 2u * (uint32_t)k); a[k] = 0;
     char host[2048]; if (w32_host_path(a, host, sizeof host, 0)) return VFW_E_NOT_FOUND;
     close_stream(gr);
+    const char *dot = strrchr(a, '.');
+    if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg") || !strcasecmp(dot, ".avi") || !strcasecmp(dot, ".wmv"))) {
+        if (getenv("W32_AUDIOLOG")) fprintf(stderr, "dshow: RenderFile %s -> a video: completes when run\n", a);
+        gr->video = 1; gr->complete_pending = gr->complete_sent = 0; return S_OK;
+    }
+    gr->video = 0;
     pthread_mutex_lock(&gr->m); int err = mp3dec_ex_open(&gr->dec, host, MP3D_SEEK_TO_SAMPLE); pthread_mutex_unlock(&gr->m);
     char what[1100]; snprintf(what, sizeof what, "RenderFile %s", a);
     return start_stream(gr, err, what);
@@ -143,7 +152,13 @@ static void set_state(Graph *gr, int st)
 {
     pthread_mutex_lock(&gr->m);
     if (st == 0) { if (gr->open) mp3dec_ex_seek(&gr->dec, 0); gr->pos = 0; gr->complete_pending = gr->complete_sent = 0; }
-    gr->state = st; pthread_mutex_unlock(&gr->m);
+    gr->state = st;
+    int done_video = st == 2 && gr->video && !gr->complete_sent;
+    if (done_video) { gr->complete_pending = gr->complete_sent = 1; if (gr->event) w32_event_signal(gr->event, 1); }
+    uint32_t hwnd = gr->notify_hwnd, msg = gr->notify_msg;
+    pthread_mutex_unlock(&gr->m);
+    if (done_video && hwnd && msg) { void w32_post(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t); uint32_t w32_window_tid(uint32_t);
+                                     w32_post(w32_window_tid(hwnd), hwnd, msg, 0, 0); }   /* the notify window learns of EC_COMPLETE */
 }
 static void mc_Run(Ctx *c) { Graph *gr = of(c, I_CONTROL); if (gr) set_state(gr, 2); RET(S_OK, 1); }
 static void mc_Pause(Ctx *c) { Graph *gr = of(c, I_CONTROL); if (gr) set_state(gr, 1); RET(S_OK, 1); }
@@ -221,6 +236,14 @@ static void mp_put_d(Ctx *c) { RET(S_OK, 3); }
 static void mp_get_Rate(Ctx *c) { double one = 1.0; memcpy(GP(ARG(1)), &one, 8); RET(S_OK, 2); }
 static void mp_can(Ctx *c) { rt_w32(G_MEM, ARG(1), 0xffffffffu); RET(S_OK, 2); }   /* OATRUE */
 
+/* ---- IVideoWindow: nothing is shown; properties read back as zero ---- */
+static void vw_put(Ctx *c) { RET(S_OK, 2); }
+static void vw_get(Ctx *c) { if (ARG(1)) rt_w32(G_MEM, ARG(1), 0); RET(S_OK, 2); }
+static void vw_ok2(Ctx *c) { RET(S_OK, 2); }
+static void vw_ok5(Ctx *c) { RET(S_OK, 5); }
+static void vw_get4(Ctx *c) { for (int k = 1; k <= 4; k++) if (ARG(k)) rt_w32(G_MEM, ARG(k), 0); RET(S_OK, 5); }
+static void vw_get2(Ctx *c) { for (int k = 1; k <= 2; k++) if (ARG(k)) rt_w32(G_MEM, ARG(k), 0); RET(S_OK, 3); }
+
 static uint32_t vtable(const char *iface, void (*const *fns)(Ctx *), int n)
 {
     uint32_t t = heap_alloc(w32_process_heap, 8, 4u * (uint32_t)n);
@@ -246,6 +269,16 @@ uint32_t w32_dshow_create(uint32_t clsid_first_dword)
         static void (*const mp[])(Ctx *) = { mp_qi, mp_add, mp_rel, mp_tic, mp_ti, mp_ids, mp_inv, mp_get_Duration, mp_put_CurrentPosition, mp_get_CurrentPosition,
             mp_get_d /* get_StopTime */, mp_put_d /* put_StopTime */, mp_get_d /* get_PrerollTime */, mp_put_d /* put_PrerollTime */, mp_put_d /* put_Rate */,
             mp_get_Rate, mp_can /* CanSeekForward */, mp_can /* CanSeekBackward */ };
+        static void (*const vw[])(Ctx *) = { vw_qi, vw_add, vw_rel, vw_tic, vw_ti, vw_ids, vw_inv,
+            vw_put, vw_get /* Caption */, vw_put, vw_get /* WindowStyle */, vw_put, vw_get /* WindowStyleEx */, vw_put, vw_get /* AutoShow */,
+            vw_put, vw_get /* WindowState */, vw_put, vw_get /* BackgroundPalette */, vw_put, vw_get /* Visible */, vw_put, vw_get /* Left */,
+            vw_put, vw_get /* Width */, vw_put, vw_get /* Top */, vw_put, vw_get /* Height */, vw_put, vw_get /* Owner */,
+            vw_put, vw_get /* MessageDrain */, vw_get, vw_put /* BorderColor */, vw_get, vw_put /* FullScreenMode */,
+            vw_ok2 /* SetWindowForeground */, vw_ok5 /* NotifyOwnerMessage */, vw_ok5 /* SetWindowPosition */, vw_get4 /* GetWindowPosition */,
+            vw_get2 /* GetMinIdealImageSize */, vw_get2 /* GetMaxIdealImageSize */, vw_get4 /* GetRestorePosition */, vw_ok2 /* HideCursor */,
+            vw_get /* IsCursorHidden */ };
+        _Static_assert(sizeof vw / sizeof *vw == 46, "IVideoWindow");
+        vt[I_VIDEO] = vtable("IVideoWindow", vw, 46);
         _Static_assert(sizeof gb / sizeof *gb == 18 && sizeof mc / sizeof *mc == 16 && sizeof me / sizeof *me == 16 && sizeof ms / sizeof *ms == 20 &&
                        sizeof ba / sizeof *ba == 11 && sizeof mp / sizeof *mp == 18, "vtable sizes");
         vt[I_GRAPH] = vtable("IGraphBuilder", gb, 18); vt[I_CONTROL] = vtable("IMediaControl", mc, 16); vt[I_EVENT] = vtable("IMediaEventEx", me, 16);
