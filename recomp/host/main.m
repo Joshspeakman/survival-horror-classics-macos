@@ -475,6 +475,51 @@ static void pad_start(void)
 }
 #endif
 
+#ifdef GTA_EDITION
+// ---------------------------------------------------------------- game controller (the GTA games: DirectInput's gamepad)
+/* The controller (the one used last) as DirectInput's gamepad (runtime/win32/dinput8.c), read 250 times a second on the
+ * main thread while the game is the active app. Buttons in the order the games' default joypad layout expects, so a
+ * modern controller plays like the PS2 (GTA III's generic table, InitDefaultControlConfigJoyPad: 1 fire, 2 sprint /
+ * accelerate, 3 jump / brake, 4 enter / exit, 5-8 L2 R2 L1 R1, 9 camera, 10 horn, 11 look behind, 13-16 the D-pad):
+ * B A X Y, then LT RT LB RB, View, L3, R3, D-pad up right down left. Menu is Esc (the pause menu, which the PC versions
+ * can't put on a pad button). */
+void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov);
+static void gta_pad_key(int vk, int down) { for (uint16_t k = 0; k < 128; k++) if (keymap[k].vk == vk) { key_event(k, down, 0); return; } }
+static void gta_pad_start(void)
+{
+    static dispatch_source_t t; if (t) return;
+    t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, DISPATCH_TIME_NOW, 4 * NSEC_PER_MSEC, NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(t, ^{
+        static int menu_was;
+        GCController *gc = GCController.current ?: GCController.controllers.firstObject; GCExtendedGamepad *g = gc.extendedGamepad;
+        float ax[6] = {0, 0, 0, 0, 0, 0}; uint32_t b = 0; int pov = -1, menu = 0;
+        if (g && NSApp.active) {
+            ax[0] = g.leftThumbstick.xAxis.value; ax[1] = -g.leftThumbstick.yAxis.value;
+            ax[2] = g.rightThumbstick.xAxis.value; ax[5] = -g.rightThumbstick.yAxis.value;
+            ax[3] = g.leftTrigger.value; ax[4] = g.rightTrigger.value;
+            GCControllerButtonInput *in[11] = {g.buttonB, g.buttonA, g.buttonX, g.buttonY, g.leftTrigger, g.rightTrigger, g.leftShoulder, g.rightShoulder,
+                                               g.buttonOptions, g.leftThumbstickButton, g.rightThumbstickButton};
+            for (int k = 0; k < 11; k++) if (in[k].pressed) b |= 1u << k;
+            if (g.dpad.up.pressed) b |= 1u << 12; if (g.dpad.right.pressed) b |= 1u << 13;
+            if (g.dpad.down.pressed) b |= 1u << 14; if (g.dpad.left.pressed) b |= 1u << 15;
+            menu = g.buttonMenu.pressed;
+        }
+        int connected = g != nil;
+        if (test_mode && getenv("GTA_FAKE_PAD")) {   /* development: GTA_FAKE_PAD="frame:buttons(hex):lx:ly;..." a pad from the start, its state by presented frame */
+            extern int dsr_frame; double now = dsr_frame;
+            connected = 1; memset(ax, 0, sizeof ax); b = 0;
+            char *e = strdup(getenv("GTA_FAKE_PAD")), *save, *tok = strtok_r(e, ";", &save);
+            while (tok) { double at; unsigned bb; float lx, ly; if (sscanf(tok, "%lf:%x:%f:%f", &at, &bb, &lx, &ly) == 4 && now >= at) { b = bb; ax[0] = lx; ax[1] = ly; } tok = strtok_r(0, ";", &save); }
+            free(e);
+        }
+        w32_di_pad(connected, ax, b, pov);
+        if (menu != menu_was) { gta_pad_key(0x1b, menu); menu_was = menu; }
+    });
+    dispatch_resume(t);
+}
+#endif
+
 // ---------------------------------------------------------------- window + capture
 static void capture(int on)
 {
@@ -500,6 +545,9 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
     dispatch_async(dispatch_get_main_queue(), ^{
 #ifdef DF_EDITION
         pad_start();
+#endif
+#ifdef GTA_EDITION
+        gta_pad_start();
 #endif
         NSRect f = NSScreen.mainScreen.frame;
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
