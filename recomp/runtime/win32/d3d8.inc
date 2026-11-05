@@ -92,6 +92,11 @@ M(d8_CreateImageSurface, 5) DEV_ME                     /* (w, h, format, surface
 END
 M(d8_CopyRects, 6)                                     /* (src, src rects, count, dst, dst points): CPU copies of one format */
     Surf9 *s = obj(ARG(1), O9_SURF), *t = obj(ARG(4), O9_SURF);
+    { static int n = -1; if (n < 0) n = getenv("D3D8_COPYLOG") ? 40 : 0;   /* development: what the game copies */
+      if (n > 0 && s && t) { n--; int32_t r[4] = {0, 0, (int32_t)s->w, (int32_t)s->h}; if (ARG(2)) memcpy(r, GP(ARG(2)), 16);
+        fprintf(stderr, "d3d8: CopyRects %u (%ux%u fmt %u usage %#x pool %u%s) -> %u (%ux%u fmt %u usage %#x pool %u, texture %d), %u rects, first %d,%d-%d,%d\n",
+                s->id, s->w, s->h, s->fmt, s->usage, s->pool, s == the_dev->back ? ", back buffer" : "", t->id, t->w, t->h, t->fmt, t->usage, t->pool, t->tex != 0,
+                ARG(2) ? ARG(3) : 1, r[0], r[1], r[2], r[3]); } }
     if (!s || !t || s->fmt != t->fmt) RET(D3DERR_INVALIDCALL, 6);
     if (s->gpu_newer) surf_readback(s);
     uint32_t n = ARG(2) ? ARG(3) : 1, bpp = (uint32_t)d9_fmt_bytes(s->fmt);
