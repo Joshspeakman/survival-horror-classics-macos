@@ -1338,14 +1338,6 @@ static void fill_caps(uint32_t out)                    /* D3DCAPS9: a Radeon 850
     v[66] = 0x1f; v[67] = 24; v[68] = 32; v[69] = 4; v[70] = 512;  /* PS20Caps: every 2.x feature */
     v[71] = 0x200 | 0x2000000; v[72] = 65535; v[73] = 65535; v[74] = 32768; v[75] = 32768;
 #endif
-#if defined(GTA_EDITION) && !defined(__linux__)
-    /* The Metal renderer runs no game shaders (DSR_GLSL_CREATE is the OpenGL renderer's), so none are offered: with
-     * vertex shaders in the caps, RenderWare's skin plugin draws every skinned model (San Andreas' CJ and peds, Vice
-     * City's peds) with its own vertex shaders, and nothing of them reached the screen. Without, it skins on the CPU
-     * (as on a GeForce4 MX) and draws through the fixed-function path. */
-    v[49] = 0xfffe0000u; v[50] = 0; v[51] = 0xffff0000u; v[52] = 0;
-    memset(&v[62], 0, 4 * 12);                              /* VS20Caps, PS20Caps, instruction slots */
-#endif
     memcpy(GP(out), v, 304);
 }
 M(d9_GetDeviceCaps, 4) fill_caps(ARG(3)); RET(D3D_OK, 4); END
