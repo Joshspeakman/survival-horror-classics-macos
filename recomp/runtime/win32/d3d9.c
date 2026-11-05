@@ -602,15 +602,16 @@ static void runs_frame(void)   /* at Present */
     if (run_open && nruns_now < 1024) runs_now[nruns_now++] = run_cur;
     memcpy(runs_prev, runs_now, sizeof(Run2d) * (size_t)nruns_now); nruns_prev = nruns_now; nruns_now = 0; run_open = 0;
 }
-static int same_line(const Run2d *r, float x0, float y0, float y1)
+static int same_line(const Run2d *r, float x0, float x1, float y0, float y1)
 {
     float h = r->y1 - r->y0, ov = fminf(y1, r->y1) - fmaxf(y0, r->y0);   /* about the same height, mostly level (a
-                                                                           letter's drop shadow sits a little lower) */
-    return fabsf((y1 - y0) - h) <= 0.25f * h + 1 && ov >= 0.5f * h && x0 >= r->x1 - 1.0f * h - 1 && x0 <= r->x1 + 2.5f * h + 1;
+                                                                           letter's drop shadow sits a little lower), */
+    return fabsf((y1 - y0) - h) <= 0.25f * h + 1 && ov >= 0.5f * h &&   /* and next to it, either side (Vice City */
+           x0 <= r->x1 + 2.5f * h + 1 && x1 >= r->x0 - 2.5f * h - 1;     /* draws its wanted stars right to left) */
 }
 static void run_add(float x0, float x1, float y0, float y1)
 {
-    if (run_open && same_line(&run_cur, x0, y0, y1)) { if (x1 > run_cur.x1) run_cur.x1 = x1; if (x0 < run_cur.x0) run_cur.x0 = x0; return; }
+    if (run_open && same_line(&run_cur, x0, x1, y0, y1)) { if (x1 > run_cur.x1) run_cur.x1 = x1; if (x0 < run_cur.x0) run_cur.x0 = x0; return; }
     if (run_open && nruns_now < 1024) runs_now[nruns_now++] = run_cur;
     run_cur = (Run2d){x0, x1, y0, y1}; run_open = 1;
 }
@@ -627,6 +628,7 @@ static float gta_wide2d(Dev9 *d, uint32_t prim, uint8_t *v, uint32_t st, uint32_
 {
     int mode = wide_hud_mode(); float W = (float)d->pp[0], H = (float)d->pp[1], side = 0;
     if (!mode || !nv || H <= 0 || W / H < 4.0f / 3 + 0.01f) return 0;
+    if (d->rt != d->back) return 0;   /* drawing into a texture (San Andreas' shadows and effects), not the screen */
     float s = H * (4.0f / 3) / W;
     #define VX(i) (*(float *)(v + (size_t)(i) * st))
     #define VY(i) (*(float *)(v + (size_t)(i) * st + 4))
@@ -655,7 +657,7 @@ static float gta_wide2d(Dev9 *d, uint32_t prim, uint8_t *v, uint32_t st, uint32_
         Run2d line = {x0, x1, y0, y1};
         while (b < nv) {
             uint32_t e = b + k < nv ? b + k : nv; float p0, p1, q0, q1; BOX(b, e, p0, p1, q0, q1);
-            if (p1 - p0 >= 0.95f * W || !same_line(&line, p0, q0, q1)) break;
+            if (p1 - p0 >= 0.95f * W || !same_line(&line, p0, p1, q0, q1)) break;
             run_add(p0, p1, q0, q1); if (p1 > line.x1) line.x1 = p1; if (p0 < line.x0) line.x0 = p0; b = e;
         }
         float r0 = line.x0, r1 = line.x1, c; run_extent(&r0, &r1, line.y0, line.y1);   /* the whole line, from the last frame */
