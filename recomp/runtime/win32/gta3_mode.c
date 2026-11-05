@@ -83,8 +83,65 @@ static void cd_sync_wait(Ctx *c)
     rt_w32(G_MEM, c->esp + 4, 0);
 }
 
+/* ---- Widescreen: Hor+ (the launchers' Widescreen option; GTA_WIDESCREEN=0 turns it off) ----
+ * The games were made for 4:3: the camera's view window is tan(fov/2) wide and that over 4/3 tall, so a wider screen
+ * either stretches the picture or (the games' own widescreen settings) crops its top and bottom. Here the 3D view keeps
+ * the 4:3 view's height and gets wider with the screen, as FusionFix does (ThirteenAG, MIT; its patterns find the same
+ * code in these builds):
+ *   CameraSize (RenderWare skeleton: camera, rect, view window, aspect): for a camera that draws the whole screen, the
+ *     view window is widened by aspect / (4/3) and the aspect is the screen's;
+ *   CCamera::CalculateDerivedValues: the frustum's half angle (what is culled at the sides) widened the same way;
+ *   the aspect the aiming code uses (Find3rdPersonCamTargetVector: III's constant, CDraw::ms_fAspectRatio in VC and SA)
+ *     is the screen's. */
+int w32_d3d_size(int *w, int *h);   /* d3d9.c: the back buffer */
+#include <math.h>
+#if defined(GTA3_EDITION)
+enum { CAMERA_SIZE = 0x00527b00u, FRUSTUM_HALF = 0x0046f4c9u };
+static const uint32_t aim_aspect[] = {0x005fe9c0u, 0x005fe9bcu};   /* Find3rdPersonCamTargetVector's 4/3 and 16/9 */
+#elif defined(GTAVC_EDITION)
+enum { CAMERA_SIZE = 0x00580690u, FRUSTUM_HALF = 0x0046c2dcu, VC_ASPECT_RET = 0x0054a1bau, VC_ASPECT = 0x0094cd40u };
+#else
+enum { CAMERA_SIZE = 0x007389a0u, FRUSTUM_HALF = 0x00518350u, SA_ASPECT = 0x00c24058u };
+static const uint32_t sa_aspect_ret[] = {0x0070b0aau, 0x0070b0bbu, 0x0070b0c8u};   /* CDraw::CalculateAspectRatio's three returns */
+#endif
+static int wide_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_WIDESCREEN"); on = !(e && *e == '0'); } return on; }
+static double screen_aspect(void)   /* the screen's width over height; 4/3 when off or before there is a device */
+{
+    int w, h; if (!wide_on() || !w32_d3d_size(&w, &h)) return 4.0 / 3; return (double)w / h;
+}
+static int wide(double a) { return fabs(a - 4.0 / 3) > 1e-3; }
+static float rdf(uint32_t a) { uint32_t v = rt_r32(G_MEM, a); float f; memcpy(&f, &v, 4); return f; }
+static void wrf(uint32_t a, float f) { uint32_t v; memcpy(&v, &f, 4); rt_w32(G_MEM, a, v); }
+
+static void camera_size(Ctx *c)   /* at CameraSize's entry: [esp+4] camera, +8 rect, +12 view window, +16 aspect */
+{
+    double a = screen_aspect(); int w, h;
+#ifdef GTA3_EDITION
+    for (unsigned k = 0; k < sizeof aim_aspect / sizeof *aim_aspect; k++) wrf(aim_aspect[k], (float)(wide(a) ? a : k ? 16.0 / 9 : 4.0 / 3));
+#endif
+    if (!wide(a) || !w32_d3d_size(&w, &h)) return;
+    uint32_t cam = rt_r32(G_MEM, c->esp + 4), rect = rt_r32(G_MEM, c->esp + 8), ras = cam ? rt_r32(G_MEM, cam + 0x60) : 0;
+    if (!ras || (int)rt_r32(G_MEM, ras + 0xc) != w || (int)rt_r32(G_MEM, ras + 0x10) != h) return;   /* not the screen's camera */
+    if (rect && ((int)rt_r32(G_MEM, rect + 8) != w || (int)rt_r32(G_MEM, rect + 12) != h)) return;
+    float vw = rdf(c->esp + 12); if (!(vw > 0)) return;
+    wrf(c->esp + 12, (float)(vw * a * 0.75)); wrf(c->esp + 16, (float)a);
+}
+static void frustum_half(Ctx *c)   /* st(0): the half angle across the view (radians), from the 4:3 field of view */
+{
+    double a = screen_aspect(); if (wide(a)) ST(0) = atan(tan(ST(0)) * a * 0.75);
+}
+
 int gta3_hook(Ctx *c, uint32_t addr)
 {
+    if (addr == CAMERA_SIZE) { camera_size(c); return 1; }
+    if (addr == FRUSTUM_HALF) { frustum_half(c); return 1; }
+#if defined(GTAVC_EDITION)
+    if (addr == VC_ASPECT_RET) { double a = screen_aspect(); if (wide(a)) wrf(VC_ASPECT, (float)a); return 1; }   /* fld [ms_fAspectRatio]; ret */
+#elif defined(GTASA_EDITION)
+    for (unsigned k = 0; k < 3; k++) if (addr == sa_aspect_ret[k]) {   /* st(0) and ms_fAspectRatio: the screen's */
+        double a = screen_aspect(); if (wide(a)) { ST(0) = (double)(float)a; wrf(SA_ASPECT, (float)a); } return 1;
+    }
+#endif
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
     if (addr == CD_SYNC_WAIT) { cd_sync_wait(c); return 1; }
     return 0;

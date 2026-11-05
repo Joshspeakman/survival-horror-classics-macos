@@ -574,14 +574,124 @@ static const uint8_t *gather(Dev9 *d, uint32_t first, uint32_t nv, uint32_t *fvf
     }
     *fvf_out = fvf; return out;
 }
+#ifdef GTA_EDITION
+static int gta_frame3d, gta_last3d = 1, gta_frames;   /* 3D draws this frame and the last (none: a menu or loading screen) */
+/* ---- Widescreen HUD (GTA): the games place their 2D (pretransformed) drawing for a 4:3 screen and stretch it across a
+ * wider one. Each piece is narrowed back to its 4:3 shape and kept where it belongs: a piece in the left third of the
+ * screen stays at the left edge, one in the right third at the right edge, others at the middle; what spans the whole
+ * screen (backgrounds, fades, the cinema bars) stays as it is. The pieces: each quad (4 vertices when indexed or a
+ * single fan or strip, 6 in a list), with the quads of one line of text (same height and top, one after another)
+ * taken together. World sprites drawn in 2D (coronas, the sun) sit at their own depth, not at the near screen depth
+ * the HUD uses, and are left alone. In the menus and loading screens (no 3D drawn) everything, their pictures too, is
+ * narrowed about the middle: a 4:3 screen between black, the menu and its pointer together. GTA_WIDE_HUD=center: always about the middle; off: stretched as the games do. */
+static int wide_hud_mode(void)
+{
+    static int m = -1;
+    if (m < 0) { const char *e = getenv("GTA_WIDE_HUD"), *w = getenv("GTA_WIDESCREEN");
+        m = (w && *w == '0') || (e && !strcmp(e, "off")) ? 0 : e && !strcmp(e, "center") ? 2 : 1; }
+    return m;
+}
+/* Text comes a letter (or a few) per draw, so a line's extent is known only when it is done: the lines of each frame
+ * are kept (pieces that follow on, at about the same height, along one line) and a piece takes the anchor of the
+ * last frame's line it lies in (the HUD is drawn the same way every frame; new text is placed by its own extent for
+ * its first frame). */
+typedef struct { float x0, x1, y0, y1; } Run2d;
+static Run2d runs_prev[1024], runs_now[1024], run_cur; static int nruns_prev, nruns_now, run_open;
+static void runs_frame(void)   /* at Present */
+{
+    if (run_open && nruns_now < 1024) runs_now[nruns_now++] = run_cur;
+    memcpy(runs_prev, runs_now, sizeof(Run2d) * (size_t)nruns_now); nruns_prev = nruns_now; nruns_now = 0; run_open = 0;
+}
+static int same_line(const Run2d *r, float x0, float y0, float y1)
+{
+    float h = r->y1 - r->y0, ov = fminf(y1, r->y1) - fmaxf(y0, r->y0);   /* about the same height, mostly level (a
+                                                                           letter's drop shadow sits a little lower) */
+    return fabsf((y1 - y0) - h) <= 0.25f * h + 1 && ov >= 0.5f * h && x0 >= r->x1 - 1.0f * h - 1 && x0 <= r->x1 + 2.5f * h + 1;
+}
+static void run_add(float x0, float x1, float y0, float y1)
+{
+    if (run_open && same_line(&run_cur, x0, y0, y1)) { if (x1 > run_cur.x1) run_cur.x1 = x1; if (x0 < run_cur.x0) run_cur.x0 = x0; return; }
+    if (run_open && nruns_now < 1024) runs_now[nruns_now++] = run_cur;
+    run_cur = (Run2d){x0, x1, y0, y1}; run_open = 1;
+}
+static void run_extent(float *x0, float *x1, float y0, float y1)   /* the last frame's line this piece lies in, if any */
+{
+    float h = y1 - y0;
+    for (int k = 0; k < nruns_prev; k++) {
+        const Run2d *r = &runs_prev[k];
+        if (fabsf(r->y0 - y0) <= 0.3f * h + 1 && fabsf(r->y1 - y1) <= 0.3f * h + 1 && *x0 >= r->x0 - 1 && *x1 <= r->x1 + 1) { *x0 = r->x0; *x1 = r->x1; return; }   /* (y: a shadowed line's box is a little taller) */
+    }
+}
+/* returns the width of the black at each side when a menu's whole-screen picture was narrowed, else 0 */
+static float gta_wide2d(Dev9 *d, uint32_t prim, uint8_t *v, uint32_t st, uint32_t nv, uint32_t ni)
+{
+    int mode = wide_hud_mode(); float W = (float)d->pp[0], H = (float)d->pp[1], side = 0;
+    if (!mode || !nv || H <= 0 || W / H < 4.0f / 3 + 0.01f) return 0;
+    float s = H * (4.0f / 3) / W;
+    #define VX(i) (*(float *)(v + (size_t)(i) * st))
+    #define VY(i) (*(float *)(v + (size_t)(i) * st + 4))
+    #define VZ(i) (*(float *)(v + (size_t)(i) * st + 8))
+    { static int lg = -1, from; if (lg < 0) { lg = getenv("GTA_WIDE_LOG") ? 4000 : 0; from = lg ? atoi(getenv("GTA_WIDE_LOG")) : 0; }   /* GTA_WIDE_LOG=<frame> */
+      static float ymin = -1e30f; if (getenv("GTA_WIDE_LOG_Y")) ymin = (float)atof(getenv("GTA_WIDE_LOG_Y"));
+      if (lg > 0 && gta_frames >= from && VY(0) >= ymin) { lg--; float x0 = VX(0), x1 = VX(0); for (uint32_t i = 1; i < nv; i++) { if (VX(i) < x0) x0 = VX(i); if (VX(i) > x1) x1 = VX(i); }
+        fprintf(stderr, "wide2d: f%d prim %u nv %u ni %u z %g rhw %g x %.0f..%.0f y %.0f 3d %d runs %d\n", gta_frames, prim, nv, ni, VZ(0), *(float *)(v + 12), x0, x1, VY(0), gta_last3d, nruns_prev);
+        if (getenv("GTA_WIDE_LOG_Y")) for (uint32_t i = 0; i < nv && i < 48; i++) fprintf(stderr, "   v%u %.1f %.1f\n", i, VX(i), VY(i)); } }
+    uint32_t k = ni || ((prim == 5 || prim == 6) && nv == 4) ? 4 : prim == 4 && nv % 6 == 0 ? 6 : nv;   /* vertices per piece */
+    float near = VZ(0);
+    for (uint32_t i = 0; i < nv; i++) if (VZ(i) != near) return 0;   /* depths of their own: world sprites */
+    if (near > 0.01f) return 0;
+    int menu = mode == 2 || !gta_last3d;
+    #define BOX(a_, b_, x0_, x1_, y0_, y1_) do { x0_ = 1e30f; x1_ = -1e30f; y0_ = 1e30f; y1_ = -1e30f; for (uint32_t i_ = (a_); i_ < (b_); i_++) { \
+        if (VX(i_) < x0_) x0_ = VX(i_); if (VX(i_) > x1_) x1_ = VX(i_); if (VY(i_) < y0_) y0_ = VY(i_); if (VY(i_) > y1_) y1_ = VY(i_); } } while (0)
+    for (uint32_t a = 0, b; a < nv; a = b) {   /* a line in this draw: pieces [a, b) */
+        float x0, x1, y0, y1; b = a + k < nv ? a + k : nv; BOX(a, b, x0, x1, y0, y1);
+        if (!menu && x1 - x0 >= 0.95f * W) continue;   /* the whole screen wide (fades, the cinema bars): as it is */
+        if (menu) {
+            if (x1 - x0 >= 0.95f * W) side = floorf(W * (1 - s) / 2);   /* a menu's picture: black beside it */
+            for (uint32_t i = a; i < b; i++) VX(i) = W / 2 + (VX(i) - W / 2) * s;
+            continue;
+        }
+        run_add(x0, x1, y0, y1);
+        Run2d line = {x0, x1, y0, y1};
+        while (b < nv) {
+            uint32_t e = b + k < nv ? b + k : nv; float p0, p1, q0, q1; BOX(b, e, p0, p1, q0, q1);
+            if (p1 - p0 >= 0.95f * W || !same_line(&line, p0, q0, q1)) break;
+            run_add(p0, p1, q0, q1); if (p1 > line.x1) line.x1 = p1; if (p0 < line.x0) line.x0 = p0; b = e;
+        }
+        float r0 = line.x0, r1 = line.x1, c; run_extent(&r0, &r1, line.y0, line.y1);   /* the whole line, from the last frame */
+        if (r0 > line.x0) r0 = line.x0; if (r1 < line.x1) r1 = line.x1;
+        c = 0.5f * (r0 + r1); float at = c < W / 3 ? 0 : c > 2 * W / 3 ? W : W / 2;
+        for (uint32_t i = a; i < b; i++) VX(i) = at + (VX(i) - at) * s;
+    }
+    #undef BOX
+    return side;
+    #undef VX
+    #undef VY
+    #undef VZ
+}
+#endif
 static void emit(Dev9 *d, uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_t nv, const uint16_t *idx, uint32_t ni)
 {
     uint32_t st = fvf_stride(fvf);
     if ((uint64_t)st * nv + (uint64_t)ni * 2 > (16u << 20)) { static int w; if (!w++) fprintf(stderr, "d3d9: a draw too large for the command ring (skipped)\n"); return; }
-    uint32_t vb = st * nv, ib = (ni * 2 + 3) & ~3u, *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
+    uint32_t vb = st * nv, ib = (ni * 2 + 3) & ~3u;
+#ifdef GTA_EDITION
+    uint8_t *wv = 0;
+    if ((fvf & 0xe) == 4 && wide_hud_mode()) {   /* 2D: narrowed to 4:3 (a copy); a menu's picture gets black at its sides */
+        wv = malloc(vb); memcpy(wv, v, vb); float side = gta_wide2d(d, prim, wv, st, nv, ni); v = wv;
+        if (side > 0) {
+            int32_t r[8] = {0, 0, (int32_t)side, (int32_t)d->pp[1], (int32_t)d->pp[0] - (int32_t)side, 0, (int32_t)d->pp[0], (int32_t)d->pp[1]};
+            uint32_t *q = cmd_begin(DSR_CLEAR, 20 + 32); q[0] = 1; q[1] = 0xff000000u; q[2] = 0; q[3] = 0; q[4] = 2; memcpy(q + 5, r, 32); cmd_end();
+        }
+    } else if ((fvf & 0xe) != 4) gta_frame3d++;
+#endif
+    uint32_t *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
     p[0] = prim; p[1] = fvf; p[2] = nv; p[3] = ni;
     memcpy(p + 4, v, vb); if (ni) memcpy((uint8_t *)(p + 4) + vb, idx, ni * 2);
     cmd_end();
+#ifdef GTA_EDITION
+    free(wv);
+#endif
     if (d->rt) d->rt->gpu_newer = 1;
 }
 static int can_draw(Dev9 *d)
@@ -845,6 +955,9 @@ static void cursor_overlay(Dev9 *d);
 static void dev_present(Ctx *c, Dev9 *d)
 {
     cursor_overlay(d); dsr_present(c, d->back->id);
+#ifdef GTA_EDITION
+    gta_last3d = gta_frame3d; gta_frame3d = 0; runs_frame(); gta_frames++;
+#endif
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
     if (fps) {
         static double t0; static int n; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1364,6 +1477,13 @@ M(d9_CreateDevice, 7) ME(D3D9, O9_D3D)                 /* (adapter, type, focus 
     fprintf(stderr, "d3d9: device %ux%u (format %u, depth %u, %s)\n", d->pp[0], d->pp[1], d->pp[2], d->pp[9] ? d->pp[10] : 0, d->pp[8] ? "windowed" : "full screen");
     rt_w32(G_MEM, ARG(6), d->g); RET(D3D_OK, 7);
 END
+
+/* the device's back buffer (the game's screen), for the GTA widescreen hooks (gta3_mode.c); 0 before there is one */
+int w32_d3d_size(int *w, int *h)
+{
+    if (!the_dev || !the_dev->pp[0] || !the_dev->pp[1]) return 0;
+    *w = (int)the_dev->pp[0]; *h = (int)the_dev->pp[1]; return 1;
+}
 
 /* ---- vtables (Direct3D 9's method order) ---- */
 typedef void (*Fn9)(Ctx *);
