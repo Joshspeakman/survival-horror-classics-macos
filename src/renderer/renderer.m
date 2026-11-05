@@ -19,6 +19,11 @@ typedef struct {   // must match shaders.metal Uniforms
     int32_t xrgb[4];     // texture stage 0/1 is XRGB (alpha reads as 1)
     float tex1[16];      // texture-1 transform
     int32_t s1[4];       // stage 1: texcoordindex, texturetransformflags
+    float nrm[16];       // normal matrix: inverse transpose of world*view
+    float amb[4], md[4], ma[4], ms[4], me[4];   // D3DRS_AMBIENT; material diffuse, ambient, specular, emissive
+    int32_t lit[4];      // lighting on, lights, material sources, normalize normals
+    int32_t tg[4];       // local viewer, specular on
+    float lt[8 * 7][4];  // lights in camera space (see shaders.metal)
 } Uniforms;
 
 struct DSRRenderer {
@@ -45,6 +50,8 @@ struct DSRRenderer {
     id<MTLBuffer> rb_buf; volatile uint32_t *rb_done;
     double present_ts;
     id<MTLRenderPipelineState> graph_pso; const float *g_a, *g_b; int g_ha, g_hb, g_on;
+    /* fixed-function lighting (DSR_MATERIAL, DSR_LIGHT): only for producers that send them (the Direct3D 8/9 layer) */
+    int ff_light; float material[17]; struct { int on; uint32_t type; float v[25]; } light[32];
 };
 
 static void mat_ident(float *m) { memset(m, 0, 64); m[0] = m[5] = m[10] = m[15] = 1; }
@@ -339,15 +346,25 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor]; uint32_t off = 0;
     int rhw = (fvf & 0xe) == 4;
     v.attributes[0].format = rhw ? MTLVertexFormatFloat4 : MTLVertexFormatFloat3; v.attributes[0].offset = 0; v.attributes[0].bufferIndex = 0; off = rhw ? 16 : 12;
-    if (fvf & 0x10) off += 12;                                                            // normal (unused: lighting off)
+    /* what the vertex lacks comes from constant buffers: 2 white (colours), 3 attr_defaults (zeros: normal, coordinates) */
+    v.attributes[3].format = MTLVertexFormatFloat3;
+    if (fvf & 0x10) { v.attributes[3].offset = off; v.attributes[3].bufferIndex = 0; off += 12; }      // normal (lighting, texgen)
+    else { v.attributes[3].offset = 0; v.attributes[3].bufferIndex = 3; }
     if (fvf & 0x40) { v.attributes[1].format = MTLVertexFormatUChar4Normalized_BGRA; v.attributes[1].offset = off; v.attributes[1].bufferIndex = 0; off += 4; }
     else { v.attributes[1].format = MTLVertexFormatUChar4Normalized_BGRA; v.attributes[1].offset = 0; v.attributes[1].bufferIndex = 2; }
-    if (fvf & 0x80) off += 4;                                                             // specular (unused)
-    if ((fvf >> 8) & 0xf) { v.attributes[2].format = MTLVertexFormatFloat2; v.attributes[2].offset = off; v.attributes[2].bufferIndex = 0; }
+    v.attributes[4].format = MTLVertexFormatUChar4Normalized_BGRA;                          // specular (colour 2: a material source)
+    if (fvf & 0x80) { v.attributes[4].offset = off; v.attributes[4].bufferIndex = 0; off += 4; }
+    else { v.attributes[4].offset = 0; v.attributes[4].bufferIndex = 2; }
+    uint32_t ntc = (fvf >> 8) & 0xf, tsz[8]; for (uint32_t k = 0; k < 8; k++) { uint32_t f = (fvf >> (16 + 2 * k)) & 3; tsz[k] = f == 0 ? 8 : f == 1 ? 12 : f == 2 ? 16 : 4; }
+    if (ntc) { v.attributes[2].format = MTLVertexFormatFloat2; v.attributes[2].offset = off; v.attributes[2].bufferIndex = 0; }
     else { v.attributes[2].format = MTLVertexFormatFloat2; v.attributes[2].offset = 0; v.attributes[2].bufferIndex = 2; }
-    uint32_t stride = off; for (uint32_t n = (fvf >> 8) & 0xf, k = 0; k < n; k++) { uint32_t f = (fvf >> (16 + 2 * k)) & 3; stride += f == 0 ? 8 : f == 1 ? 12 : f == 2 ? 16 : 4; }
+    v.attributes[5].format = MTLVertexFormatFloat2;                                           // coordinate set 1
+    if (ntc >= 2) { v.attributes[5].offset = off + tsz[0]; v.attributes[5].bufferIndex = 0; }
+    else { v.attributes[5].offset = 0; v.attributes[5].bufferIndex = 3; }
+    uint32_t stride = off; for (uint32_t k = 0; k < ntc; k++) stride += tsz[k];
     v.layouts[0].stride = stride;
-    if (!(fvf & 0x40) || !((fvf >> 8) & 0xf)) { v.layouts[2].stride = 16; v.layouts[2].stepFunction = MTLVertexStepFunctionConstant; v.layouts[2].stepRate = 0; }
+    v.layouts[2].stride = 16; v.layouts[2].stepFunction = MTLVertexStepFunctionConstant; v.layouts[2].stepRate = 0;
+    v.layouts[3].stride = 16; v.layouts[3].stepFunction = MTLVertexStepFunctionConstant; v.layouts[3].stepRate = 0;
     d.vertexDescriptor = v;
     double t0 = CACurrentMediaTime();
     p = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
@@ -398,6 +415,48 @@ static id<MTLSamplerState> sampler_for(DSRRenderer *r, int st)
     d.mipFilter = mip == 3 ? MTLSamplerMipFilterLinear : mip == 2 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterNotMipmapped;
     s = [r->dev newSamplerStateWithDescriptor:d]; if (r->smp_n < 768) { r->smp_k[h] = key; r->smp_v[h] = s; r->smp_n++; } return s;
 }
+/* the normal matrix: the inverse transpose of world*view's 3x3 (row-vector order, as the other matrices) */
+static void normal_matrix(float *o, const float *m)
+{
+    float a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], i = m[10];
+    float A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C;
+    memset(o, 0, 64); o[15] = 1;
+    if (fabsf(det) < 1e-20f) { o[0] = a; o[1] = b; o[2] = c; o[4] = d; o[5] = e; o[6] = f; o[8] = g; o[9] = h; o[10] = i; return; }
+    float k = 1.0f / det;   /* inverse transpose = cofactors / det */
+    o[0] = A * k; o[1] = B * k; o[2] = C * k;
+    o[4] = -(b * i - c * h) * k; o[5] = (a * i - c * g) * k; o[6] = -(a * h - b * g) * k;
+    o[8] = (b * f - c * e) * k; o[9] = -(a * f - c * d) * k; o[10] = (a * e - b * d) * k;
+}
+/* Direct3D's lighting inputs for this draw: the material (or the vertex colours that replace it), D3DRS_AMBIENT, and the
+ * lights that are on, moved into camera space by the view matrix */
+static void ff_lighting(DSRRenderer *r, Uniforms *u, uint32_t fvf)
+{
+    memcpy(u->md, r->material, 16); memcpy(u->ma, r->material + 4, 16); memcpy(u->ms, r->material + 8, 16); memcpy(u->me, r->material + 12, 16);
+    u->ms[3] = r->material[16];                            /* the shader reads the power from the specular colour's alpha */
+    uint32_t am = r->rs[139]; u->amb[0] = ((am >> 16) & 255) / 255.0f; u->amb[1] = ((am >> 8) & 255) / 255.0f; u->amb[2] = (am & 255) / 255.0f; u->amb[3] = (am >> 24) / 255.0f;
+    int src = 0;
+    if (r->rs[141]) {                                       /* D3DRS_COLORVERTEX: a colour the vertex has replaces the material's */
+        uint32_t s[4] = {r->rs[145], r->rs[147], r->rs[148], r->rs[146]};    /* diffuse, ambient, emissive, specular */
+        for (int k = 0; k < 4; k++) { uint32_t v = s[k]; if ((v == 1 && !(fvf & 0x40)) || (v == 2 && !(fvf & 0x80)) || v > 2) v = 0; src |= (int)v << (4 * k); }
+    }
+    u->lit[0] = 1; u->lit[2] = src; u->lit[3] = r->rs[143] != 0;
+    const float *vw = r->xf[2]; int n = 0;
+    for (int k = 0; k < 32 && n < 8; k++) {
+        if (!r->light[k].on) continue;
+        const float *L = r->light[k].v;   /* diffuse 0-3, specular 4-7, ambient 8-11, position 12-14, direction 15-17, range 18, falloff 19, att 20-22, theta 23, phi 24 */
+        float (*o)[4] = &u->lt[n * 7];
+        memcpy(o[0], L, 16); memcpy(o[1], L + 8, 16); memcpy(o[6], L + 4, 16);
+        for (int c = 0; c < 3; c++) {
+            o[2][c] = L[12] * vw[c] + L[13] * vw[4 + c] + L[14] * vw[8 + c] + vw[12 + c];
+            o[3][c] = L[15] * vw[c] + L[16] * vw[4 + c] + L[17] * vw[8 + c];
+        }
+        o[2][3] = (float)r->light[k].type; o[3][3] = 0;
+        o[4][0] = L[20]; o[4][1] = L[21]; o[4][2] = L[22]; o[4][3] = r->light[k].type == 3 ? 1e30f : L[18];
+        o[5][0] = cosf(L[23] * 0.5f); o[5][1] = cosf(L[24] * 0.5f); o[5][2] = L[19]; o[5][3] = 0;
+        n++;
+    }
+    u->lit[1] = n;
+}
 static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
 {
     uint32_t prim = p[0], fvf = p[1], nv = p[2], ni = p[3], stride = 0, voff, ioff = 0;
@@ -435,7 +494,10 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     float wv[16]; mat_mul(wv, r->xf[1], r->xf[2]); mat_mul(u.wvp, wv, r->xf[3]); memcpy(u.wv, wv, 64); memcpy(u.tex0, r->xf[16], 64); memcpy(u.tex1, r->xf[17], 64);
     u.s1[0] = r->tss[1][11]; u.s1[1] = r->tss[1][24];
     u.vp[0] = r->vp[0]; u.vp[1] = r->vp[1]; u.vp[2] = r->vp[2] ? r->vp[2] : rt->w; u.vp[3] = r->vp[3] ? r->vp[3] : rt->h;
-    { float fs, fe; memcpy(&fs, &r->rs[36], 4); memcpy(&fe, &r->rs[37], 4); u.fog[0] = fs; u.fog[1] = fe; u.fog[2] = r->rs[28] && r->rs[140] == 3 && fe != fs ? 1 : 0; }
+    {   /* fog: the table mode when set (Direct3D computes it per pixel; here by camera-space depth, per vertex), else the vertex mode */
+        float fs, fe, dens; memcpy(&fs, &r->rs[36], 4); memcpy(&fe, &r->rs[37], 4); memcpy(&dens, &r->rs[38], 4);
+        uint32_t fm = r->rs[35] ? r->rs[35] : r->rs[140]; if (fm > 3 || (fm == 3 && fe == fs)) fm = 0;
+        u.fog[0] = fs; u.fog[1] = fe; u.fog[2] = r->rs[28] ? (float)fm : 0; u.fog[3] = dens; }
     uint32_t fc = r->rs[34]; u.fogcolor[0] = ((fc >> 16) & 255) / 255.0f; u.fogcolor[1] = ((fc >> 8) & 255) / 255.0f; u.fogcolor[2] = (fc & 255) / 255.0f; u.fogcolor[3] = 1;
     uint32_t tf = r->rs[60]; u.tfactor[0] = ((tf >> 16) & 255) / 255.0f; u.tfactor[1] = ((tf >> 8) & 255) / 255.0f; u.tfactor[2] = (tf & 255) / 255.0f; u.tfactor[3] = (tf >> 24) / 255.0f;
     u.c0[0] = r->tss[0][1]; u.c0[1] = r->tss[0][2]; u.c0[2] = r->tss[0][3]; u.c0[3] = r->tss[0][4]; u.a0[0] = r->tss[0][5]; u.a0[1] = r->tss[0][6]; u.a0[2] = r->tss[0][11]; u.a0[3] = r->tss[0][24];
@@ -443,6 +505,10 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     u.at[0] = (r->rs[24] & 255) / 255.0f; u.at[1] = r->rs[25]; u.at[2] = r->rs[15] ? 1 : 0;
     Surf *t0 = surf(r, r->tex[0]), *t1 = surf(r, r->tex[1]);
     u.misc[0] = (fvf & 0xe) == 4; u.misc[1] = (fvf & 0x40) != 0; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
+    normal_matrix(u.nrm, wv); u.tg[0] = r->rs[142] != 0; u.tg[1] = r->rs[29] != 0;
+    if (r->ff_light && r->rs[137] && !u.misc[0]) ff_lighting(r, &u, fvf);
+    { static int w; uint32_t g0 = r->tss[0][11] >> 16, g1 = r->tss[1][11] >> 16;   /* texgen modes not done: sphere maps */
+      if ((g0 > 3 || (r->tss[1][1] != 1 && g1 > 3)) && !w++) fprintf(stderr, "dsr: texture coordinates generated by mode %u are not supported\n", g0 > 3 ? g0 : g1); }
     u.xrgb[0] = t0 && t0->fmt == 2; u.xrgb[1] = t1 && t1->fmt == 2;
     uint32_t uoff; memcpy(ring_alloc(r, sizeof u, &uoff), &u, sizeof u);   // one copy, read by both stages
     e = enc_for(r, r->rt, r->ds);                                         // (ring_alloc may have flushed)
@@ -456,7 +522,7 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     MTLViewport vp = {r->vp[0], r->vp[1], u.vp[2], u.vp[3], r->vp[4], r->vp[5] ? r->vp[5] : 1};
     if (memcmp(&vp, &r->es.vp, sizeof vp)) { [e setViewport:vp]; r->es.vp = vp; }
     if (!r->es.ring_bound) {
-        [e setVertexBuffer:r->ring offset:voff atIndex:0]; [e setVertexBuffer:r->white offset:0 atIndex:2];
+        [e setVertexBuffer:r->ring offset:voff atIndex:0]; [e setVertexBuffer:r->white offset:0 atIndex:2]; [e setVertexBuffer:r->attr_defaults offset:0 atIndex:3];
         [e setVertexBuffer:r->ring offset:uoff atIndex:1]; [e setFragmentBuffer:r->ring offset:uoff atIndex:1]; r->es.ring_bound = 1;
     } else { [e setVertexBufferOffset:voff atIndex:0]; [e setVertexBufferOffset:uoff atIndex:1]; [e setFragmentBufferOffset:uoff atIndex:1]; }
     id<MTLTexture> x0 = t0 ? tex2d(t0) : r->dummy, x1 = t1 ? tex2d(t1) : r->dummy; id<MTLSamplerState> s0 = sampler_for(r, 0), s1 = sampler_for(r, 1);
@@ -754,6 +820,8 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_PROG_CONST: if (size >= 4 && p[0] <= 4096 && 4 + 16 * (uint64_t)p[0] <= size) { memcpy(r->pconst, p + 1, 16 * (size_t)p[0]); r->npconst = p[0]; } break;
     case DSR_DRAW_PROG: draw_prog(r, p, size); break;
     case DSR_GAMMA: if (size >= 1536) { memcpy(r->gamma, p, 1536); r->gamma_dirty = 1; } break;
+    case DSR_MATERIAL: if (size >= 68) { memcpy(r->material, p, 68); r->ff_light = 1; } break;
+    case DSR_LIGHT: if (size >= 112 && p[0] < 32) { r->light[p[0]].on = p[1] != 0; r->light[p[0]].type = p[2]; memcpy(r->light[p[0]].v, p + 3, 100); r->ff_light = 1; } break;
     default: break;
     }
     return 0;

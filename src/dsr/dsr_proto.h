@@ -47,6 +47,9 @@ enum {
     DSR_DEPTH_READBACK,    /* u32 depth surface id, u32 x, y, w, h, u32 cookie: as DSR_READBACK, the depth values as floats (0 near
                               .. 1 far, rows top down, tightly packed): a CPU pass that tests against depth the GPU wrote (Delta
                               Force 1's water under its hardware polygons) */
+    DSR_MATERIAL,          /* D3DMATERIAL (diffuse, ambient, specular, emissive as float4 RGBA, float power): fixed-function lighting */
+    DSR_LIGHT,             /* u32 index (0-7), u32 enabled, D3DLIGHT (type, diffuse, specular, ambient, position, direction, range,
+                              falloff, attenuation 0-2, theta, phi; world space) */
 };
 #define DSR_VBUFS 65536
 #endif

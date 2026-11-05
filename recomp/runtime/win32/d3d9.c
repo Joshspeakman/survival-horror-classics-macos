@@ -970,12 +970,20 @@ M(dv_MultiplyTransform, 3) DEV_ME                      /* current = matrix x cur
 END
 M(dv_SetViewport, 2) DEV_ME uint32_t v[6]; memcpy(v, GP(ARG(1)), 24); set_vp(me, v); RET(D3D_OK, 2); END
 M(dv_GetViewport, 2) DEV_ME memcpy(GP(ARG(1)), me->vp, 24); RET(D3D_OK, 2); END
-M(dv_SetMaterial, 2) DEV_ME memcpy(me->material, GP(ARG(1)), 68); RET(D3D_OK, 2); END
+/* fixed-function lighting: the material and each light go to the renderer (DSR_MATERIAL, DSR_LIGHT), which lights
+ * vertices as Direct3D does when D3DRS_LIGHTING is on (RenderWare lights cars and peds this way) */
+static void send_material(Dev9 *d) { uint32_t *p = cmd_begin(DSR_MATERIAL, 68); memcpy(p, d->material, 68); cmd_end(); }
+static void send_light(Dev9 *d, uint32_t i)
+{
+    { static int w; if (i >= 8 && !w++) fprintf(stderr, "d3d9: light index %u (kept; at most 8 lit at once)\n", i); }
+    uint32_t *p = cmd_begin(DSR_LIGHT, 112); p[0] = i; p[1] = d->light_on[i] ? 1 : 0; memcpy(p + 2, d->light[i], 104); cmd_end();
+}
+M(dv_SetMaterial, 2) DEV_ME memcpy(me->material, GP(ARG(1)), 68); send_material(me); RET(D3D_OK, 2); END
 M(dv_GetMaterial, 2) DEV_ME memcpy(GP(ARG(1)), me->material, 68); RET(D3D_OK, 2); END
-M(dv_SetLight, 3) DEV_ME if (ARG(1) < 8) memcpy(me->light[ARG(1)], GP(ARG(2)), 104); RET(D3D_OK, 3); END
-M(dv_GetLight, 3) DEV_ME if (ARG(1) >= 8) RET(D3DERR_INVALIDCALL, 3); memcpy(GP(ARG(2)), me->light[ARG(1)], 104); RET(D3D_OK, 3); END
-M(dv_LightEnable, 3) DEV_ME if (ARG(1) < 8) me->light_on[ARG(1)] = ARG(2) != 0; RET(D3D_OK, 3); END
-M(dv_GetLightEnable, 3) DEV_ME rt_w32(G_MEM, ARG(2), ARG(1) < 8 && me->light_on[ARG(1)] ? 128 : 0); RET(D3D_OK, 3); END
+M(dv_SetLight, 3) DEV_ME if (ARG(1) < 32) { memcpy(me->light[ARG(1)], GP(ARG(2)), 104); send_light(me, ARG(1)); } RET(D3D_OK, 3); END
+M(dv_GetLight, 3) DEV_ME if (ARG(1) >= 32) RET(D3DERR_INVALIDCALL, 3); memcpy(GP(ARG(2)), me->light[ARG(1)], 104); RET(D3D_OK, 3); END
+M(dv_LightEnable, 3) DEV_ME if (ARG(1) < 32) { me->light_on[ARG(1)] = ARG(2) != 0; send_light(me, ARG(1)); } RET(D3D_OK, 3); END
+M(dv_GetLightEnable, 3) DEV_ME rt_w32(G_MEM, ARG(2), ARG(1) < 32 && me->light_on[ARG(1)] ? 128 : 0); RET(D3D_OK, 3); END
 M(dv_SetClipPlane, 3) DEV_ME if (ARG(1) < 6) memcpy(me->clip[ARG(1)], GP(ARG(2)), 16); RET(D3D_OK, 3); END
 M(dv_GetClipPlane, 3) DEV_ME if (ARG(1) >= 6) RET(D3DERR_INVALIDCALL, 3); memcpy(GP(ARG(2)), me->clip[ARG(1)], 16); RET(D3D_OK, 3); END
 M(dv_SetRenderState, 3) DEV_ME set_rs(me, ARG(1), ARG(2)); RET(D3D_OK, 3); END
