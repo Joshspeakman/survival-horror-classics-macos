@@ -58,7 +58,7 @@ game_info() {
   G_STEAM_DIR="$STEAM/$G_STEAM/Contents/Resources/transgaming/c_drive/Program Files/Rockstar Games/$G_FOLDER"
   G_IMPORTED="$G_DATA/game-files/$G_FOLDER"
   G_DEPOT=""   # Vice City: the Windows depot Steam's console downloads (the Mac copy's exe is SecuROM'd: never used)
-  [ "$1" = vc ] && G_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_12110/depot_12111"
+  if [ "$1" = vc ]; then G_DEPOT="$HOME/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_12110/depot_12111"; fi
 }
 given_dir() { case "$1" in gta3) echo "$DIR_gta3";; vc) echo "$DIR_vc";; sa) echo "$DIR_sa";; esac; }
 find_game() {   # find_game <id>: the game folder (an explicit one, else the imported copy, else Steam's), or nothing
