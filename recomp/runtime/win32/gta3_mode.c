@@ -307,8 +307,26 @@ int gta3_override(Ctx *c, uint32_t addr)
 int gta3_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
 #endif
 
+/* ---- PS2 colour filter (San Andreas; the launchers' Lighting: PS2, GTA_LIGHTING=ps2) ----
+ * CPostEffects::ColourFilter (3.0: 0x7189b0) draws the frame's copy over it twice, with the time cycle's two filter
+ * colours, both added (source alpha, one): the PC's look, the frame only ever brightened and washed out. The PS2
+ * replaced the frame with it times twice the first colour, then added it times twice the second (its alpha in the PS2's
+ * range, half the PC time cycle's). Here the D3D9 layer draws the first pass without blending and both with the
+ * texture times the colour doubled (d3d9.c gta_filter_pass), as aap's SkyGfx describes the PS2's filter. */
+#ifdef GTASA_EDITION
+enum { FILTER_PASS1 = 0x00718a6cu, FILTER_PASS2 = 0x00718abdu, FILTER_DONE = 0x00718ac0u };
+int gta_filter_pass;
+static int ps2_light(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_LIGHTING"); on = e && !strcmp(e, "ps2"); } return on; }
+#endif
+
 int gta3_hook(Ctx *c, uint32_t addr)
 {
+#ifdef GTASA_EDITION
+    if (addr == FILTER_PASS1 || addr == FILTER_PASS2 || addr == FILTER_DONE) {
+        gta_filter_pass = !ps2_light() ? 0 : addr == FILTER_PASS1 ? 1 : addr == FILTER_PASS2 ? 2 : 0;
+        return 1;
+    }
+#endif
 #ifdef HIGH_FPS
     if (hf_hook(c, addr)) return 1;
 #endif

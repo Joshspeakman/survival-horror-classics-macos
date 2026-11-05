@@ -24,7 +24,7 @@ struct Uniforms {
     float4 amb;          // D3DRS_AMBIENT
     float4 md, ma, ms, me;   // the material: diffuse, ambient, specular, emissive (after D3DRS_*MATERIALSOURCE)
     int4 lit;            // lighting on, lights, material sources (diffuse | ambient << 4 | emissive << 8: 0 material, 1 colour 1, 2 colour 2), normalize normals
-    int4 tg;             // local viewer, specular on (D3DRS_SPECULARENABLE), unused x2
+    int4 tg;             // local viewer, specular on (D3DRS_SPECULARENABLE), PS2 lighting (the GTA games), unused
     float4 lt[8 * 7];    // each light (camera space): diffuse, ambient, position (w type), direction, attenuation 0-2 + range, spot (cos theta/2, cos phi/2, falloff), specular
 };
 
@@ -101,6 +101,12 @@ static float4 light_vertex(constant Uniforms &u, float3 p, float3 n, float4 c1, 
         if (u.tg.y && nl > 0 && u.ms.a > 0) sp += a * pow(max(dot(n, normalize(l + view)), 0.0), u.ms.a) * u.lt[i * 7 + 6].rgb;
     }
     spec = saturate(cs.rgb * sp);
+    if (u.tg.z) {   /* the PS2's RenderWare (aap's SkyGfx describes it): the light is clamped before it takes the
+                     * material's colour, so a lit car or ped never goes past its own colour; the ambient keeps its
+                     * share of the material (surface ambient over diffuse) */
+        float3 ka = select(float3(1), ca.rgb / max(cd.rgb, float3(1e-4)), cd.rgb > 1e-4);
+        return float4(saturate(ce.rgb + saturate(amb * ka + dif) * cd.rgb), cd.a);
+    }
     return float4(saturate(ce.rgb + ca.rgb * amb + cd.rgb * dif), cd.a);
 }
 vertex VOut vs_main(VIn in [[stage_in]], constant Uniforms &u [[buffer(1)]])

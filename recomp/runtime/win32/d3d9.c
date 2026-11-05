@@ -1148,13 +1148,48 @@ M(dv_DrawPrimitive, 4) DEV_ME                          /* (type, start vertex, p
     uint32_t nv = prim_verts(ARG(1), ARG(3)), fvf; const uint8_t *v = gather(me, ARG(2), nv, &fvf, 0, 0);
     if (v) emit(me, ARG(1), fvf, v, nv, 0, 0); RET(D3D_OK, 4);
 END
+#ifdef GTASA_EDITION
+/* San Andreas' colour filter the PS2's way (gta3_mode.c): pass 1 replaces (no blending), both double the colour */
+extern int gta_filter_pass;
+static uint32_t ps2f_saved[2];
+static void ps2f_begin(Dev9 *d)
+{
+    if (!gta_filter_pass) return;
+    ps2f_saved[0] = d->tss[0][1]; ps2f_saved[1] = d->rs[27];
+    if (d->tss[0][1] == 4) set_tss(d, 0, 1, 5);                /* COLOROP MODULATE -> MODULATE2X */
+    if (gta_filter_pass == 1) set_rs(d, 27, 0);               /* ALPHABLENDENABLE off */
+}
+static void ps2f_end(Dev9 *d)
+{
+    if (!gta_filter_pass) return;
+    if (d->tss[0][1] != ps2f_saved[0]) set_tss(d, 0, 1, ps2f_saved[0]);
+    if (d->rs[27] != ps2f_saved[1]) set_rs(d, 27, ps2f_saved[1]);
+}
+#else
+static void ps2f_begin(Dev9 *d) { (void)d; }
+static void ps2f_end(Dev9 *d) { (void)d; }
+#endif
+static void callers_log(Ctx *c, int quad)   /* development (D3D9_CALLERS=<frame>): who draws 4-vertex quads (code addresses on the guest stack) */
+{
+    static int lg = -1, from; if (lg < 0) { lg = getenv("D3D9_CALLERS") ? 12 : 0; from = lg ? atoi(getenv("D3D9_CALLERS")) : 0; }
+#ifdef GTA_EDITION
+    if (gta_frames < from) return;
+#endif
+    if (lg <= 0 || !quad) return;
+    lg--; fprintf(stderr, "d3d9: quad from");
+    for (uint32_t k = 0; k < 64; k++) { uint32_t v = rt_r32(G_MEM, c->esp + 4 * k); if (v > 0x401000u && v < 0x857000u) fprintf(stderr, " %08x", v); }
+    fprintf(stderr, "\n");
+}
 M(dv_DrawIndexedPrimitive, 7) DEV_ME                   /* (type, base vertex, min index, vertices, start index, primitives) */
+    callers_log(c, ARG(4) == 4 && ARG(6) == 2 && ((me->decl ? me->decl->fvf : me->fvf) & 0xe) == 4);
     if (me->vs && (!me->ib || !shader_bind(me))) RET(D3D_OK, 7);
     if ((!me->prog && !can_draw(me)) || !me->ib) RET(D3D_OK, 7);
     uint32_t ni = prim_verts(ARG(1), ARG(6)), is = me->ib->fmt == 102 ? 4 : 2;
     if ((uint64_t)(ARG(5) + ni) * is > me->ib->len) { static int w; if (!w++) fprintf(stderr, "d3d9: indices past the index buffer (skipped)\n"); RET(D3D_OK, 7); }
     if (me->vs && prog_draw_vb(me, ARG(1), (int32_t)ARG(2), ARG(3), ARG(4), ni, ARG(5))) RET(D3D_OK, 7);
-    (me->prog ? prog_draw_indexed : draw_indexed)(me, ARG(1), (int32_t)ARG(2), ARG(3), ARG(4), G_MEM + me->ib->mem + ARG(5) * is, is == 4, ni, 0, 0); RET(D3D_OK, 7);
+    ps2f_begin(me);
+    (me->prog ? prog_draw_indexed : draw_indexed)(me, ARG(1), (int32_t)ARG(2), ARG(3), ARG(4), G_MEM + me->ib->mem + ARG(5) * is, is == 4, ni, 0, 0);
+    ps2f_end(me); RET(D3D_OK, 7);
 END
 M(dv_DrawPrimitiveUP, 5) DEV_ME                        /* (type, primitives, data, stride) */
     if (me->vs) { if (shader_bind(me)) prog_draw(me, ARG(1), 0, prim_verts(ARG(1), ARG(2)), 0, 0, G_MEM + ARG(3), ARG(4)); RET(D3D_OK, 5); }
@@ -1164,10 +1199,13 @@ M(dv_DrawPrimitiveUP, 5) DEV_ME                        /* (type, primitives, dat
     if (v) emit(me, ARG(1), fvf, v, nv, 0, 0); RET(D3D_OK, 5);
 END
 M(dv_DrawIndexedPrimitiveUP, 9) DEV_ME                 /* (type, min index, vertices, primitives, indices, index format, data, stride) */
+    callers_log(c, ARG(3) == 4 && ARG(4) == 2 && ((me->decl ? me->decl->fvf : me->fvf) & 0xe) == 4);
     if (me->vs && !shader_bind(me)) RET(D3D_OK, 9);
     if (!me->prog && !can_draw(me)) RET(D3D_OK, 9);
     uint32_t ni = prim_verts(ARG(1), ARG(4)), stride = ARG(8);
-    (me->prog ? prog_draw_indexed : draw_indexed)(me, ARG(1), 0, ARG(2), ARG(3), G_MEM + ARG(5), ARG(6) == 102, ni, G_MEM + ARG(7) + ARG(2) * stride, stride); RET(D3D_OK, 9);
+    ps2f_begin(me);
+    (me->prog ? prog_draw_indexed : draw_indexed)(me, ARG(1), 0, ARG(2), ARG(3), G_MEM + ARG(5), ARG(6) == 102, ni, G_MEM + ARG(7) + ARG(2) * stride, stride);
+    ps2f_end(me); RET(D3D_OK, 9);
 END
 TODO_M(dv_ProcessVertices, 7, D3DERR_INVALIDCALL)
 M(dv_CreateVertexDeclaration, 3) DEV_ME
