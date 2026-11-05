@@ -10,6 +10,7 @@
  *   DS_DISPLAY=window|fullscreen, DS_NOTCH=around|below   main.m (the game's window)
  *   GTA_MODE=WxH                            runtime/win32/gta3_mode.c, d3d9.c (the video mode; "" = as set in the game)
  *   DSR_VSYNC=1|0                           main.m (the Metal layer)
+ *   GTA_WIDESCREEN=1|0, GTA_WIDE_HUD=anchor|center   gta3_mode.c, d3d9.c (Hor+ 3D view, the HUD in its 4:3 shape)
  *   DS_LOG_FILE=<data>/<BIN>.log            the game's log (stderr goes there too; over 5 MB it moves to <BIN>.old.log)
  * install.sh writes Contents/Resources/games.plist: each installed game's binary, executable, game and data folders
  * and the commit it was built from. The choices and the last game are kept in ~/Games/GTAClassics/launcher.plist.
@@ -474,14 +475,18 @@ static NSInteger index_of(NSArray<NSDictionary *> *c, id v, NSInteger dflt)
 static NSString *val(GCTile *t) { return t.choices[t.index][@"value"]; }
 /* the game's video mode for these choices (gta3_launcher.m mode_for): 4:3, as tall as the screen (below the notch's band
  * if so) or the window, in points or (Retina) pixels; "" = as set in the game */
-static NSString *mode_for(NSString *display, NSString *notch, NSString *res)
+/* the video mode: the display's height (less the notch's band below it, or main.m's 4:3 window), in points or pixels;
+ * 4:3 wide, or with Widescreen the display's own shape */
+static NSString *mode_for(NSString *display, NSString *notch, NSString *res, NSString *wide)
 {
     if ([res isEqualToString:@"game"]) return @"";
-    NSScreen *s = NSScreen.mainScreen; CGFloat h = s.frame.size.height;
-    if ([display isEqualToString:@"window"]) h = floor(s.visibleFrame.size.height * 0.78) - 28;   /* main.m's window, less its title bar */
+    NSScreen *s = NSScreen.mainScreen; CGFloat h = s.frame.size.height, w = s.frame.size.width;
+    BOOL win = [display isEqualToString:@"window"];
+    if (win) h = floor(s.visibleFrame.size.height * 0.78) - 28;   /* main.m's window, less its title bar */
     else if (![notch isEqualToString:@"around"]) { if (@available(macOS 12.0, *)) h -= s.safeAreaInsets.top; }
+    double aspect = win || [wide isEqualToString:@"off"] || h <= 0 ? 4.0 / 3 : w / h;
     if ([res isEqualToString:@"retina"]) h *= s.backingScaleFactor;
-    int ih = (int)floor(h) & ~1, iw = (int)lround(ih * 4.0 / 3) & ~1;
+    int ih = (int)floor(h) & ~1, iw = (int)lround(ih * aspect) & ~1;
     if (ih < 480) { ih = 480; iw = 640; }
     return [NSString stringWithFormat:@"%dx%d", iw, ih];
 }
@@ -489,7 +494,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *updates;
 @property NSString *home, *plistPath;
 @end
 
@@ -539,8 +544,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                       @{@"value": @"around", @"label": @"Around It", @"note": @"The whole display's height: the notch over the top of the picture"}];
     notch.index = notchH > 0 ? index_of(notch.choices, saved[@"notch"], 0) : 0;
     resTile.title = @"Resolution";
-    resTile.choices = @[@{@"value": @"standard", @"label": @"Standard", @"note": [NSString stringWithFormat:@"Display height in points (%@), scaled up by macOS", mode_for(@"fullscreen", @"around", @"standard")]},
-                        @{@"value": @"retina", @"label": @"Retina", @"note": [NSString stringWithFormat:@"Every pixel (%@ full screen): the sharpest picture", mode_for(@"fullscreen", @"around", @"retina")]},
+    resTile.choices = @[@{@"value": @"standard", @"label": @"Standard", @"note": [NSString stringWithFormat:@"Display height in points (%@), scaled up by macOS", mode_for(@"fullscreen", @"around", @"standard", @"on")]},
+                        @{@"value": @"retina", @"label": @"Retina", @"note": [NSString stringWithFormat:@"Every pixel (%@ full screen): the sharpest picture", mode_for(@"fullscreen", @"around", @"retina", @"on")]},
                         @{@"value": @"game", @"label": @"As Set in Game", @"note": @"Each game's own display menu decides (640 × 480 at first)"}];
     if (scr.backingScaleFactor <= 1) resTile.choices = @[resTile.choices[0], resTile.choices[2]];
     resTile.index = index_of(resTile.choices, saved[@"resolution"], 0);
@@ -549,13 +554,19 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     vsync.choices = @[@{@"value": @"1", @"label": @"On", @"short": @"VSync", @"note": [NSString stringWithFormat:@"Frames paced to the display's %ld Hz: no tearing (the games' own limiters keep 30)", (long)hz]},
                       @{@"value": @"0", @"label": @"Off", @"short": @"No VSync", @"note": @"Frames shown as soon as they're drawn: lowest latency, may tear"}];
     vsync.index = index_of(vsync.choices, saved[@"vsync"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, vsync] : @[display, resTile, vsync];
+    GCTile *wide = self.wide = [GCTile new];
+    wide.title = @"Widescreen";
+    wide.choices = @[@{@"value": @"on", @"label": @"On", @"short": @"Widescreen", @"note": @"A wider view on a wide screen (the 4:3 height kept), the HUD at the corners in its own shape"},
+                     @{@"value": @"center", @"label": @"HUD Centred", @"short": @"Widescreen", @"note": @"The wider view, with the HUD in a 4:3 frame in the middle, as on a 4:3 screen"},
+                     @{@"value": @"off", @"label": @"Off", @"short": @"Stretched", @"note": @"As the games were made: the 4:3 picture and HUD stretched across the screen"}];
+    wide.index = index_of(wide.choices, saved[@"wide"], 0);
+    v.rows = notchH > 0 ? @[display, notch, resTile, vsync, wide] : @[display, resTile, vsync, wide];
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": notchH > 0 ? @"Display, notch, resolution and VSync, for every game" : @"Display, resolution and VSync, for every game"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": notchH > 0 ? @"Display, notch, resolution, VSync and widescreen, for every game" : @"Display, resolution, VSync and widescreen, for every game"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
-        for (GCTile *t in @[display, resTile, vsync]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
+        for (GCTile *t in @[display, resTile, vsync, wide]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
         return [a componentsJoinedByString:@"  ·  "];
     };
     __weak GCLaunchView *wv = v; gfx.activate = ^{ [wv openPanel]; };
@@ -667,7 +678,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide)};
 }
 - (void)save
 {
@@ -693,8 +704,10 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     NSDictionary *env = @{@"DS_NO_LAUNCHER": @"1", @"DS_DISPLAY": c[@"display"], @"DS_NOTCH": c[@"notch"], @"DSR_VSYNC": c[@"vsync"],
                           /* always set, "" for as set in the game: the game's own launch code keeps a value already set,
                            * and would otherwise take one from an older launcher.plist in its data folder */
-                          @"GTA_MODE": mode_for(c[@"display"], c[@"notch"], c[@"resolution"]), @"DS_LOG_FILE": log,
-                          @"GTA_MODS": gcm_env(g.data)};   /* the Mods window's enabled mods (runtime/win32/files.c) */
+                          @"GTA_MODE": mode_for(c[@"display"], c[@"notch"], c[@"resolution"], c[@"wide"]), @"DS_LOG_FILE": log,
+                          @"GTA_MODS": gcm_env(g.data),    /* the Mods window's enabled mods (runtime/win32/files.c) */
+                          /* gta3_mode.c (the 3D view), d3d9.c (the HUD) */
+                          @"GTA_WIDESCREEN": [c[@"wide"] isEqual:@"off"] ? @"0" : @"1", @"GTA_WIDE_HUD": [c[@"wide"] isEqual:@"center"] ? @"center" : @"anchor"};
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];
     if (getenv("GTAC_LAUNCHER_DRY")) {                                   /* development: what Play runs */
         for (NSString *k in [env.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [env[k] UTF8String]);
