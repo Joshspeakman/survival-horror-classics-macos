@@ -12,6 +12,7 @@
  *   DSR_VSYNC=1|0                           main.m (the Metal layer)
  *   GTA_WIDESCREEN=1|0, GTA_WIDE_HUD=anchor|center   gta3_mode.c, d3d9.c (Hor+ 3D view, the HUD in its 4:3 shape)
  *   GTA_FPS=<n>                             gta3_mode.c (the frame limiter; above 30 the high-FPS fixes)
+ *   GTA_LIGHTING=ps2|pc                     renderer.m, gta3_mode.c, d3d9.c (PS2 lighting and colour filter)
  *   DS_LOG_FILE=<data>/<BIN>.log            the game's log (stderr goes there too; over 5 MB it moves to <BIN>.old.log)
  * install.sh writes Contents/Resources/games.plist: each installed game's binary, executable, game and data folders
  * and the commit it was built from. The choices and the last game are kept in ~/Games/GTAClassics/launcher.plist.
@@ -495,7 +496,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *fps, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *fps, *light, *updates;
 @property NSString *home, *plistPath;
 @end
 
@@ -569,10 +570,15 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                     @{@"value": @"30", @"label": @"30 (Original)", @"short": @"30 fps", @"note": @"The games' own frame limiter, as released"}];
     if (hz <= 60) fps.choices = @[fps.choices[0], fps.choices[2]];
     fps.index = index_of(fps.choices, saved[@"fps"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, vsync, wide, fps] : @[display, resTile, vsync, wide, fps];
+    GCTile *light = self.light = [GCTile new];
+    light.title = @"Lighting";
+    light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
+                      @{@"value": @"pc", @"label": @"PC (As Released)", @"short": @"PC light", @"note": @"The PC versions' own lighting and colour filter (brighter, flatter)"}];
+    light.index = index_of(light.choices, saved[@"light"], 0);
+    v.rows = notchH > 0 ? @[display, notch, resTile, vsync, wide, fps, light] : @[display, resTile, vsync, wide, fps, light];
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": notchH > 0 ? @"Display, notch, resolution, VSync, widescreen and frame rate, for every game" : @"Display, resolution, VSync, widescreen and frame rate, for every game"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": notchH > 0 ? @"Display, notch, resolution, VSync, widescreen, frame rate and lighting, for every game" : @"Display, resolution, VSync, widescreen, frame rate and lighting, for every game"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
         for (GCTile *t in @[display, resTile, fps, wide]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
@@ -687,7 +693,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"fps": val(self.fps)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"fps": val(self.fps), @"light": val(self.light)};
 }
 - (void)save
 {
@@ -717,7 +723,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                           @"GTA_MODS": gcm_env(g.data),    /* the Mods window's enabled mods (runtime/win32/files.c) */
                           /* gta3_mode.c (the 3D view), d3d9.c (the HUD) */
                           @"GTA_WIDESCREEN": [c[@"wide"] isEqual:@"off"] ? @"0" : @"1", @"GTA_WIDE_HUD": [c[@"wide"] isEqual:@"center"] ? @"center" : @"anchor",
-                          @"GTA_FPS": c[@"fps"]};   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
+                          @"GTA_FPS": c[@"fps"],   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
+                          @"GTA_LIGHTING": c[@"light"]};   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];
     if (getenv("GTAC_LAUNCHER_DRY")) {                                   /* development: what Play runs */
         for (NSString *k in [env.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [env[k] UTF8String]);
