@@ -84,7 +84,8 @@ display's rate, or 30 as released). The games' limiters measured each frame from
 the last one, so every frame took the limit plus that part of the frame (San Andreas' 30 fps was 25, 60 was 43; with
 VSync, GTA III and Vice City capped at 120 on a 120 Hz display rounded up to two refreshes, 60): each now waits for its
 frame's due time by a steady clock. (The runtime this port shares with the author's other ports also held games at 60
-until their work per frame left room for 120; the GTA games pace themselves, so it is off for them.) Above 30 fps, the parts of each game that count frames instead of time run at 30
+until their work per frame left room for 120; the GTA games pace their play themselves, so it only holds their menus
+and loading screens, which the games leave unlimited, at the same rate.) Above 30 fps, the parts of each game that count frames instead of time run at 30
 fps's pace, as FusionFix's HighFPS does: millisecond timers carry their fractions (mission countdowns, script timers,
 fades), things done every 16th or 32nd frame and the HUD's flashing count 30 fps frames, particles update 30 times a
 second, and the radio station's name, the clouds' turn, the spin damping of cars and people and the objects mission
