@@ -9,6 +9,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <GameController/GameController.h>
+#import <AVFoundation/AVFoundation.h>
 #ifndef DS_BUILD
 #define DS_BUILD "dev"
 #endif
@@ -482,6 +483,103 @@ static void pad_start(void)
 #endif
 
 #ifdef GTA_EDITION
+// ---------------------------------------------------------------- movies (the GTA games' intro movies, MPEG-1)
+/* The games play Logo.mpg and GTAtitles.mpg through DirectShow (runtime/win32/dshow.c), whose video renderer drew into
+ * the game's window. Here AVFoundation plays the file in a layer over the game's picture (aspect-fit on black); the
+ * runtime is told when it ends (done(user), on the main thread) and stops it when the game skips it. Muted with
+ * W32_AUDIO_MUTE. Found by the runtime with dlsym. */
+typedef void (*gta_movie_done_fn)(void *);
+static AVPlayer *movie_player; static AVPlayerLayer *movie_layer; static id movie_end_obs, movie_fail_obs; static int movie_gen;
+static NSWindow *movie_win;   /* GTA III and San Andreas show their intros before they make their window: one of its own */
+static gta_movie_done_fn movie_done_cb; static void *movie_done_user; static dispatch_source_t movie_pad_timer;
+static void movie_remove(void);
+static void movie_skip(void)   /* a key, click or pad button in the intros' own window: this movie is over */
+{
+    if (!movie_player) return;
+    movie_gen++; movie_remove(); if (movie_done_cb) movie_done_cb(movie_done_user);
+}
+@interface MovieView : NSView @end
+@implementation MovieView
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent *)e { (void)e; movie_skip(); }
+- (void)mouseDown:(NSEvent *)e { (void)e; movie_skip(); }
+@end
+static double win_aspect(void);
+static CALayer *movie_host_layer(void)
+{
+    if (game_view || win) return (game_view ?: win.contentView).layer;
+    if (!movie_win) {
+        NSRect f = NSScreen.mainScreen.frame; NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
+        int background = test_mode && !getenv("DS_DISPLAY");
+        if (background) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
+        else if (windowed()) {
+            NSRect vf = NSScreen.mainScreen.visibleFrame; CGFloat h = floor(vf.size.height * 0.78), w = floor(h * win_aspect());
+            f = NSMakeRect(NSMidX(vf) - w / 2, NSMidY(vf) - h / 2, w, h); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+        }
+        movie_win = [[NSWindow alloc] initWithContentRect:f styleMask:sm backing:NSBackingStoreBuffered defer:NO];
+        movie_win.releasedWhenClosed = NO; movie_win.backgroundColor = NSColor.blackColor; movie_win.title = @DS2_TITLE;
+        movie_win.contentView = [[MovieView alloc] initWithFrame:NSMakeRect(0, 0, f.size.width, f.size.height)];
+        movie_win.contentView.wantsLayer = YES; movie_win.contentView.layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+        [movie_win makeFirstResponder:movie_win.contentView];
+        movie_pad_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());   /* a pad button skips too */
+        dispatch_source_set_timer(movie_pad_timer, DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC);
+        dispatch_source_set_event_handler(movie_pad_timer, ^{
+            static int was; GCExtendedGamepad *g = (GCController.current ?: GCController.controllers.firstObject).extendedGamepad;
+            int now = g && (g.buttonA.pressed || g.buttonB.pressed || g.buttonX.pressed || g.buttonY.pressed || g.buttonMenu.pressed);
+            if (now && !was) movie_skip();
+            was = now;
+        });
+        dispatch_resume(movie_pad_timer);
+        if (background) [movie_win orderBack:nil];
+        else {
+            if (!windowed()) [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
+            [movie_win makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; [NSCursor hide];
+        }
+    }
+    return movie_win.contentView.layer;
+}
+static void movie_remove(void)
+{
+    if (movie_end_obs) { [[NSNotificationCenter defaultCenter] removeObserver:movie_end_obs]; movie_end_obs = nil; }
+    if (movie_fail_obs) { [[NSNotificationCenter defaultCenter] removeObserver:movie_fail_obs]; movie_fail_obs = nil; }
+    [movie_player pause]; [movie_layer removeFromSuperlayer]; movie_player = nil; movie_layer = nil;
+}
+__attribute__((visibility("default"), used)) int gta_movie_play(const char *path, gta_movie_done_fn done, void *user)
+{
+    NSString *p = [NSString stringWithUTF8String:path];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:p]) return 0;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        movie_remove(); int gen = ++movie_gen;
+        AVPlayerItem *item = [AVPlayerItem playerItemWithURL:[NSURL fileURLWithPath:p]];
+        movie_player = [AVPlayer playerWithPlayerItem:item];
+        { const char *m = getenv("W32_AUDIO_MUTE"); movie_player.muted = m && strcmp(m, "0"); }
+        movie_layer = [AVPlayerLayer playerLayerWithPlayer:movie_player];
+        movie_layer.videoGravity = AVLayerVideoGravityResizeAspect; movie_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+        CALayer *host = movie_host_layer();
+        movie_layer.frame = host.bounds; movie_layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable; movie_layer.zPosition = 10;
+        [host addSublayer:movie_layer];
+        movie_done_cb = done; movie_done_user = user;
+        void (^finish)(NSNotification *) = ^(NSNotification *n) { (void)n; if (gen != movie_gen) return; movie_remove(); if (done) done(user); };
+        movie_end_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemDidPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
+        movie_fail_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
+        [movie_player play];
+        fprintf(stderr, "DungeonSiegeNative: movie %s\n", p.UTF8String);
+    });
+    return 1;
+}
+__attribute__((visibility("default"), used)) void gta_movie_stop(void)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{ movie_gen++; movie_remove(); });
+}
+__attribute__((visibility("default"), used)) void gta_movie_close(void)   /* the intros are over: their window goes */
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        movie_gen++; movie_remove();
+        if (movie_pad_timer) { dispatch_source_cancel(movie_pad_timer); movie_pad_timer = nil; }
+        if (movie_win) { [movie_win orderOut:nil]; movie_win = nil; [NSCursor unhide]; }
+    });
+}
+
 // ---------------------------------------------------------------- game controller (the GTA games: DirectInput's gamepad)
 /* The controller (the one used last) as DirectInput's gamepad (runtime/win32/dinput8.c), read 250 times a second on the
  * main thread while the game is the active app. Buttons in the order the games' default joypad layout expects, so a

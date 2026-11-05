@@ -48,6 +48,7 @@ the code in `recomp/runtime/win32/gta3_mode.c`); overrides replace a whole funct
 | PS2 trails kept on (`CMBlur::BlurOn`) | (Display Setup) | 0x48fdbf, 0x49975f | |
 | PS2 colour filter passes; radiosity after them | | | 0x718a6c, 0x718abd, 0x718ac0 |
 | The streaming read's lost release (`CdStreamSync`) | 0x40604a | 0x40840a | 0x407a9e |
+| The frame limiter paced by a steady clock | | | 0x75072d, 0x750744 |
 
 Their addresses were found with FusionFix's (MIT) search patterns, and checked by disassembling each build.
 
@@ -61,6 +62,15 @@ Their addresses were found with FusionFix's (MIT) search patterns, and checked b
   GTA III turned its sound off at the stub's former answer, 0, and Vice City wants a DirectSound3D provider by name,
   so the three a PC of the time listed are offered.
 - **DirectSound** (San Andreas): `recomp/runtime/win32/dsound.c`, on Core Audio.
+
+## Movies
+
+The intro movies (`movies/Logo.mpg`, `GTAtitles.mpg`: MPEG-1 with MP2 sound) are played by the host with AVFoundation
+in a layer over the game's picture (`host/main.m` `gta_movie_play`). The Mac releases of GTA III and San Andreas ask
+TransGaming's wrapper for `TGPlayIntros` (user32) before they make their window; the runtime provides it
+(`gta_imports.c`) and the host shows the movies in a window of their own, where a key, a click or a pad button skips
+one. Vice City, the Windows release, plays them through DirectShow (`dshow.c`), which completes the graph when the movie
+ends or is stopped (it skips them itself when the app isn't in front). `GTA_NO_MOVIES=1` skips them.
 
 ## Checking
 

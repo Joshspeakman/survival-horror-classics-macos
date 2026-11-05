@@ -75,6 +75,7 @@ static struct { int connected; float ax[6]; uint32_t buttons; int pov; int32_t l
 static Dev *joy;
 /* host: the pad's state (axes -1..1: X right, Y down; Z/Rz and Rx/Ry the right stick), buttons, the hat
  * in hundredths of a degree (-1 centred); connected 0: no controller */
+uint32_t w32_di_pad_buttons(void) { return pad.connected ? pad.buttons : 0; }   /* (the intro movies' skip, gta_imports.c) */
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov)
 {
     pthread_mutex_lock(&di_lock);

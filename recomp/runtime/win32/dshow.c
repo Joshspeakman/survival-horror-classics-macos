@@ -2,8 +2,10 @@
  * the interfaces the game asks for (IGraphBuilder, IMediaControl, IMediaEventEx, IMediaSeeking, IBasicAudio,
  * IMediaPosition, IVideoWindow); RenderFile opens the file, minimp3 (third_party) decodes it as it plays through the
  * host audio output, and the end of the stream is reported as EC_COMPLETE through the graph's event handle.
- * A video file (GTA Vice City's Logo.mpg, GTAtitles.mpg) is accepted and not shown: running it completes at once, so
- * the game goes on as if the movie had ended (no MPEG-1 decoder yet). */
+ * A video file (the GTA games' Logo.mpg and GTAtitles.mpg) is played by the host (main.m gta_movie_play: AVFoundation, in a
+ * layer over the game's picture) and completes when it ends or is stopped; without the host's player it completes at
+ * once, so the game goes on as if the movie had ended. */
+#include <dlfcn.h>
 #include "w32.h"
 #include "../host_audio.h"
 #include <pthread.h>
@@ -24,7 +26,8 @@ typedef struct Graph {
     uint64_t pos;                                      /* samples (all channels) played */
     float gain; uint32_t event; int complete_pending, complete_sent; uint32_t notify_hwnd, notify_msg;
     uint8_t *data;                                     /* a stream pulled from the game's own source filter (Render) */
-    int video;                                         /* a video file: not shown, complete when run */
+    int video;                                         /* a video file: played by the host while running */
+    char vpath[2048]; int vplaying;
 } Graph;
 static uint32_t vt[NI];
 static Graph *graphs[64]; static int ngraphs;
@@ -84,7 +87,8 @@ static void release(Ctx *c, int iface)
 {
     Graph *gr = of(c, iface); if (!gr) RET(0, 1);
     int r = --gr->refs;
-    if (r <= 0) { close_stream(gr); for (int k = 0; k < ngraphs; k++) if (graphs[k] == gr) graphs[k] = 0; free(gr); }
+    if (r <= 0) { if (gr->vplaying) { void (*stop)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "gta_movie_stop"); if (stop) stop(); }
+                  close_stream(gr); for (int k = 0; k < ngraphs; k++) if (graphs[k] == gr) graphs[k] = 0; free(gr); }
     RET((uint32_t)(r > 0 ? r : 0), 1);
 }
 #define IUNK(pfx, k) static void pfx##_qi(Ctx *c) { qi(c, k); } static void pfx##_add(Ctx *c) { addref(c, k); } static void pfx##_rel(Ctx *c) { release(c, k); }
@@ -101,8 +105,8 @@ static uint32_t render_file(Graph *gr, uint32_t wname)
     close_stream(gr);
     const char *dot = strrchr(a, '.');
     if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg") || !strcasecmp(dot, ".avi") || !strcasecmp(dot, ".wmv"))) {
-        if (getenv("W32_AUDIOLOG")) fprintf(stderr, "dshow: RenderFile %s -> a video: completes when run\n", a);
-        gr->video = 1; gr->complete_pending = gr->complete_sent = 0; return S_OK;
+        if (getenv("W32_AUDIOLOG")) fprintf(stderr, "dshow: RenderFile %s -> a video\n", a);
+        gr->video = 1; gr->complete_pending = gr->complete_sent = 0; snprintf(gr->vpath, sizeof gr->vpath, "%s", host); return S_OK;
     }
     gr->video = 0;
     pthread_mutex_lock(&gr->m); int err = mp3dec_ex_open(&gr->dec, host, MP3D_SEEK_TO_SAMPLE); pthread_mutex_unlock(&gr->m);
@@ -148,8 +152,30 @@ static void gb_ok4(Ctx *c) { RET(S_OK, 4); } static void gb_ni3(Ctx *c) { RET(E_
 static void gb_ni2(Ctx *c) { RET(E_NOTIMPL, 2); }
 
 /* ---- IMediaControl ---- */
+static void complete(Graph *gr)                        /* EC_COMPLETE: the event handle, and the notify window */
+{
+    pthread_mutex_lock(&gr->m);
+    int was = gr->complete_sent; gr->complete_pending = gr->complete_sent = 1; gr->vplaying = 0;
+    if (gr->event) w32_event_signal(gr->event, 1);
+    uint32_t hwnd = gr->notify_hwnd, msg = gr->notify_msg;
+    pthread_mutex_unlock(&gr->m);
+    if (!was && hwnd && msg) { void w32_post(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t); uint32_t w32_window_tid(uint32_t);
+                               w32_post(w32_window_tid(hwnd), hwnd, msg, 0, 0); }
+}
+static void movie_done(void *user)                     /* the host's player: the movie ended (main thread) */
+{
+    for (int k = 0; k < ngraphs; k++) if (graphs[k] == user && graphs[k]->vplaying) { complete(graphs[k]); return; }
+}
+static int (*movie_play)(const char *, void (*)(void *), void *); static void (*movie_stop)(void); static int movie_looked;
 static void set_state(Graph *gr, int st)
 {
+    if (!movie_looked) { movie_looked = 1; movie_play = (int (*)(const char *, void (*)(void *), void *))dlsym(RTLD_DEFAULT, "gta_movie_play");
+                         movie_stop = (void (*)(void))dlsym(RTLD_DEFAULT, "gta_movie_stop"); }
+    if (gr->video && st == 2 && !gr->vplaying && !gr->complete_sent && movie_play && !getenv("GTA_NO_MOVIES") && movie_play(gr->vpath, movie_done, gr)) {
+        pthread_mutex_lock(&gr->m); gr->state = 2; gr->vplaying = 1; pthread_mutex_unlock(&gr->m);
+        return;                                         /* EC_COMPLETE when it ends */
+    }
+    if (gr->video && st != 2 && gr->vplaying) { gr->vplaying = 0; if (movie_stop) movie_stop(); }   /* skipped */
     pthread_mutex_lock(&gr->m);
     if (st == 0) { if (gr->open) mp3dec_ex_seek(&gr->dec, 0); gr->pos = 0; gr->complete_pending = gr->complete_sent = 0; }
     gr->state = st;

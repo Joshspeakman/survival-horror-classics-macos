@@ -8,9 +8,10 @@
 
 int dsr_verbose; long dsr_stat[8]; double dsr_gpu_ms[100000]; int dsr_frame;
 #define MAXSURF 65536
-/* ms: a multisampled target's samples (drawn into, resolved into tex at the end of every pass, so tex is always what
- * is read); auxz: its depth when the bound depth buffer has another sample count */
-typedef struct { id<MTLTexture> tex, view2d, ms, auxz; uint32_t w, h, kind, fmt, level, root, slice, samples; int used, fxrt; } Surf;   /* fxrt: an effect pass drew into it (DSR_GLOWLOG) */   /* cube faces: tex the cube, view2d the face as 2D */
+/* ms: a multisampled target's samples, drawn into and resolved into tex only when tex is read (a copy, the present, a
+ * readback: such surfaces are never bound as textures); ms_dirty: drawn since the last resolve. auxz: its depth when
+ * the bound depth buffer has another sample count */
+typedef struct { id<MTLTexture> tex, view2d, ms, auxz; uint32_t w, h, kind, fmt, level, root, slice, samples; int used, fxrt, ms_dirty; } Surf;   /* fxrt: an effect pass drew into it (DSR_GLOWLOG) */   /* cube faces: tex the cube, view2d the face as 2D */
 static inline id<MTLTexture> tex2d(const void *sp) { const Surf *s = sp; return s->view2d ? s->view2d : s->tex; }
 typedef struct {   // must match shaders.metal Uniforms
     float wvp[16], wv[16], tex0[16];
@@ -226,6 +227,19 @@ static void helpers_for(DSRRenderer *r, int n)   /* the quad and depth-clear pip
     r->hz[k] = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
     if (!r->hq[k] || !r->hqo[k] || !r->hz[k]) { fprintf(stderr, "dsr: %d-sample helper pipelines: %s\n", n, err.localizedDescription.UTF8String); exit(1); }
 }
+static void end_enc(DSRRenderer *r);
+static id<MTLCommandBuffer> cmdbuf(DSRRenderer *r);
+static void resolve(DSRRenderer *r, Surf *s)   /* a multisampled surface's picture, before tex is read */
+{
+    if (!s || !s->ms || !s->ms_dirty) return;
+    end_enc(r);
+    MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+    p.colorAttachments[0].texture = s->ms; p.colorAttachments[0].resolveTexture = s->tex;
+    p.colorAttachments[0].resolveSlice = s->slice; p.colorAttachments[0].resolveLevel = s->level;
+    p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStoreAndMultisampleResolve;
+    [[cmdbuf(r) renderCommandEncoderWithDescriptor:p] endEncoding]; r->encoders++;
+    s->ms_dirty = 0;
+}
 static id<MTLTexture> ms_texture(DSRRenderer *r, MTLPixelFormat pf, uint32_t w, uint32_t h, int n)
 {
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
@@ -240,9 +254,8 @@ static id<MTLRenderCommandEncoder> enc_for(DSRRenderer *r, uint32_t rt, uint32_t
     MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
     int cs = samples_of(c);
     if (c->ms) {                                       /* drawn into the samples, resolved into the texture as the pass ends */
-        p.colorAttachments[0].texture = c->ms; p.colorAttachments[0].resolveTexture = c->tex;
-        p.colorAttachments[0].resolveSlice = c->slice; p.colorAttachments[0].resolveLevel = c->level;
-        p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStoreAndMultisampleResolve;
+        p.colorAttachments[0].texture = c->ms;
+        p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStore; c->ms_dirty = 1;
     } else {
         p.colorAttachments[0].texture = c->tex; p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStore;
         p.colorAttachments[0].slice = c->slice; p.colorAttachments[0].level = c->level;
@@ -355,6 +368,7 @@ static void upload_over(DSRRenderer *r, const uint32_t *p, uint32_t size)
 static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t src, const int32_t *srect, int fill, uint32_t color)
 {
     Surf *d = surf(r, dst), *s = surf(r, src); if (!d || d->fmt == 3 || !(d->tex.usage & MTLTextureUsageRenderTarget)) return;
+    if (s && s != d) resolve(r, s);
     struct { float dst[4], src[4], color[4]; int32_t mode[4]; } q;
     q.dst[0] = drect[0] / (float)d->w; q.dst[1] = drect[1] / (float)d->h; q.dst[2] = drect[2] / (float)d->w; q.dst[3] = drect[3] / (float)d->h;
     if (fill == 2) { q.src[0] = srect[0] / 256.0f; q.src[1] = srect[1] / 256.0f; q.src[2] = srect[2] / 256.0f; q.src[3] = srect[3] / 256.0f; }
@@ -393,7 +407,7 @@ static void glow_pass(DSRRenderer *r, id<MTLTexture> dst, id<MTLRenderPipelineSt
 static void glow(DSRRenderer *r, uint32_t limit, uint32_t strength)
 {
     Surf *c = surf(r, r->rt); if (!c || c->fmt == 3 || c->kind == 3 || !strength) return;
-    end_enc(r); maybe_commit(r);                                       /* (a multisampled target is resolved as its pass ends) */
+    resolve(r, c); end_enc(r); maybe_commit(r);
     uint32_t w = c->w / 4 > 0 ? c->w / 4 : 1, h = c->h / 4 > 0 ? c->h / 4 : 1;
     if (!r->glow_t[0] || r->glow_t[0].width != w || r->glow_t[0].height != h)
         for (int k = 0; k < 2; k++) {
@@ -995,6 +1009,7 @@ void dsr_renderer_flush(DSRRenderer *r, int wait)
 id<MTLCommandBuffer> dsr_renderer_present_to(DSRRenderer *r, id<MTLTexture> dst)
 {
     Surf *s = surf(r, r->presented); if (!s) return nil;
+    resolve(r, s);
     if (r->gamma_dirty) {
         uint16_t px[256][4];
         for (int k = 0; k < 256; k++) { px[k][0] = r->gamma[0][k]; px[k][1] = r->gamma[1][k]; px[k][2] = r->gamma[2][k]; px[k][3] = 0xffff; }
@@ -1040,6 +1055,7 @@ static void readback(DSRRenderer *r, const uint32_t *p)
 {
     Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4]; int ok = 0;
     if (s && r->rb_buf && s->fmt != 3 && w && h && (uint64_t)x + w <= s->w && (uint64_t)y + h <= s->h && (uint64_t)w * h * 4 <= r->rb_buf.length) {
+        resolve(r, s);
         if (r->enc) { [r->enc endEncoding]; r->enc = nil; }
         [blit_enc(r) copyFromTexture:s->tex sourceSlice:s->slice sourceLevel:s->level sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(w, h, 1)
                              toBuffer:r->rb_buf destinationOffset:0 destinationBytesPerRow:w * 4 destinationBytesPerImage:w * h * 4];
@@ -1062,8 +1078,8 @@ static void depth_readback(DSRRenderer *r, const uint32_t *p)
 double dsr_renderer_present_time(DSRRenderer *r) { return r->present_ts; }
 void dsr_renderer_set_graph(DSRRenderer *r, const float *a, int ha, const float *b, int hb) { r->g_a = a; r->g_ha = ha; r->g_b = b; r->g_hb = hb; r->g_on = 1; }
 void dsr_renderer_presented_size(DSRRenderer *r, uint32_t *w, uint32_t *h) { Surf *s = surf(r, r->presented); *w = s ? s->w : 0; *h = s ? s->h : 0; }
-id<MTLTexture> dsr_renderer_rt(DSRRenderer *r) { Surf *s = surf(r, r->rt); return s ? s->tex : nil; }
-id<MTLTexture> dsr_renderer_presented(DSRRenderer *r) { Surf *s = surf(r, r->presented); return s ? s->tex : nil; }
+id<MTLTexture> dsr_renderer_rt(DSRRenderer *r) { Surf *s = surf(r, r->rt); resolve(r, s); return s ? s->tex : nil; }
+id<MTLTexture> dsr_renderer_presented(DSRRenderer *r) { Surf *s = surf(r, r->presented); resolve(r, s); return s ? s->tex : nil; }
 
 int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t size)
 {

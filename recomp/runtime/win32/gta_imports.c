@@ -97,3 +97,44 @@ IMPL(kernel32, GetNumberOfConsoleInputEvents) { if (ARG(1)) rt_w32(G_MEM, ARG(1)
 IMPL(kernel32, PeekConsoleInputA) { if (ARG(3)) rt_w32(G_MEM, ARG(3), 0); RET(1, 4); }
 IMPL(kernel32, ReadConsoleA) { if (ARG(3)) rt_w32(G_MEM, ARG(3), 0); RET(1, 5); }
 IMPL(kernel32, SetLocalTime) { RET(1, 1); }
+
+/* TGPlayIntros() (user32, TransGaming's Cider): the Mac Steam releases of GTA III and San Andreas ask the wrapper for it
+ * and call it to show the intro movies (else they skip them); 1 when shown. Here the host plays movies\Logo.mpg and
+ * movies\GTAtitles.mpg (main.m gta_movie_play: AVFoundation over the game's picture), each until it ends or a key, a
+ * mouse button or a pad button is pressed. GTA_NO_MOVIES=1 skips them. (Vice City, the Windows release, plays them
+ * through DirectShow: dshow.c.) */
+#include <dlfcn.h>
+#include <unistd.h>
+extern uint8_t w32_keys[256];
+uint32_t w32_di_pad_buttons(void);
+void w32_crash_heartbeat(int which);
+static volatile int intro_done;
+static void intro_ended(void *u) { (void)u; intro_done = 1; }
+static int any_input(void)
+{
+    for (int k = 1; k < 256; k++) if (w32_keys[k] & 0x80) return 1;   /* keys and mouse buttons (VK 1, 2, 4) */
+    return w32_di_pad_buttons() != 0;
+}
+IMPL(user32, TGPlayIntros)
+{
+    int (*play)(const char *, void (*)(void *), void *) = (int (*)(const char *, void (*)(void *), void *))dlsym(RTLD_DEFAULT, "gta_movie_play");
+    void (*stop)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "gta_movie_stop");
+    if (!play || getenv("GTA_NO_MOVIES")) RET(0, 0);
+    static const char *const movies[] = {"movies\\Logo.mpg", "movies\\GTAtitles.mpg"};
+    int shown = 0;
+    for (unsigned k = 0; k < sizeof movies / sizeof *movies; k++) {
+        char host[2048]; if (w32_host_path(movies[k], host, sizeof host, 0)) continue;
+        intro_done = 0;
+        if (!play(host, intro_ended, 0)) continue;
+        shown = 1;
+        int held = any_input();                         /* a key still down from before: wait for it to be let go */
+        for (int ms = 0; !intro_done && ms < 10 * 60 * 1000; ms += 10) {
+            usleep(10000); w32_crash_heartbeat(1);       /* (not a hang) */
+            int now = any_input();
+            if (now && !held) { if (stop) stop(); break; }   /* skipped */
+            held = now;
+        }
+    }
+    void (*close)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "gta_movie_close"); if (close) close();
+    RET(shown, 0);
+}

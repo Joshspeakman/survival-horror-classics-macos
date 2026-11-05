@@ -619,9 +619,10 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         for (int n = 2; n <= 8; n *= 2) if ([dev supportsTextureSampleCount:(NSUInteger)n])
             [c addObject:@{@"value": [NSString stringWithFormat:@"%d", n], @"label": [NSString stringWithFormat:@"%dx MSAA", n],
-                           @"note": [NSString stringWithFormat:@"%d samples a pixel: smooth edges (San Andreas: also its own Display Setup)", n]}];
+                           @"note": n >= 4 ? @"4 samples a pixel: the smoothest edges (at Retina sizes it costs frame rate)"
+                                           : @"2 samples a pixel: smooth edges at little cost (San Andreas: also its own Display Setup)"}];
         aa.choices = c; }
-    aa.index = index_of(aa.choices, saved[@"aa"], aa.choices.count > 2 ? 2 : aa.choices.count - 1);
+    aa.index = index_of(aa.choices, saved[@"aa"], aa.choices.count > 1 ? 1 : 0);   /* 2x unless chosen */
     GCTile *fps = self.fps = [GCTile new];
     fps.title = @"Frame Rate";
     fps.choices = @[@{@"value": @"60", @"label": @"60", @"short": @"60 fps", @"note": @"Twice the original rate, timers and effects at 30's pace (the game's Frame Limiter off: the display's rate)"},
