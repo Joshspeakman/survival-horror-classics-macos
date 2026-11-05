@@ -256,8 +256,9 @@ static NSScrollView *scroller(NSTableView *t, NSRect f)
     NSString *tool = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"gta_restore.py"];
     {
         NSString *folder = @"original-disc-content", *dest = [mods_dir(self.data) stringByAppendingPathComponent:folder];
-        for (NSMutableDictionary *m in [self.mods copy]) if ([m[@"folder"] isEqualToString:folder]) [self.mods removeObject:m];   /* again: replaced */
-        [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+        NSString *hcFolder = [folder stringByAppendingString:@"-hot-coffee"], *hcDest = [mods_dir(self.data) stringByAppendingPathComponent:hcFolder];
+        for (NSMutableDictionary *m in [self.mods copy]) if ([m[@"folder"] isEqualToString:folder] || [m[@"folder"] isEqualToString:hcFolder]) [self.mods removeObject:m];   /* again: replaced */
+        [[NSFileManager defaultManager] removeItemAtPath:dest error:nil]; [[NSFileManager defaultManager] removeItemAtPath:hcDest error:nil];
         self.busy++; self.status.stringValue = @"Restoring from your disc… (the radio alone is about a gigabyte)";
         NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
         t.arguments = @[@"-I", tool, self.gameTag, disc, self.gameDir ?: @"", dest];
@@ -273,6 +274,10 @@ static NSScrollView *scroller(NSTableView *t, NSRect f)
                     [self.mods insertObject:[@{@"name": @"Original content (your disc)", @"folder": folder, @"kind": @"files", @"enabled": @YES, @"source": disc,
                                                @"game": self.gameTag, @"added": NSDate.date,
                                                @"note": @"As released on your disc: the full radio, original signage, loading screens and scripts"} mutableCopy] atIndex:0];
+                    if ([[NSFileManager defaultManager] fileExistsAtPath:hcDest])   /* the hidden minigame's switch: off, above the scripts it changes */
+                        [self.mods insertObject:[@{@"name": @"Hot Coffee (hidden minigame)", @"folder": hcFolder, @"kind": @"files", @"enabled": @NO, @"source": disc,
+                                                   @"game": self.gameTag, @"added": NSDate.date,
+                                                   @"note": @"The girlfriends' hidden interior scenes, shipped switched off: needs Original content on"} mutableCopy] atIndex:0];
                     [self saveAndNotify]; self.status.stringValue = @"Restored from your disc: on, at the top of the list.";
                 } else { self.status.stringValue = last.length ? last : @"Nothing was restored."; if (code) NSBeep(); }
             });

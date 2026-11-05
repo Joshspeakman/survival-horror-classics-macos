@@ -13,6 +13,10 @@ San Andreas (the original v1.0 DVD, 2005; the Steam release is v3.0):
   data/script/script.img    girlfriend minigame's code; it ships switched off on the disc as well)
   models/gta3.img           the game's own archive with the 2005 downtown Los Santos shop fronts and signs restored
                             (civic06_lan.txd, downtown3_las.txd): an APFS clone of the game's copy, two entries rewritten
+  <mod folder>-hot-coffee/  the switch for the hidden girlfriend minigame ("Hot Coffee"): the v1.0 main.scm with the
+                            one byte that keeps it off changed (main.scm starts GF_SEX with 0, the censored scene, unless
+                            a story flag is set; this passes 1, its interior scenes, as the 2005 PC mod did). Off in the
+                            Mods window until switched on.
 GTA III and Vice City: the Steam copies hold the discs' data unchanged (checked file by file), so nothing is restored.
 
 Needs: hdiutil (macOS), unshield (brew install unshield) for the installer's .cab archives.
@@ -94,7 +98,20 @@ def restore_sa(disc, game, mod):
                 if at == ooff and dsec < osec: of.write(b'\0' * ((osec - dsec) * 2048))   # the rest of its old space cleared
                 of.seek(8 + 32 * k); of.write(struct.pack('<IHH', at, dsec, 0))
                 say('   ', name, '%d sectors%s' % (dsec, '' if at == ooff else ' (moved to the end)'))
+    hot_coffee(mod)
     say('== done:', mod)
+
+# v1.0 main.scm: the second GF_SEX launch (0913 run_external_script 26 $GF 0 ...) at this offset, its 0 the switch
+HC_AT = 0x22f86
+HC_EXPECT = bytes.fromhex('130904 1a 021406 0400'.replace(' ', ''))
+def hot_coffee(mod):
+    src = os.path.join(mod, 'data', 'script', 'main.scm')
+    d = bytearray(open(src, 'rb').read())
+    if bytes(d[HC_AT:HC_AT + len(HC_EXPECT)]) != HC_EXPECT:
+        say('   (not the v1.0 script this switch knows: no Hot Coffee switch)'); return
+    d[HC_AT + len(HC_EXPECT) - 1] = 1
+    out = os.path.join(mod + '-hot-coffee', 'data', 'script', 'main.scm'); os.makedirs(os.path.dirname(out), exist_ok=True)
+    open(out, 'wb').write(d); say('== the Hot Coffee switch:', mod + '-hot-coffee')
 
 def main():
     if len(sys.argv) != 5: sys.exit(__doc__)
