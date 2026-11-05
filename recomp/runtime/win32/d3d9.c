@@ -959,6 +959,7 @@ static void dev_present(Ctx *c, Dev9 *d)
     cursor_overlay(d); dsr_present(c, d->back->id);
 #ifdef GTA_EDITION
     gta_last3d = gta_frame3d; gta_frame3d = 0; runs_frame(); gta_frames++;
+    { void gta_frame_prefs(void); gta_frame_prefs(); }   /* gta3_mode.c: the frame rate choice */
 #endif
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
     if (fps) {

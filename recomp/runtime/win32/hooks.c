@@ -106,6 +106,9 @@ int rt_override(Ctx *c, uint32_t addr)
 #ifdef DF_EDITION
     if (df_override(c, addr)) return 1;
 #endif
+#ifdef GTA_EDITION
+    { int gta3_override(Ctx *, uint32_t); if (gta3_override(c, addr)) return 1; }   /* gta3_mode.c */
+#endif
     switch (addr) {
 #ifdef DS2_BROKEN_WORLD
     case 0x0181d35au:
