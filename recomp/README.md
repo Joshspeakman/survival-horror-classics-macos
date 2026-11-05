@@ -1,40 +1,42 @@
-# Recompiler: Delta Force and Delta Force 2 as native code
+# Recompiler: GTA III, Vice City and San Andreas as native code
 
-Static recompilation of the user's own Steam `Df.exe` / `Df2.exe` (and the NovaLogic DLLs in the game folder) into C,
-compiled for Apple Silicon or Linux x86-64. Nothing derived from the games is committed: `build_df.sh` regenerates
-everything locally from the user's files. Installing and playing: [README](../README.md); what was specific to these
-games and what was checked on each platform: [docs/DF-PORT.md](../docs/DF-PORT.md).
+Static recompilation of the user's own Steam executables (`gta3.exe`, `gta-vc.exe`, `gta_sa.exe` and the DLLs San
+Andreas loads) into C, compiled for Apple Silicon and linked with a Windows runtime that draws with Metal. Nothing
+derived from the games is committed: the build scripts regenerate everything locally from the user's files. Installing
+and playing: [README](../README.md); what is specific to these games: [docs/PORT.md](../docs/PORT.md).
 
 ```sh
-recomp/build_df.sh "/path/to/Delta Force 2"      # -> recomp/work/df2
+recomp/build_gta3.sh "<GTAIII folder>"                       # -> recomp/work/gta3
+recomp/build_gtavc.sh "<Grand Theft Auto Vice City folder>"  # -> recomp/work/gtavc
+recomp/build_gtasa.sh "<GTA San Andreas folder>"             # -> recomp/work/gtasa
 ```
 
-`build_df.sh` checks the executable's SHA-256 (Steam builds 19311 and 19312 only), undoes SteamStub 2.1 on a copy
-(`tools/steamstub21.py`), analyses and lifts it, does the same for `Netsock.dll`, `Cmprssh0.dll` (rebased to
-0x11000000) and, for Delta Force 2, `Hw_d3d.dll` (0x12000000), compiles everything in parallel and links it with the
-runtime (`tools/build_runtime.sh`: Metal on macOS, SDL/OpenGL on Linux). `DF_RELINK=1` keeps the lifted objects and
-rebuilds only the runtime and host.
+Each script checks the executable's SHA-256, undoes SteamStub 2.1 on a copy (`tools/steamstub21.py`), analyses and
+lifts it (`tools/analyze.py`, `tools/lift.py`; San Andreas' DLLs as further images at their own bases), compiles
+everything in parallel and links it with the runtime and host (`tools/build_runtime.sh`, `tools/build_app.sh`).
+`GTA3_RELINK=1` (GTA III) or `GTA_RELINK=1` (Vice City, San Andreas) keeps the lifted objects and rebuilds only the
+runtime and host.
 
 The recompiler (analysis, lifter, execution model, x87, indirect calls, test harnesses) was inherited from the
-Dungeon Siege II port and works unchanged here; the runtime still carries modules of the earlier ports (Direct3D 9,
-HLSL, Miles, DirectPlay 8) that these games don't load.
+Dungeon Siege II port; the runtime also carries modules of the earlier ports (DirectDraw, DirectPlay, HLSL effects,
+a Linux host and renderer) that these games don't use. The Linux paths are not built or tested for these games.
 
 ## Status
 
 | Part | State |
 |---|---|
-| Analysis and lifting (`tools/analyze.py`, `tools/lift.py`) | both executables and their DLLs; Watcom C (DF1) and MSVC 5 + MASM (DF2) specifics, self-modifying span renderers (`smc_scan`, code slots): see [docs/DF-PORT.md](../docs/DF-PORT.md) |
-| Game-specific hooks (`tools/lift.py` `DF_HOOKS` / `DF_OVERRIDES`, `runtime/win32/df_hooks.c`) | one table and one runtime module per feature: `df_net.c` (multiplayer, NovaWorld), `df_frame.c` (high frame rates), `df_res.c` (screen shapes; arrays moved with `DF_MOVED`), `df_hw.c` (DF1 Full Screen Hardware) |
-| DirectDraw and Direct3D 6 (`runtime/win32/ddraw_pal.c`, from the Diablo II port) on the renderer in `../src/renderer` | 8/16/32-bit surfaces, palettes, DF2's Direct3D driver, CPU-written depth buffers (`DSR_DEPTH_UPLOAD`) |
-| Sound | the games' streaming DirectSound buffer on Core Audio (SDL on Linux); DF2's MSACM ADPCM decoded in `df_imports.c` |
-| Network | `Netsock.dll` recompiled over `winsock.c` (UDP 3568); `p2p_dht.c` (the NovaWorld list), `portmap.c` (NAT-PMP, UPnP) |
-| Host (`host/main.m`, `host/linux.c`), launch window (`host/launcher.m`), sandbox | working on macOS (Apple Silicon) and Linux |
+| Analysis and lifting | all three executables and San Andreas' six DLLs; RenderWare's hand-written x87 (`_rwcseg`) |
+| Game-specific hooks (`tools/lift.py` `GTA3_HOOKS` / `GTAVC_HOOKS` / `GTASA_HOOKS`, `runtime/win32/gta3_mode.c`) | video modes, widescreen, frame rate, PS2 lighting, streaming: see [docs/PORT.md](../docs/PORT.md#game-specific-hooks) |
+| Direct3D 8 and 9 (`runtime/win32/d3d8.inc`, `d3d9.c`, `d3d9_shader.c`) on the renderer in `../src/renderer` | fixed-function lighting, game vertex shaders via MojoShader, MSAA, 16-bit look |
+| Sound | Miles (`miles.c`) and DirectSound (`dsound.c`) on Core Audio |
+| Input | DirectInput 8 keyboard, mouse and game controller (`dinput8.c`, host `main.m`) |
+| Host (`host/main.m`), launch window (`host/classics_launcher.m`), Mods window (`host/classics_mods.m`) | macOS (Apple Silicon) |
 
 Test mode: `DS_TEST=1` (background window, no mouse capture, no launch window), `W32_AUDIO_MUTE=1`,
-`DS_SCRIPT=...` or `DS_CMDFILE=<file>` (scripted input in the game's display-mode coordinates), `DS_RESOLUTION=WxH`.
-Logs: `W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and the SEH chain), `W32_REGLOG=1`,
-`W32_AUDIOLOG=1`, `W32_DDLOG=1`, `W32_NETLOG=1`. The Delta Force switches (`DF_*`) are listed in
-[docs/DF-PORT.md](../docs/DF-PORT.md#tools-and-switches). Crash and hang reports go to `<data>/CrashReports`.
+`DS_SCRIPT=...` or `DS_CMDFILE=<file>` (scripted input in the game's display-mode coordinates), `DS_SHOT_FINAL=1`.
+Logs: `W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1`, `W32_AUDIOLOG=1`, `D3D9_FRAMELOG=<frame>`,
+`D3D9_SHADERLOG=2`; more in [docs/PORT.md](../docs/PORT.md#checking). Crash and hang reports go to
+`<data>/CrashReports`.
 
 ## Execution model
 
@@ -56,15 +58,14 @@ Logs: `W32_TRACE=<file>` (every Windows call), `W32_SEHLOG=1` (exceptions and th
 
 The instruction-level harness (`tests/harness.py`, `tests/fuzz_insn.py`, `tests/test_slice.py`) comes from the
 Dungeon Siege 1 port, where every instruction form the game used was checked bit-for-bit against Unicorn.
-`tests/fuzz_sse.py` passes every MMX form both Delta Force games use (on arm64 too), and `tests/replay.py` runs one
-call through the original x86 and the recompiled code from a snapshot and compares them. The games themselves were
-checked against the originals under Proton: see [docs/DF-PORT.md](../docs/DF-PORT.md).
+`tests/fuzz_sse.py` checks MMX/SSE forms (on arm64 too), and `tests/replay.py` runs one call through the original
+x86 and the recompiled code from a snapshot and compares them. How the games were checked: [docs/PORT.md](../docs/PORT.md#checking).
 
 - **SEH:** access violations and RaiseException go through the game's handlers. First touches of reserved archive
   pages pass over C++ `catch(...)` frames (the game reads archives inside them); C++ catch continuations are not
   implemented, and the game has not needed them so far.
 - **Indirect calls** to addresses outside the function table stop the game with the address logged (add it as a
-  seed in `work/observed_targets.json` and rebuild).
+  seed in `work/<game>/observed_targets.json` and rebuild).
 - **x87 tag word** is not modelled; transcendentals use the host math library.
 
 ## A note from the author

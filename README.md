@@ -1,17 +1,50 @@
-# Grand Theft Auto III, native for Apple Silicon
+# GTA Classics: GTA III, Vice City and San Andreas, native for Apple Silicon
 
-Rockstar's **Grand Theft Auto III** (2001), statically recompiled from your own Steam copy into native arm64 code: no
-Wine, no Rosetta, no emulator. It uses the same recompiler and runtime as the author's Dungeon Siege, Delta Force,
-Diablo II, Fallout: New Vegas and Sims ports, with a Direct3D 8 layer on its Metal renderer.
+Rockstar's **Grand Theft Auto III** (2001), **Vice City** (2002) and **San Andreas** (2004), statically recompiled from
+your own Steam copies into native arm64 code and drawn with Metal: no Wine, no Rosetta, no emulator. One app,
+**GTA Classics**, with a card for each game. It uses the same recompiler and Windows runtime as the author's Dungeon
+Siege, Delta Force, Diablo II, Fallout: New Vegas and Sims ports.
 
-The Mac release on Steam (app 12230) is the Windows game inside TransGaming's Cider wrapper, a 32-bit Intel program
-that no longer runs on current macOS. This port takes the `gta3.exe` from inside it.
+| | |
+|---|---|
+| ![GTA III: Callahan Bridge](docs/screenshots/gta3.jpg) | ![Vice City, with the PS2's trails](docs/screenshots/vice-city.jpg) |
+| ![San Andreas: Jefferson, PS2 lighting](docs/screenshots/san-andreas.jpg) | ![The launch window](docs/screenshots/launcher.jpg) |
 
-Nothing from the games is in this repository. `./install.sh` imports your copies into `~/Games/<GTA3|GTAVC|GTASA>Native/game-files`
-(an APFS clone: no extra space), undoes the Steam wrapper on a copy in the build folder, recompiles that copy and
-installs one app, **GTA Classics**, with a card for each game (Vice City and San Andreas are being ported alongside).
+Nothing from the games is in this repository. `./install.sh` imports your copies (an APFS clone: no extra space),
+undoes the Steam wrapper on a copy in the build folder, recompiles that copy and installs the app. The Mac releases on
+Steam are the Windows games inside TransGaming's Cider wrapper, 32-bit Intel programs that no longer run on current
+macOS; this port takes the Windows executables from inside them.
+
+## What you get
+
+- **Widescreen, the right way.** The 3D view widens with the screen and keeps the 4:3 height (Hor+), in the display's
+  own shape (a MacBook's 16:10, below or around the notch) or a true 16:9. The HUD keeps its shape in the corners (or
+  centred in a 4:3 frame); menus and loading screens are shown 4:3. Each game's own Widescreen switch turns it on and
+  off.
+- **60 fps or the display's rate.** Timers, flashing, particles, spin damping and scripted gates and lifts are kept at
+  the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported).
+- **PS2 lighting.** San Andreas' PS2 colour filter (the warm Los Santos look) and its radiosity glow, Vice City's PS2
+  trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
+- **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
+  display's Retina pixels), 16-bit or 32-bit colour, antialiasing (2x or 4x MSAA), draw distance, frame limiter.
+- **Modern controllers** out of the box (Xbox, PlayStation, Switch Pro, any MFi pad), laid out as on the PS2.
+- **Sound**: radio, effects and cutscenes in all three (Miles for GTA III and Vice City, DirectSound for San Andreas).
+- **Mods**: a Mods window that browses GameBanana, installs file mods and orders them. For San Andreas, *Restore
+  from Disc* brings back what later releases removed (the cut radio songs, the 2005 signage and loading screens,
+  the original scripts) from your own 2005 DVD, with an opt-in Hot Coffee switch.
+
+See [docs/GRAPHICS.md](docs/GRAPHICS.md), [docs/CONTROLLERS.md](docs/CONTROLLERS.md) and [docs/MODS.md](docs/MODS.md)
+for the details, and [docs/PORT.md](docs/PORT.md) for how the port works.
 
 ## Installing
+
+Apple Silicon, macOS 13 or later, the Xcode command line tools (`xcode-select --install`) and the games:
+
+| Game | Where it comes from |
+|---|---|
+| GTA III | the Mac release on Steam (app 12230) |
+| Vice City | the **Windows** release on Steam (app 12110): open Steam's console (`steam://open/console`) and run `download_depot 12110 12111`. The Mac release's executable carries SecuROM with online activation, which this project does not touch. |
+| San Andreas | the Mac release on Steam (app 12250) |
 
 ```sh
 ./install.sh                          # every game found in Steam's folder (or imported earlier)
@@ -29,44 +62,56 @@ installs one app, **GTA Classics**, with a card for each game (Vice City and San
 | `--no-downloads` | no Steam store art: the launch window writes the titles |
 | `--in-place` | read the games where they were found instead of importing them |
 
-The games are the Mac Steam releases (GTA III 12230, Vice City 12240, San Andreas 12250), found as
-`<steam-dir>/<game>/<Game>.app/Contents/Resources/transgaming/c_drive/Program Files/Rockstar Games/<GTAIII | Grand
-Theft Auto Vice City | GTA San Andreas>`. With the game imported, the Steam copy can go. GTA III's radio and cutscene
-audio and San Andreas's `msvcr71.dll`/`msvcp71.dll` come from the wrapper's `c_drive` and are copied beside the game.
-A game whose port isn't in the checkout yet (no `recomp/build_<gta3|gtavc|gtasa>.sh`) is skipped. Saves and settings
-stay in each game's data folder (`drive_c/Users/player/Documents/<GTA3 | GTA Vice City | GTA San Andreas> User Files`).
+Each game builds for several minutes. The imported games live in `~/Games/<GTA3|GTAVC|GTASA>Native/game-files`
+(the Steam copies can go afterwards); saves and settings in that folder's `drive_c/Users/player/Documents/<GTA3 |
+GTA Vice City | GTA San Andreas> User Files`.
 
 ## The launch window
 
-GTA Classics opens on a card per game, with Steam's library art for the chosen one (a game that isn't installed is
-dimmed and says how to install it). ←/→ choose a game, ↑/↓ the tiles, Return or a double-click plays, Esc quits.
+![Graphics Options](docs/screenshots/launcher-graphics.jpg)
 
-- **Graphics Options** (for every game): Display (Full Screen / Window), Notch (Below It / Around It, on a display
-  with one), Resolution (Standard / Retina / As Set in Game: a 4:3 mode the height of the display), VSync.
-- **Saves** and **Game Files** open the chosen game's folders. **Updates** rebuilds every installed game from the
-  newest commit of the app's branch.
+←/→ choose a game, ↑/↓ the tiles, Return plays, Esc quits. The tiles:
 
-Play starts the game in the launcher's own process (`Contents/MacOS/GTA3`, `GTAVC` or `GTASA`), so macOS keeps Game
-Mode on. Its log is `~/Games/<X>Native/<GTA3|GTAVC|GTASA>.log`; the launcher's choices are kept in
-`~/Games/GTAClassics/launcher.plist` and the art in `~/Games/GTAClassics/art`.
+- **Graphics Options**, for every game: Display (Full Screen / Window), Notch (Below It / Around It), Resolution
+  (Standard / Retina / As Set in Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD
+  (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA), VSync, Frame Rate (60 / the display's rate / 30
+  Original) and Lighting (PS2 / PC as released). The choices are given to the game each time it starts; what you
+  change in a game's own Display Setup lasts for that session (choose *As Set in Game* to keep the game's resolution).
+- **Mods** opens the Mods window. **Saves** and **Game Files** open the chosen game's folders.
+- **Updates** rebuilds every installed game from the newest commit of the app's branch; saves and settings are kept.
+
+Play starts the game in the launcher's own process, so macOS keeps Game Mode on. Each game's log is
+`~/Games/<X>Native/<GTA3|GTAVC|GTASA>.log`; the launcher's choices are kept in `~/Games/GTAClassics/launcher.plist`.
 
 ## State
 
-**In development.** The game starts on Metal; see [docs/GTA3-PORT.md](docs/GTA3-PORT.md) for what works.
+**Playable, in testing.** All three games run from the main menu through the opening missions with sound, controllers
+and the options above; they were checked with the games' own screenshots at 2054×1290 and at Retina 4112×2658.
 
 | Part | State |
 |---|---|
-| Recompilation | `gta3.exe` 1.1 (Steam, 2010): 20,593 functions lifted, including RenderWare's `_rwcseg` |
-| Graphics | Direct3D 8 on the Direct3D 9 → Metal layer (fixed function) |
-| Sound | Miles Sound System on Core Audio (raw PCM effects, 3D samples, radio streams) |
-| Input | DirectInput 8 keyboard and mouse |
-| Movies | not yet (MPEG-1) |
+| Recompilation | `gta3.exe` 1.1 (20,593 functions, with RenderWare's hand-written `_rwcseg`), Vice City's `gta-vc.exe`, San Andreas' `gta_sa.exe` 3.0 with its C runtime, Ogg Vorbis and EAX DLLs (35,822 functions) |
+| Graphics | Direct3D 8 (GTA III, Vice City) and 9 (San Andreas) on Metal; the games' own vertex shaders translated to Metal (MojoShader) |
+| Sound | Miles Sound System and DirectSound on Core Audio |
+| Input | keyboard, mouse (DirectInput 8) and game controllers |
+| Frame rate | GTA III and Vice City hold 60 fps; San Andreas reaches about 43 fps at a 60 cap on an M1 Pro (the recompiled code is the limit) |
+| Movies | the intro logo movies are skipped (no MPEG-1 decoder) |
+| Mods | file mods; models and textures meant for the `.img` archives, and ASI/CLEO code mods, are not supported yet |
 
-## Building
+## Building by hand
 
 ```sh
-recomp/build_gta3.sh "<GTAIII folder>"     # -> recomp/work/gta3
+recomp/build_gta3.sh "<GTAIII folder>"                       # -> recomp/work/gta3
+recomp/build_gtavc.sh "<Grand Theft Auto Vice City folder>"  # -> recomp/work/gtavc
+recomp/build_gtasa.sh "<GTA San Andreas folder>"             # -> recomp/work/gtasa
 ```
 
-The GTAIII folder is `Grand Theft Auto 3.app/Contents/Resources/transgaming/c_drive/Program Files/Rockstar Games/GTAIII`
-inside the Steam app. Needs the Xcode command line tools and Python 3.
+`GTA3_RELINK=1` (GTA III) or `GTA_RELINK=1` (the others) rebuilds only the runtime and links again. See
+[recomp/README.md](recomp/README.md) for the recompiler and the test switches.
+
+## Credits
+
+GTA III, Vice City and San Andreas © Rockstar Games / Take-Two Interactive. This project contains no part of them.
+The fixes for wide screens and high frame rates follow ThirteenAG's **FusionFix** (MIT), whose patterns found the same
+code in these builds; the PS2 colour filter, radiosity and light clamping follow aap's **SkyGfx** descriptions of the
+PS2 (reimplemented: SkyGfx has no licence, so no code is taken from it). Full notices: [NOTICE.md](NOTICE.md).
