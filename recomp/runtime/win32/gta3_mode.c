@@ -255,9 +255,24 @@ static float script_move_scale(uint32_t script, uint32_t handle)
     last[k].at = hf.game_ms; return scale;
 }
 #endif
+static int hf_known(uint32_t addr)   /* one of these hooks (taken, doing nothing, at 30 fps: not left to rt_hook's other cases) */
+{
+    if (hf_in(hf_ms, sizeof hf_ms / sizeof *hf_ms, addr)) return 1;
+    for (unsigned k = 0; k < sizeof hf_damp / sizeof *hf_damp; k++) if (addr == hf_damp[k]) return 1;
+    if (addr == SCRIPT_ROTATE || addr == SCRIPT_SLIDE) return 1;
+#ifdef HIGH_FPS_SA
+    if (hf_in(hf_ms_nc, sizeof hf_ms_nc / sizeof *hf_ms_nc, addr)) return 1;
+    for (unsigned k = 0; k < sizeof hf_swap / sizeof *hf_swap; k++) if (addr == hf_swap[k][0] || addr == hf_swap[k][1]) return 1;
+    for (unsigned k = 0; k < sizeof hf_movb / sizeof *hf_movb; k++) if (addr == hf_movb[k][0]) return 1;
+#else
+    for (unsigned k = 0; k < sizeof hf_flash / sizeof *hf_flash; k++) if (addr == hf_flash[k]) return 1;
+    if (addr == EVERY_16 || addr == EVERY_32 || addr == PARTICLES_RET || addr == RADIO_NAME || addr == CLOUDS) return 1;
+#endif
+    return 0;
+}
 static int hf_hook(Ctx *c, uint32_t addr)
 {
-    if (!hf_on()) return 0;
+    if (!hf_on()) return hf_known(addr);
     if (hf_in(hf_ms, sizeof hf_ms / sizeof *hf_ms, addr)) { hf_update(); ST(0) = hf.whole_ms; return 1; }
 #ifdef HIGH_FPS_SA
     if (hf_in(hf_ms_nc, sizeof hf_ms_nc / sizeof *hf_ms_nc, addr)) { hf_update(); ST(0) = hf.whole_ms_nc; return 1; }
@@ -297,7 +312,8 @@ int gta3_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
 #else
 int gta3_override(Ctx *c, uint32_t addr)
 {
-    if (addr != PARTICLES || !hf_on()) return 0;
+    if (addr != PARTICLES || !hf_on() || rt_r32(G_MEM, c->esp) != PARTICLES_RET) return 0;   /* only CGame::Process's call,
+                                                                                         whose return puts the step back */
     hf_update(); float step = rdf(TIME_STEP); hf.particles += step;
     if (step >= 50.0f / 30 || hf.particles >= 50.0f / 30) { hf.saved = step; hf.restore = 1; wrf(TIME_STEP, hf.particles); hf.particles = 0; return 0; }
     c->esp += 4; return 1;   /* not yet: returned at once */
