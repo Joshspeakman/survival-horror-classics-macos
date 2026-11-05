@@ -10,7 +10,11 @@
  *   DS_DISPLAY=window|fullscreen, DS_NOTCH=around|below   main.m (the game's window)
  *   GTA_MODE=WxH                            runtime/win32/gta3_mode.c, d3d9.c (the video mode; "" = as set in the game)
  *   DSR_VSYNC=1|0                           main.m (the Metal layer)
- *   GTA_WIDESCREEN=1|0, GTA_WIDE_HUD=anchor|center   gta3_mode.c, d3d9.c (Hor+ 3D view, the HUD in its 4:3 shape)
+ *   GTA_WIDESCREEN=1|0, GTA_WIDE_HUD=anchor|center   gta3_mode.c, d3d9.c (Hor+ 3D view, the HUD in its 4:3 shape; the
+ *                                           games' own Widescreen setting follows and changes it)
+ *   GTA_MODES=WxH,...                       d3d9.c (the display's shapes in the games' Resolution lists)
+ *   GTA_DEPTH=32|16                         gta3_mode.c (the mode's colour depth; 16: the renderer's 16-bit look)
+ *   GTA_MSAA=<samples>                      d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' Antialiasing)
  *   GTA_FPS=<n>                             gta3_mode.c (the frame limiter; above 30 the high-FPS fixes)
  *   GTA_LIGHTING=ps2|pc                     renderer.m, gta3_mode.c, d3d9.c (PS2 lighting and colour filter)
  *   DS_LOG_FILE=<data>/<BIN>.log            the game's log (stderr goes there too; over 5 MB it moves to <BIN>.old.log)
@@ -23,6 +27,7 @@
  * card, also without a shot; GTAC_LAUNCHER_OPEN=1 the Graphics Options panel open, GTAC_LAUNCHER_HOVER=<code> an item lit);
  * GTAC_LAUNCHER_PLAY=1 presses Play at once; GTAC_LAUNCHER_DRY=1 prints what Play would run instead of running it. */
 #import <Cocoa/Cocoa.h>
+#import <Metal/Metal.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -100,8 +105,11 @@ enum { W = 960, H = 660 };
 }
 - (NSRect)playRect { return NSMakeRect(W - 60 - 200, H - 66, 200, 46); }
 - (NSRect)quitRect { return NSMakeRect(W - 60 - 200 - 20 - 150, H - 66, 150, 46); }
-- (NSRect)panelRect { CGFloat h = 86 + 60 * (CGFloat)self.rows.count; return NSMakeRect(130, MAX(40, 486 - h), 700, h); }
-- (NSRect)rowRect:(NSInteger)k { NSRect p = self.panelRect; return NSMakeRect(p.origin.x + 30, p.origin.y + 72 + 60 * k, p.size.width - 60, 52); }
+/* rows of 60 points with their notes under them; more than seven: rows of 40, the note of the row in focus at the foot */
+- (BOOL)compact { return self.rows.count > 7; }
+- (CGFloat)pitch { return self.compact ? 40 : 60; }
+- (NSRect)panelRect { CGFloat h = 86 + self.pitch * (CGFloat)self.rows.count + (self.compact ? 34 : 0); return NSMakeRect(130, MAX(30, 486 - h), 700, h); }
+- (NSRect)rowRect:(NSInteger)k { NSRect p = self.panelRect; return NSMakeRect(p.origin.x + 30, p.origin.y + 70 + self.pitch * k, p.size.width - 60, self.pitch - 8); }
 - (NSRect)rowArrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 3, 30, 30); }
 - (NSRect)rowValue:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 4, 262, 28); }
 - (void)openPanel { self.open = YES; self.rowFocus = 0; self.hover = HIT_NONE; self.needsDisplay = YES; }
@@ -291,8 +299,15 @@ static void stroke_rect(NSRect r, NSColor *c, CGFloat w) { [c setStroke]; NSBezi
         [self drawArrow:[self rowArrow:k right:NO] right:NO lit:self.hover == HIT_ROW + 10 * k];
         [self drawArrow:[self rowArrow:k right:YES] right:YES lit:self.hover == HIT_ROW + 10 * k + 2];
         draw_text(c[@"label"], body(18, YES), self.hover == HIT_ROW + 10 * k + 1 ? NSColor.whiteColor : text_c(), [self rowValue:k], NSTextAlignmentCenter, sh, 0.3);
-        draw_text(c[@"note"] ?: @"", body(12, NO), dim(), NSMakeRect(r.origin.x + 6, r.origin.y + 32, r.size.width - 12, 18), NSTextAlignmentRight, nil, 0);
+        if (!self.compact) draw_text(c[@"note"] ?: @"", body(12, NO), dim(), NSMakeRect(r.origin.x + 6, r.origin.y + 32, r.size.width - 12, 18), NSTextAlignmentRight, nil, 0);
         if (k + 1 < (NSInteger)self.rows.count) { [[text_c() colorWithAlphaComponent:0.1] setFill]; fill_over(NSMakeRect(r.origin.x, NSMaxY(r) + 4, r.size.width, 1)); }
+    }
+    if (self.compact) {   /* the note of the row the pointer is on, else the one in focus */
+        NSInteger k = self.hover >= HIT_ROW && self.hover < HIT_ROW + 10 * (NSInteger)self.rows.count ? (self.hover - HIT_ROW) / 10 : self.rowFocus;
+        if (k >= 0 && k < (NSInteger)self.rows.count) {
+            GCTile *t = self.rows[k];
+            draw_text(t.choices[t.index][@"note"] ?: @"", body(13, NO), dim(), NSMakeRect(p.origin.x + 30, NSMaxY(p) - 40, p.size.width - 60, 20), NSTextAlignmentCenter, nil, 0);
+        }
     }
 }
 - (NSString *)cardHint:(NSInteger)i
@@ -479,24 +494,45 @@ static NSString *val(GCTile *t) { return t.choices[t.index][@"value"]; }
  * if so) or the window, in points or (Retina) pixels; "" = as set in the game */
 /* the video mode: the display's height (less the notch's band below it, or main.m's 4:3 window), in points or pixels;
  * 4:3 wide, or with Widescreen the display's own shape */
+/* the picture's shape for the Widescreen choice: the display's own (the area the picture has), 16:9, or 4:3 */
+static double shape_for(NSString *wide, double area)
+{ return [wide isEqualToString:@"off"] ? 4.0 / 3 : [wide isEqualToString:@"16:9"] ? 16.0 / 9 : area; }
+static NSString *wh(double w, double h) { return [NSString stringWithFormat:@"%dx%d", (int)lround(w) & ~1, (int)lround(h) & ~1]; }
+static NSString *fit(double aw, double ah, double shape)   /* the largest size of this shape in aw x ah */
+{ return aw / ah > shape ? wh(floor(ah) * shape, floor(ah)) : wh(floor(aw), floor(aw) / shape); }
 static NSString *mode_for(NSString *display, NSString *notch, NSString *res, NSString *wide)
 {
     if ([res isEqualToString:@"game"]) return @"";
-    NSScreen *s = NSScreen.mainScreen; CGFloat h = s.frame.size.height, w = s.frame.size.width;
+    NSScreen *s = NSScreen.mainScreen; CGFloat top = 0; if (@available(macOS 12.0, *)) top = s.safeAreaInsets.top;
     BOOL win = [display isEqualToString:@"window"];
-    if (win) h = floor(s.visibleFrame.size.height * 0.78) - 28;   /* main.m's window, less its title bar */
-    else if (![notch isEqualToString:@"around"]) { if (@available(macOS 12.0, *)) h -= s.safeAreaInsets.top; }
-    double aspect = win || [wide isEqualToString:@"off"] || h <= 0 ? 4.0 / 3 : w / h;
-    if ([res isEqualToString:@"retina"]) h *= s.backingScaleFactor;
-    int ih = (int)floor(h) & ~1, iw = (int)lround(ih * aspect) & ~1;
-    if (ih < 480) { ih = 480; iw = 640; }
-    return [NSString stringWithFormat:@"%dx%d", iw, ih];
+    CGFloat band = !win && ![notch isEqualToString:@"around"] ? top : 0;
+    double shape = shape_for(wide, s.frame.size.width / (s.frame.size.height - band));   /* the area the picture has */
+    CGFloat w = s.frame.size.width, h = s.frame.size.height - band;
+    if (win) { h = floor(s.visibleFrame.size.height * 0.78) - 28; w = s.visibleFrame.size.width * 0.9; }   /* main.m's window */
+    if ([res isEqualToString:@"retina"]) { w *= s.backingScaleFactor; h *= s.backingScaleFactor; }
+    if (h < 480) return @"640x480";
+    return fit(w, h, shape);
+}
+/* every shape of this display for the games' own Resolution lists: its whole height and below the notch, the display's
+ * shape, 16:9, 16:10 and 4:3, in points and (Retina) pixels */
+static NSString *modes_for_display(void)
+{
+    NSScreen *s = NSScreen.mainScreen; NSMutableOrderedSet *m = [NSMutableOrderedSet orderedSet];
+    CGFloat top = 0; if (@available(macOS 12.0, *)) top = s.safeAreaInsets.top;
+    for (int px = 0; px < (s.backingScaleFactor > 1 ? 2 : 1); px++) {
+        double sc = px ? s.backingScaleFactor : 1, W = s.frame.size.width * sc;
+        for (int below = 0; below < (top > 0 ? 2 : 1); below++) {
+            double Hh = (s.frame.size.height - (below ? top : 0)) * sc;
+            for (NSNumber *a in @[@(W / Hh), @(16.0 / 9), @(16.0 / 10), @(4.0 / 3)]) [m addObject:fit(W, Hh, a.doubleValue)];
+        }
+    }
+    return [m.array componentsJoinedByString:@","];
 }
 static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new]; a.messageText = msg; a.informativeText = info; return a; }
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *fps, *light, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *updates;
 @property NSString *home, *plistPath;
 @end
 
@@ -557,14 +593,38 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                       @{@"value": @"0", @"label": @"Off", @"short": @"No VSync", @"note": @"Frames shown as soon as they're drawn: lowest latency, may tear"}];
     vsync.index = index_of(vsync.choices, saved[@"vsync"], 0);
     GCTile *wide = self.wide = [GCTile new];
+    double shapeFull = scr.frame.size.width / (scr.frame.size.height - notchH);
+    NSString *shapeName = fabs(shapeFull - 16.0 / 10) < 0.02 ? @"16:10" : fabs(shapeFull - 16.0 / 9) < 0.02 ? @"16:9" : [NSString stringWithFormat:@"%.2f:1", shapeFull];
     wide.title = @"Widescreen";
-    wide.choices = @[@{@"value": @"on", @"label": @"On", @"short": @"Widescreen", @"note": @"A wider view on a wide screen (the 4:3 height kept), the HUD at the corners in its own shape"},
-                     @{@"value": @"center", @"label": @"HUD Centred", @"short": @"Widescreen", @"note": @"The wider view, with the HUD in a 4:3 frame in the middle, as on a 4:3 screen"},
-                     @{@"value": @"off", @"label": @"Off", @"short": @"Stretched", @"note": @"As the games were made: the 4:3 picture and HUD stretched across the screen"}];
-    wide.index = index_of(wide.choices, saved[@"wide"], 0);
+    wide.choices = @[@{@"value": @"on", @"label": [NSString stringWithFormat:@"Display (%@)", shapeName], @"short": @"Widescreen",
+                       @"note": @"The display's own shape, filled: a wider view (the 4:3 height kept), the HUD in the corners"},
+                     @{@"value": @"16:9", @"label": @"16:9", @"short": @"16:9",
+                       @"note": fabs(shapeFull - 16.0 / 9) < 0.02 ? @"A true 16:9 picture: a wider view, the HUD in the corners" : @"A true 16:9 picture (thin black bars above and below on this display)"},
+                     @{@"value": @"off", @"label": @"Off (4:3)", @"short": @"4:3", @"note": @"As the games were made: 4:3, black bars at the sides"}];
+    NSString *savedWide = saved[@"wide"]; if ([savedWide isEqual:@"center"]) savedWide = @"on";   /* (an older choice: centred HUD) */
+    wide.index = index_of(wide.choices, savedWide, 0);
+    GCTile *hud = self.hud = [GCTile new];
+    hud.title = @"HUD";
+    hud.choices = @[@{@"value": @"anchor", @"label": @"Corners", @"note": @"Radar, health, money and stars at the screen's corners, in their own shape"},
+                    @{@"value": @"center", @"label": @"Centred 4:3", @"note": @"The HUD in a 4:3 frame in the middle, as on a 4:3 screen"}];
+    hud.index = index_of(hud.choices, saved[@"hud"] ?: ([saved[@"wide"] isEqual:@"center"] ? @"center" : @"anchor"), 0);
+    GCTile *depth = self.depth = [GCTile new];
+    depth.title = @"Colour";
+    depth.choices = @[@{@"value": @"32", @"label": @"32-Bit", @"note": @"Full colour"},
+                      @{@"value": @"16", @"label": @"16-Bit", @"note": @"As a 16-bit screen showed it: fewer colours, dithered (the games' x 16 modes)"}];
+    depth.index = index_of(depth.choices, saved[@"depth"], 0);
+    GCTile *aa = self.aa = [GCTile new];
+    aa.title = @"Anti-Aliasing";
+    {   NSMutableArray *c = [NSMutableArray arrayWithObject:@{@"value": @"1", @"label": @"Off", @"note": @"Edges as drawn"}];
+        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+        for (int n = 2; n <= 8; n *= 2) if ([dev supportsTextureSampleCount:(NSUInteger)n])
+            [c addObject:@{@"value": [NSString stringWithFormat:@"%d", n], @"label": [NSString stringWithFormat:@"%dx MSAA", n],
+                           @"note": [NSString stringWithFormat:@"%d samples a pixel: smooth edges (San Andreas: also its own Display Setup)", n]}];
+        aa.choices = c; }
+    aa.index = index_of(aa.choices, saved[@"aa"], aa.choices.count > 2 ? 2 : aa.choices.count - 1);
     GCTile *fps = self.fps = [GCTile new];
     fps.title = @"Frame Rate";
-    fps.choices = @[@{@"value": @"60", @"label": @"60", @"short": @"60 fps", @"note": @"Twice the original rate; timers, flashing, particles and script moves kept at 30's pace"},
+    fps.choices = @[@{@"value": @"60", @"label": @"60", @"short": @"60 fps", @"note": @"Twice the original rate, timers and effects at 30's pace (the game's Frame Limiter off: the display's rate)"},
                     @{@"value": [NSString stringWithFormat:@"%ld", (long)hz], @"label": [NSString stringWithFormat:@"%ld (Display)", (long)hz], @"short": [NSString stringWithFormat:@"%ld fps", (long)hz],
                       @"note": @"As fast as the display shows: smoothest (San Andreas' physics have quirks this high)"},
                     @{@"value": @"30", @"label": @"30 (Original)", @"short": @"30 fps", @"note": @"The games' own frame limiter, as released"}];
@@ -575,13 +635,13 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
                       @{@"value": @"pc", @"label": @"PC (As Released)", @"short": @"PC light", @"note": @"The PC versions' own lighting and colour filter (brighter, flatter)"}];
     light.index = index_of(light.choices, saved[@"light"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, vsync, wide, fps, light] : @[display, resTile, vsync, wide, fps, light];
+    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light];
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": notchH > 0 ? @"Display, notch, resolution, VSync, widescreen, frame rate and lighting, for every game" : @"Display, resolution, VSync, widescreen, frame rate and lighting, for every game"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate and lighting, for every game"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
-        for (GCTile *t in @[display, resTile, fps, wide]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
+        for (GCTile *t in @[display, resTile, wide, fps]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
         return [a componentsJoinedByString:@"  ·  "];
     };
     __weak GCLaunchView *wv = v; gfx.activate = ^{ [wv openPanel]; };
@@ -693,7 +753,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"fps": val(self.fps), @"light": val(self.light)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"light": val(self.light)};
 }
 - (void)save
 {
@@ -722,7 +782,9 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                           @"GTA_MODE": mode_for(c[@"display"], c[@"notch"], c[@"resolution"], c[@"wide"]), @"DS_LOG_FILE": log,
                           @"GTA_MODS": gcm_env(g.data),    /* the Mods window's enabled mods (runtime/win32/files.c) */
                           /* gta3_mode.c (the 3D view), d3d9.c (the HUD) */
-                          @"GTA_WIDESCREEN": [c[@"wide"] isEqual:@"off"] ? @"0" : @"1", @"GTA_WIDE_HUD": [c[@"wide"] isEqual:@"center"] ? @"center" : @"anchor",
+                          @"GTA_WIDESCREEN": [c[@"wide"] isEqual:@"off"] ? @"0" : @"1", @"GTA_WIDE_HUD": c[@"hud"],
+                          @"GTA_MODES": modes_for_display(), @"GTA_DEPTH": c[@"depth"],   /* d3d9.c (the games' Resolution lists), gta3_mode.c */
+                          @"GTA_MSAA": c[@"aa"],   /* d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' own setting) */
                           @"GTA_FPS": c[@"fps"],   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
                           @"GTA_LIGHTING": c[@"light"]};   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];

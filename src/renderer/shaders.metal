@@ -238,9 +238,17 @@ fragment ZUOut fs_zupload(POut in [[stage_in]], texture2d<float> z [[texture(0)]
 {
     ZUOut o; o.depth = z.read(uint2(in.pos.xy)).r; return o;
 }
-fragment float4 fs_present(POut in [[stage_in]], texture2d<float> src [[texture(0)]], texture1d<float> lut [[texture(1)]], sampler s [[sampler(0)]])
+constant float bayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+fragment float4 fs_present(POut in [[stage_in]], texture2d<float> src [[texture(0)]], texture1d<float> lut [[texture(1)]], sampler s [[sampler(0)]],
+                           constant uint4 &pm [[buffer(0)]])
 {
     float3 c = src.sample(s, in.uv).rgb;
+    if (pm.x) {   // a 16-bit screen (R5G6B5): each colour to 5, 6, 5 bits with a 4x4 ordered dither in the game's pixels
+        uint2 t = uint2(in.uv * float2(pm.yz));
+        float d = (bayer4[(t.y & 3) * 4 + (t.x & 3)] + 0.5) / 16.0 - 0.5;
+        const float3 q = float3(31, 63, 31);
+        c = clamp(floor(saturate(c) * q + 0.5 + d), 0.0, q) / q;
+    }
     uint3 i = uint3(saturate(c) * 255.0 + 0.5);
     return float4(lut.read(i.r).r, lut.read(i.g).g, lut.read(i.b).b, 1);
 }

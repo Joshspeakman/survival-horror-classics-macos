@@ -21,8 +21,10 @@ static uint32_t pp9_from8(uint32_t pp8)                 /* D3DPRESENT_PARAMETERS
     static uint32_t buf; if (!buf) buf = gmem(64);
     uint32_t v8[13], v9[14]; memcpy(v8, GP(pp8), 52);
     v9[0] = v8[0]; v9[1] = v8[1]; v9[2] = v8[2]; v9[3] = v8[3]; v9[4] = v8[4]; v9[5] = 0;   /* MultiSampleQuality */
-    if (v9[2] == 23) v9[2] = 22;                        /* a 16-bit mode (R5G6B5, listed for Vice City's 640x480x16 search): drawn in 32 */
+    /* a 16-bit mode (R5G6B5, also what Vice City looks for without a saved mode): d3d9.c draws it in 32 with a 16-bit look */
     for (int k = 5; k < 13; k++) v9[k + 1] = v8[k];      /* SwapEffect, hDeviceWindow, Windowed, EnableAutoDepthStencil, AutoDepthStencilFormat, Flags, refresh, interval */
+    /* GTA III and Vice City have no antialiasing setting: the launcher's (GTA_MSAA=<samples>) multisamples the screen */
+    { const char *e = getenv("GTA_MSAA"); if (!v9[4] && e && atoi(e) >= 2) v9[4] = (uint32_t)atoi(e); }
     memcpy(GP(buf), v9, 56); return buf;
 }
 static void surf_desc8(Surf9 *s, uint32_t out)          /* D3DSURFACE_DESC (Direct3D 8): Format, Type, Usage, Pool, Size, MultiSampleType, Width, Height */
