@@ -387,12 +387,21 @@ static uint32_t target_bf(DSRRenderer *r, uint32_t b)
     Surf *t = surf(r, r->rt); if (!t || t->fmt != 2) return b;
     return b == 7 ? 2 : b == 8 ? 1 : b;                     /* DESTALPHA -> ONE, INVDESTALPHA -> ZERO */
 }
+/* D3DRS_BLENDOP (171): 1 add (the default), 2 subtract, 3 reverse subtract, 4 min, 5 max (San Andreas' radiosity
+ * subtracts the time cycle's limit from the bright parts of the frame) */
+static uint32_t blendop(DSRRenderer *r) { uint32_t o = r->rs[171]; return o >= 1 && o <= 5 ? o : 1; }
+static MTLBlendOperation bop(DSRRenderer *r)
+{
+    switch (blendop(r)) { case 2: return MTLBlendOperationSubtract; case 3: return MTLBlendOperationReverseSubtract;
+                          case 4: return MTLBlendOperationMin; case 5: return MTLBlendOperationMax; default: return MTLBlendOperationAdd; }
+}
 static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int has_depth)
 {
     uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? target_bf(r, r->rs[19]) : 2, db = blend ? target_bf(r, r->rs[20]) : 1;
     uint32_t atest = r->rs[15] ? 1 : 0;                                                       // D3DRS_ALPHATESTENABLE
     uint32_t cw = r->rs[168] & 15;                                                            // D3DRS_COLORWRITEENABLE (R1 G2 B4 A8)
     uint64_t key = ((uint64_t)fvf << 32) | (uint64_t)cw << 20 | (blend << 16) | (sb << 8) | (db << 4) | atest << 2 | (uint64_t)has_depth << 1 | 1;   // never 0
+    if (blend) key |= (uint64_t)(blendop(r) - 1) << 24;
     int nsm = rt_samples(r); if (nsm > 1) key ^= (uint64_t)nsm * 0x9e3779b97f4a7c15ull;                             // multisampled targets: their own
     if (key == r->pso_k[r->pso_last]) return r->pso_v[r->pso_last];                                         // same as the last draw
     uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
@@ -407,7 +416,8 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     if (has_depth) d.depthAttachmentPixelFormat = d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
     d.colorAttachments[0].writeMask = (cw & 1 ? MTLColorWriteMaskRed : 0) | (cw & 2 ? MTLColorWriteMaskGreen : 0) | (cw & 4 ? MTLColorWriteMaskBlue : 0) | (cw & 8 ? MTLColorWriteMaskAlpha : 0);
     if (blend) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].sourceAlphaBlendFactor = bf(sb);
-                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db); }
+                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db);
+                 d.colorAttachments[0].rgbBlendOperation = d.colorAttachments[0].alphaBlendOperation = bop(r); }
     MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor]; uint32_t off = 0;
     int rhw = (fvf & 0xe) == 4;
     v.attributes[0].format = rhw ? MTLVertexFormatFloat4 : MTLVertexFormatFloat3; v.attributes[0].offset = 0; v.attributes[0].bufferIndex = 0; off = rhw ? 16 : 12;
@@ -635,6 +645,7 @@ static id<MTLRenderPipelineState> prog_pipeline(DSRRenderer *r, uint32_t mask, i
 {
     uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? target_bf(r, r->rs[19]) : 2, db = blend ? target_bf(r, r->rs[20]) : 1, cw = r->rs[168] & 15;
     uint64_t key = (uint64_t)r->cur_prog << 48 | (uint64_t)mask << 32 | cw << 20 | blend << 16 | sb << 8 | db << 4 | (uint64_t)has_depth << 1 | 1;
+    if (blend) key |= (uint64_t)(blendop(r) - 1) << 24;
     int nsm = rt_samples(r); if (nsm > 1) key ^= (uint64_t)nsm * 0x9e3779b97f4a7c15ull;
     uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 55);
     while (r->ppso_k[h] && r->ppso_k[h] != key) h = (h + 1) & 511;
@@ -645,7 +656,8 @@ static id<MTLRenderPipelineState> prog_pipeline(DSRRenderer *r, uint32_t mask, i
     d.colorAttachments[0].writeMask = (cw & 1 ? MTLColorWriteMaskRed : 0) | (cw & 2 ? MTLColorWriteMaskGreen : 0) | (cw & 4 ? MTLColorWriteMaskBlue : 0) | (cw & 8 ? MTLColorWriteMaskAlpha : 0);
     if (has_depth) d.depthAttachmentPixelFormat = d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
     if (blend) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].sourceAlphaBlendFactor = bf(sb);
-                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db); }
+                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db);
+                 d.colorAttachments[0].rgbBlendOperation = d.colorAttachments[0].alphaBlendOperation = bop(r); }
     MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor]; int col = 0, ns = __builtin_popcount(mask);
     for (int sl = 0; sl < 16; sl++) {
         v.attributes[sl].format = MTLVertexFormatFloat4;
@@ -709,6 +721,7 @@ static id<MTLRenderPipelineState> mprog_pipeline(DSRRenderer *r, uint32_t mask, 
     typeof(r->mp[0]) *m = &r->mp[r->cur_mp - 1];
     uint32_t blend = r->rs[27] ? 1 : 0, sb = blend ? target_bf(r, r->rs[19]) : 2, db = blend ? target_bf(r, r->rs[20]) : 1, cw = r->rs[168] & 15;
     uint64_t key = (uint64_t)r->cur_mp << 44 | (uint64_t)mask << 28 | (uint64_t)cw << 20 | blend << 16 | sb << 10 | db << 4 | (uint64_t)atest << 2 | (uint64_t)has_depth << 1 | 1;
+    if (blend) key |= (uint64_t)(blendop(r) - 1) << 24;
     int nsm = rt_samples(r); if (nsm > 1) key ^= (uint64_t)nsm * 0x9e3779b97f4a7c15ull;
     uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
     while (r->mpso_k[h] && r->mpso_k[h] != key) h = (h + 1) & 1023;
@@ -722,7 +735,8 @@ static id<MTLRenderPipelineState> mprog_pipeline(DSRRenderer *r, uint32_t mask, 
     d.colorAttachments[0].writeMask = (cw & 1 ? MTLColorWriteMaskRed : 0) | (cw & 2 ? MTLColorWriteMaskGreen : 0) | (cw & 4 ? MTLColorWriteMaskBlue : 0) | (cw & 8 ? MTLColorWriteMaskAlpha : 0);
     if (has_depth) d.depthAttachmentPixelFormat = d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
     if (blend) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].sourceAlphaBlendFactor = bf(sb);
-                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db); }
+                 d.colorAttachments[0].destinationRGBBlendFactor = d.colorAttachments[0].destinationAlphaBlendFactor = bf(db);
+                 d.colorAttachments[0].rgbBlendOperation = d.colorAttachments[0].alphaBlendOperation = bop(r); }
     /* each input register from its slot in the draw's float4 vertex (slots in mask order), or zeros */
     MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor]; int zeros = 0, ns = __builtin_popcount(mask);
     for (uint32_t k = 0; k < m->nattr; k++) {

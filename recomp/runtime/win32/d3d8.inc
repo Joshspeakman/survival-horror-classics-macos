@@ -98,8 +98,22 @@ M(d8_CopyRects, 6)                                     /* (src, src rects, count
       if (n > 0 && s && t) { n--; int32_t r[4] = {0, 0, (int32_t)s->w, (int32_t)s->h}; if (ARG(2)) memcpy(r, GP(ARG(2)), 16);
         fprintf(stderr, "d3d8: CopyRects %u (%ux%u fmt %u usage %#x pool %u%s) -> %u (%ux%u fmt %u usage %#x pool %u, texture %d), %u rects, first %d,%d-%d,%d\n",
                 s->id, s->w, s->h, s->fmt, s->usage, s->pool, s == the_dev->back ? ", back buffer" : "", t->id, t->w, t->h, t->fmt, t->usage, t->pool, t->tex != 0,
-                ARG(2) ? ARG(3) : 1, r[0], r[1], r[2], r[3]); } }
+                ARG(2) ? ARG(3) : 1, r[0], r[1], r[2], r[3]);
+        if (n > 36) { fprintf(stderr, "d3d8:   from"); for (uint32_t k = 0; k < 96; k++) { uint32_t v = rt_r32(G_MEM, c->esp + 4 * k); if (v > 0x401000u && v < 0x700000u) fprintf(stderr, " %08x", v); } fprintf(stderr, "\n"); } } }
     if (!s || !t || s->fmt != t->fmt) RET(D3DERR_INVALIDCALL, 6);
+    /* a picture the GPU drew, into a surface it has (GTA III's and Vice City's Trails copy the back buffer into a
+     * texture every frame): copied there, not read back and uploaded again */
+    if (s->gpu_newer && t->pool != 2 && t->pool != 3 && !d9_fmt_block(s->fmt)) {
+        uint32_t n = ARG(2) ? ARG(3) : 1;
+        for (uint32_t k = 0; k < n; k++) {
+            int32_t r[4] = {0, 0, (int32_t)s->w, (int32_t)s->h}; if (ARG(2)) memcpy(r, GP(ARG(2) + 16 * k), 16);
+            int32_t px = r[0], py = r[1]; if (ARG(5)) { px = (int32_t)rt_r32(G_MEM, ARG(5) + 8 * k); py = (int32_t)rt_r32(G_MEM, ARG(5) + 8 * k + 4); }
+            int32_t w = r[2] - r[0], h = r[3] - r[1]; if (w <= 0 || h <= 0) continue;
+            uint32_t *p = cmd_begin(DSR_BLT, 48); p[0] = t->id; p[1] = (uint32_t)px; p[2] = (uint32_t)py; p[3] = (uint32_t)(px + w); p[4] = (uint32_t)(py + h);
+            p[5] = s->id; memcpy(p + 6, r, 16); p[10] = 0; p[11] = 0; cmd_end();
+        }
+        t->gpu_newer = 1; RET(D3D_OK, 6);
+    }
     if (s->gpu_newer) surf_readback(s);
     uint32_t n = ARG(2) ? ARG(3) : 1, bpp = (uint32_t)d9_fmt_bytes(s->fmt);
     if (d9_fmt_block(s->fmt)) { memcpy(G_MEM + t->mem, G_MEM + s->mem, s->size < t->size ? s->size : t->size); surf_upload(t, 0, t->h); RET(D3D_OK, 6); }
