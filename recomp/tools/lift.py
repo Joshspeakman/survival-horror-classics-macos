@@ -337,6 +337,8 @@ GTAVC_OVERRIDES = {0x00561d00: 'CParticle::Update: 30 times a second at high fra
 GTASA_HOOKS = {
     0x0074daec: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0074d3be: 'GetVideoModeList: every shape of mode listed, not only 4:3, 5:4, 5:3, 16:10 and 16:9 (gta3_mode.c)',
+    0x0075072d: 'the frame limiter\'s test: the time since the last frame by a steady clock (gta3_mode.c sa_limiter)',
+    0x00750744: 'the frame limiter: a frame starts (gta3_mode.c sa_limiter)',
     0x00407a9e: 'CdStreamSync: the wait for a streaming read, without the lost-release race (gta3_mode.c)',
     0x007389a0: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
     0x00518350: 'CCamera::CalculateFrustumPlanes: the half angle widened (widescreen)',

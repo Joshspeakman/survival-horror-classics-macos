@@ -22,13 +22,15 @@ macOS; this port takes the Windows executables from inside them.
   centred in a 4:3 frame); menus and loading screens are shown 4:3. Each game's own Widescreen switch turns it on and
   off.
 - **60 fps or the display's rate.** Timers, flashing, particles, spin damping and scripted gates and lifts are kept at
-  the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported).
+  the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported). San Andreas' limiter, which turned
+  the PC game's 30 into 25 (and 60 into 43), keeps the rate exactly.
 - **PS2 lighting.** San Andreas' PS2 colour filter (the warm Los Santos look) and its radiosity glow, Vice City's PS2
   trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
 - **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
   display's Retina pixels), 16-bit or 32-bit colour, antialiasing (2x or 4x MSAA), draw distance, frame limiter.
 - **Modern controllers** out of the box (Xbox, PlayStation, Switch Pro, any MFi pad), laid out as on the PS2.
-- **Sound**: radio, effects and cutscenes in all three (Miles for GTA III and Vice City, DirectSound for San Andreas).
+- **Sound**: radio, effects and cutscenes in all three (Miles for GTA III and Vice City, DirectSound for San Andreas),
+  and the intro movies.
 - **Mods**: a Mods window that browses GameBanana, installs file mods and orders them. For San Andreas, *Restore
   from Disc* brings back what later releases removed (the cut radio songs, the 2005 signage and loading screens,
   the original scripts) from your own 2005 DVD, with an opt-in Hot Coffee switch.
@@ -38,7 +40,8 @@ for the details, and [docs/PORT.md](docs/PORT.md) for how the port works.
 
 ## Installing
 
-Apple Silicon, macOS 13 or later, the Xcode command line tools (`xcode-select --install`) and the games:
+An Apple Silicon Mac (the app is built on the Mac it runs on; tested on macOS 27 with an M1 Pro), the Xcode command
+line tools (`xcode-select --install`) and the games:
 
 | Game | Where it comes from |
 |---|---|
@@ -74,7 +77,7 @@ GTA Vice City | GTA San Andreas> User Files`.
 
 - **Graphics Options**, for every game: Display (Full Screen / Window), Notch (Below It / Around It), Resolution
   (Standard / Retina / As Set in Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD
-  (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA), VSync, Frame Rate (60 / the display's rate / 30
+  (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA; 4x costs frame rate at Retina sizes), VSync, Frame Rate (60 / the display's rate / 30
   Original) and Lighting (PS2 / PC as released). The choices are given to the game each time it starts; what you
   change in a game's own Display Setup lasts for that session (choose *As Set in Game* to keep the game's resolution).
 - **Mods** opens the Mods window. **Saves** and **Game Files** open the chosen game's folders.
@@ -94,8 +97,8 @@ and the options above; they were checked with the games' own screenshots at 2054
 | Graphics | Direct3D 8 (GTA III, Vice City) and 9 (San Andreas) on Metal; the games' own vertex shaders translated to Metal (MojoShader) |
 | Sound | Miles Sound System and DirectSound on Core Audio |
 | Input | keyboard, mouse (DirectInput 8) and game controllers |
-| Frame rate | GTA III and Vice City hold 60 fps; San Andreas reaches about 43 fps at a 60 cap on an M1 Pro (the recompiled code is the limit) |
-| Movies | the intro logo movies are skipped (no MPEG-1 decoder) |
+| Frame rate | all three hold 60 fps on an M1 Pro (San Andreas' own frame limiter, which made 30 into 25, is paced by a steady clock) |
+| Movies | the intro movies play (macOS's own MPEG-1 decoder); a key, click or pad button skips them |
 | Mods | file mods; models and textures meant for the `.img` archives, and ASI/CLEO code mods, are not supported yet |
 
 ## Building by hand

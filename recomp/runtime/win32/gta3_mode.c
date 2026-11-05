@@ -38,6 +38,15 @@ static uint32_t guest_call(Ctx *c, uint32_t fn, int n, const uint32_t *args)
  * is made 0.8, so every mode is listed. */
 enum { SA_MODE_SHAPE = 0x0074d3beu, SA_SHAPE_08 = 0x0083fe78u, SA_PREFS_AA = 0x00b880b8u };
 #endif
+#ifdef GTASA_EDITION
+/* San Andreas' frame limiter (WinMain's loop) runs a frame once the time since CTimer's last update passes
+ * 1000 / RsGlobal.maxFPS ms; that update comes partway through the frame, so every frame took the limit plus the work
+ * before it (at 60: 16.7 + ~6.7 ms, 43 fps; the PC game's "30" gave 25). The test here sees the time since the last
+ * frame's due time by a steady clock instead, each frame due one interval after the last: the limit is kept exactly. */
+enum { SA_LIMIT_TEST = 0x0075072du, SA_LIMIT_RUN = 0x00750744u };
+static double sa_due;
+static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec * 1e-6; }
+#endif
 static void pick_mode(Ctx *c)
 {
     static int done; const char *e = getenv("GTA_MODE"), *dp = getenv("GTA_DEPTH"); unsigned w, h, depth = dp && atoi(dp) == 16 ? 16 : 32;
@@ -424,6 +433,12 @@ int gta3_hook(Ctx *c, uint32_t addr)
 #endif
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
 #ifdef GTASA_EDITION
+    if (addr == SA_LIMIT_TEST) { wrf(c->esp + 0x14, (float)(now_ms() - sa_due)); return 1; }   /* [esp+14]: the time since, ms */
+    if (addr == SA_LIMIT_RUN) {
+        double now = now_ms(), per = 1000.0 / (rt_r32(G_MEM, RS_MAX_FPS) ? rt_r32(G_MEM, RS_MAX_FPS) : 30);
+        sa_due = now - sa_due > 2 * per ? now : sa_due + per;   /* behind by more than a frame: from now */
+        return 1;
+    }
     if (addr == SA_MODE_SHAPE) { rt_w32(G_MEM, c->esp + 4, rt_r32(G_MEM, SA_SHAPE_08)); return 1; }
 #endif
     if (addr == CD_SYNC_WAIT) { cd_sync_wait(c); return 1; }

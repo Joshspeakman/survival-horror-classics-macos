@@ -53,14 +53,18 @@ screen of the time showed them: each colour to 5, 6 and 5 bits with a 4×4 order
 
 ## Antialiasing
 
-Multisampling: render targets and depth buffers are drawn with 2 or 4 samples (what the GPU offers) and resolved as
-each pass ends, so whatever the game reads back (its post effects, trails, screenshots) is the smoothed picture. San
+Multisampling: render targets and depth buffers are drawn with 2 or 4 samples (what the GPU offers) and resolved when
+the picture is read (the game's copies for its post effects and trails, the present, screenshots), so what it reads is
+the smoothed picture. The launcher's default is 2x; 4x doubles the GPU's work at Retina sizes (GTA III at 4112×2658 on
+an M1 Pro: about 13 ms a frame without, 15 ms with 2x, 29 ms with 4x). San
 Andreas' own Anti-Aliasing setting works; GTA III and Vice City have none, so the launcher's applies to them.
 
 ## Frame rate
 
 The games cap themselves at 30 fps (RsGlobal.maxFPS) while the frame limiter is on. *Frame Rate* sets the cap (60, the
-display's rate, or 30 as released). Above 30 fps, the parts of each game that count frames instead of time run at 30
+display's rate, or 30 as released). San Andreas' limiter measured each frame from the timer's update partway through
+the last one, so every frame took the limit plus that part of the frame (the PC game's 30 fps was 25; 60 was 43): it
+now waits for each frame's due time by a steady clock. Above 30 fps, the parts of each game that count frames instead of time run at 30
 fps's pace, as FusionFix's HighFPS does: millisecond timers carry their fractions (mission countdowns, script timers,
 fades), things done every 16th or 32nd frame and the HUD's flashing count 30 fps frames, particles update 30 times a
 second, and the radio station's name, the clouds' turn, the spin damping of cars and people and the objects mission
