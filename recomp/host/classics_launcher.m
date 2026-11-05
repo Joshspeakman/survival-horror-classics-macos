@@ -634,7 +634,9 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     if (hz <= 60) fps.choices = @[fps.choices[0], fps.choices[2]];
     self.fpsByGame = [saved[@"fps_by_game"] isKindOfClass:NSDictionary.class] ? [saved[@"fps_by_game"] mutableCopy] : [NSMutableDictionary new];
     self.fpsGame = v.game;   /* (San Andreas may want 60 while GTA III and Vice City run at the display's rate) */
-    fps.index = index_of(fps.choices, self.fpsByGame[@(GAMES[v.game].id)] ?: saved[@"fps"], 0);
+    fps.index = index_of(fps.choices, saved[@"fps"], 0);
+    for (int i = 0; i < NGAMES; i++) if (!self.fpsByGame[@(GAMES[i].id)]) self.fpsByGame[@(GAMES[i].id)] = val(fps);   /* each game from the one setting before */
+    fps.index = index_of(fps.choices, self.fpsByGame[@(GAMES[v.game].id)], fps.index);
     GCTile *light = self.light = [GCTile new];
     light.title = @"Lighting";
     light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
