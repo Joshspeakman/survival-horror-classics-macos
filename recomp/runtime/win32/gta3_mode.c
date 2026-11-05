@@ -185,27 +185,98 @@ static const uint32_t hf_flash[] = {0x0055891du, 0x00558973u, 0x005589eeu, 0x005
     0x00558fdbu, 0x00559f79u, 0x0055a207u, 0x0055a785u, 0x0042a2c4u};
 static const uint32_t hf_damp[] = {0x004bab08u, 0x004bab17u, 0x004bab29u};
 #define HIGH_FPS 1
+#else   /* San Andreas 3.0: the time step (and the one before the 3-unit clip), timers of both; no particles, radio name
+         * or clouds hooks (FusionFix's San Andreas list); the flashing reads the counter's byte (test, mov bl/al) */
+enum { TIME_STEP = 0x00b64414u, TIME_STEP_NC = 0x00b64410u, FRAME_COUNTER = 0x00b64404u, DAMPING = 0x0084a018u,
+       SCRIPT_ROTATE = 0x00483cbcu, SCRIPT_SLIDE = 0x00484379u, SCRIPT_PARAMS = 0x00a25d90u };
+static const uint32_t hf_ms[] = {
+    0x00420811u, 0x00448508u, 0x00448630u, 0x00448740u, 0x0044e494u, 0x00467317u, 0x0049e7a9u, 0x0049e99du,
+    0x0050d623u, 0x00525c06u, 0x0055500eu, 0x00555e9cu, 0x00555f1cu, 0x00555f69u, 0x00556037u, 0x00556084u,
+    0x005560f4u, 0x00556286u, 0x005562d3u, 0x00556409u, 0x00556468u, 0x005564b5u, 0x005652b7u, 0x00565342u,
+    0x005653d2u, 0x00565462u, 0x0056552cu, 0x00565622u, 0x005656fau, 0x0056577cu, 0x00565865u, 0x005658a4u,
+    0x005659beu, 0x005659fbu, 0x00565b01u, 0x00565b43u, 0x00586ca6u, 0x00586d28u, 0x00586d8au, 0x00586e61u,
+    0x005870d3u, 0x00587121u, 0x00587148u, 0x005871d3u, 0x00587a08u, 0x00587a5au, 0x00587aacu, 0x00587b96u,
+    0x00588b26u, 0x00588cbcu, 0x00589131u, 0x00589219u, 0x005894e2u, 0x005897b9u, 0x00589818u, 0x0058988eu,
+    0x00589ba6u, 0x00589c05u, 0x00589c7bu, 0x00589d1au, 0x00589d64u, 0x00589ddau, 0x0058ae67u, 0x0058aeadu,
+    0x0058af07u, 0x0058af4bu, 0x0058af7fu, 0x0058afd9u, 0x0058b3ecu, 0x0058b44bu, 0x0058b4c1u, 0x0058b556u,
+    0x0058b5a0u, 0x0058b616u, 0x0058b880u, 0x0058b8dfu, 0x0058b955u, 0x0058b9f5u, 0x0058ba3fu, 0x0058bab5u,
+    0x005edbdfu, 0x005edc36u, 0x00613e98u, 0x006265d6u, 0x0062accau, 0x0062b738u, 0x0062fa3eu, 0x0062fb4au,
+    0x0063041du, 0x00633a17u, 0x00633a9eu, 0x00639ed7u, 0x0064a999u, 0x0066cf37u, 0x0067ea5au, 0x0068659bu,
+    0x00686607u, 0x006873e2u, 0x00687d51u, 0x0068e460u, 0x00691d02u, 0x0069b28au, 0x006ac9dcu, 0x006acaf2u,
+    0x006acb23u, 0x006b7ecdu, 0x006c16f7u, 0x006c9ab1u, 0x006d45e4u, 0x006d6aabu, 0x006e1f1du, 0x006e946du,
+    0x0073077au, 0x0073ede0u};
+static const uint32_t hf_ms_nc[] = {0x0046c026u, 0x00510fc6u, 0x00611d61u, 0x00611e2eu};
+static const uint32_t hf_swap[][3] = {   /* test byte [counter], n: swapped in at, put back at, gated (1) or not */
+    {0x00557098u, 0x0055709fu, 1}, {0x0043e9a8u, 0x0043e9afu, 0}, {0x0058521du, 0x00585224u, 0}, {0x0058530du, 0x00585314u, 0},
+    {0x005864e1u, 0x005864e8u, 0}, {0x00587672u, 0x00587679u, 0}, {0x00589f6au, 0x00589f71u, 0}};
+static const uint32_t hf_movb[][2] = {{0x005853f2u, 1}, {0x00587506u, 0}};   /* after mov bl (1) / al (0), [counter] */
+static const uint32_t hf_damp[] = {0x0054925cu, 0x00549268u, 0x00549274u};
+#define HIGH_FPS 1
+#define HIGH_FPS_SA 1
 #endif
 #ifdef HIGH_FPS
-static struct { uint32_t last; float whole_ms, ms_carry, carry30, scale, clouds, clouds_base, damp, damp_base, particles, saved;
-                uint32_t frames30, gated, passed; int restore; } hf = {.last = 0xffffffffu, .gated = 0xffffffffu};
+static struct { uint32_t last, swapped; float whole_ms, whole_ms_nc, ms_carry, ms_carry_nc, carry30, scale, clouds, clouds_base,
+                damp, damp_base, particles, saved; double game_ms; uint32_t frames30, gated, passed; int restore; }
+    hf = {.last = 0xffffffffu, .gated = 0xffffffffu};
+static int hf_in(const uint32_t *a, unsigned n, uint32_t addr)   /* the lists are in address order */
+{
+    unsigned lo = 0, hi = n; while (lo < hi) { unsigned m = (lo + hi) / 2; if (a[m] < addr) lo = m + 1; else hi = m; }
+    return lo < n && a[lo] == addr;
+}
 static int hf_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_FPS"); on = e && *e && (atoi(e) > 30 || atoi(e) == 0); } return on; }
 static void hf_update(void)   /* once a game frame (CTimer::m_FrameCounter changed) */
 {
     uint32_t n = rt_r32(G_MEM, FRAME_COUNTER); if (n == hf.last) return;
-    if (hf.last == 0xffffffffu) { hf.clouds_base = rdf(CLOUDS_TURN); hf.damp_base = rdf(DAMPING); }
+#ifndef HIGH_FPS_SA
+    if (hf.last == 0xffffffffu) hf.clouds_base = rdf(CLOUDS_TURN);
+#endif
+    if (hf.last == 0xffffffffu) hf.damp_base = rdf(DAMPING);
     hf.last = n;
     const float step30 = 50.0f / 30, ms30 = 1000.0f / 30;
-    float step = rdf(TIME_STEP), ms = step * 20;
+    float step = rdf(TIME_STEP), ms = step * 20; hf.game_ms += ms;
     hf.ms_carry += ms; float whole = floorf(hf.ms_carry); hf.ms_carry -= whole; hf.whole_ms = (whole + 0.5f) / 20;
+#ifdef HIGH_FPS_SA
+    hf.ms_carry_nc += rdf(TIME_STEP_NC) * 20; whole = floorf(hf.ms_carry_nc); hf.ms_carry_nc -= whole; hf.whole_ms_nc = (whole + 0.5f) / 20;
+#endif
     hf.carry30 += ms; hf.passed = (uint32_t)(hf.carry30 / ms30); hf.carry30 -= (float)hf.passed * ms30;
     hf.frames30 += hf.passed; hf.gated = hf.passed ? hf.frames30 : 0xffffffffu;
     hf.scale = step / step30; hf.clouds = hf.clouds_base * hf.scale; hf.damp = powf(hf.damp_base, hf.scale);
 }
+#ifdef HIGH_FPS_SA
+/* ROTATE_OBJECT and SLIDE_OBJECT run once a frame in a script's loop: each move scaled by the time since the same
+ * script last moved the same object, up to a 30 fps frame's */
+static float script_move_scale(uint32_t script, uint32_t handle)
+{
+    static struct { uint32_t script, handle; double at; } last[64]; static int n;
+    float scale = 1; int k;
+    for (k = 0; k < n; k++) if (last[k].script == script && last[k].handle == handle) break;
+    if (k < n) { double d = (hf.game_ms - last[k].at) / (1000.0 / 30); scale = (float)(d < 0 ? 0 : d > 1 ? 1 : d); }
+    else { k = n < 64 ? n++ : (int)(handle % 64); last[k].script = script; last[k].handle = handle; }
+    last[k].at = hf.game_ms; return scale;
+}
+#endif
 static int hf_hook(Ctx *c, uint32_t addr)
 {
     if (!hf_on()) return 0;
-    for (unsigned k = 0; k < sizeof hf_ms / sizeof *hf_ms; k++) if (addr == hf_ms[k]) { hf_update(); ST(0) = hf.whole_ms; return 1; }
+    if (hf_in(hf_ms, sizeof hf_ms / sizeof *hf_ms, addr)) { hf_update(); ST(0) = hf.whole_ms; return 1; }
+#ifdef HIGH_FPS_SA
+    if (hf_in(hf_ms_nc, sizeof hf_ms_nc / sizeof *hf_ms_nc, addr)) { hf_update(); ST(0) = hf.whole_ms_nc; return 1; }
+    for (unsigned k = 0; k < sizeof hf_swap / sizeof *hf_swap; k++) {
+        if (addr == hf_swap[k][0]) { hf_update(); hf.swapped = rt_r32(G_MEM, FRAME_COUNTER); rt_w32(G_MEM, FRAME_COUNTER, hf_swap[k][2] ? hf.gated : hf.frames30); return 1; }
+        if (addr == hf_swap[k][1]) { rt_w32(G_MEM, FRAME_COUNTER, hf.swapped); return 1; }
+    }
+    for (unsigned k = 0; k < sizeof hf_movb / sizeof *hf_movb; k++) if (addr == hf_movb[k][0]) {
+        hf_update(); uint32_t b = hf.frames30 & 0xff;
+        if (hf_movb[k][1]) c->ebx = (c->ebx & ~0xffu) | b; else c->eax = (c->eax & ~0xffu) | b;
+        return 1;
+    }
+    for (unsigned k = 0; k < sizeof hf_damp / sizeof *hf_damp; k++)
+        if (addr == hf_damp[k]) { hf_update(); if (hf.damp_base > 0) ST(0) *= hf.damp / hf.damp_base; return 1; }
+    if (addr == SCRIPT_ROTATE) { hf_update(); wrf(SCRIPT_PARAMS + 8, rdf(SCRIPT_PARAMS + 8) * script_move_scale(c->esi, rt_r32(G_MEM, SCRIPT_PARAMS))); return 1; }
+    if (addr == SCRIPT_SLIDE) { hf_update(); float m = script_move_scale(c->esi, rt_r32(G_MEM, SCRIPT_PARAMS));
+        for (int k = 4; k <= 6; k++) wrf(SCRIPT_PARAMS + 4 * k, rdf(SCRIPT_PARAMS + 4 * k) * m); return 1; }
+    return 0;
+#else
     for (unsigned k = 0; k < sizeof hf_flash / sizeof *hf_flash; k++) if (addr == hf_flash[k]) { hf_update(); c->eax = hf.frames30; return 1; }
     for (unsigned k = 0; k < sizeof hf_damp / sizeof *hf_damp; k++)
         if (addr == hf_damp[k]) { hf_update(); if (hf.damp_base > 0) ST(0) *= hf.damp / hf.damp_base; return 1; }
@@ -218,8 +289,12 @@ static int hf_hook(Ctx *c, uint32_t addr)
     case SCRIPT_SLIDE: hf_update(); for (int k = 4; k <= 6; k++) wrf(SCRIPT_PARAMS + 4 * k, rdf(SCRIPT_PARAMS + 4 * k) * hf.scale); return 1;
     }
     return 0;
+#endif
 }
 /* CParticle::Update (no arguments): only when a 30 fps frame's time has passed, with all of it */
+#ifdef HIGH_FPS_SA
+int gta3_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
+#else
 int gta3_override(Ctx *c, uint32_t addr)
 {
     if (addr != PARTICLES || !hf_on()) return 0;
@@ -227,6 +302,7 @@ int gta3_override(Ctx *c, uint32_t addr)
     if (step >= 50.0f / 30 || hf.particles >= 50.0f / 30) { hf.saved = step; hf.restore = 1; wrf(TIME_STEP, hf.particles); hf.particles = 0; return 0; }
     c->esp += 4; return 1;   /* not yet: returned at once */
 }
+#endif
 #else
 int gta3_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
 #endif
