@@ -129,12 +129,13 @@ static NSMutableDictionary *install_archive(NSString *path, NSString *name, NSSt
 @interface GCMods : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSSearchFieldDelegate>
 @property NSPanel *panel, *browser; @property NSTableView *table, *btable; @property NSTextField *status, *bstatus; @property NSProgressIndicator *spin;
 @property NSSearchField *search; @property NSPopUpButton *sort; @property NSImageView *preview; @property NSTextField *pinfo;
-@property NSString *data, *userFiles, *title, *gameTag; @property int gb;
+@property NSString *data, *userFiles, *title, *gameTag, *gameDir; @property int gb;
 @property NSMutableArray<NSMutableDictionary *> *mods; @property NSArray<NSDictionary *> *results; @property NSUInteger busy;
 @property (copy) void (^changed)(void);
 - (void)browse:(id)s;
 - (void)download:(NSDictionary *)f name:(NSString *)name page:(NSString *)page;
 - (void)installPath:(NSString *)path name:(NSString *)name source:(NSString *)source done:(void (^)(BOOL))done;
+- (void)restoreFrom:(NSString *)disc;
 @end
 
 static GCMods *current;
@@ -167,12 +168,12 @@ static NSScrollView *scroller(NSTableView *t, NSRect f)
     [t registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     NSScrollView *sv = scroller(t, NSMakeRect(16, 64, 688, 368)); sv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; [cv addSubview:sv];
     NSArray *row = @[button(@"Browse GameBanana…", self, @selector(browse:), NSMakeRect(12, 22, 170, 32)),
-                     button(@"Install from File…", self, @selector(installFile:), NSMakeRect(184, 22, 150, 32)),
-                     button(@"Up", self, @selector(up:), NSMakeRect(344, 22, 54, 32)), button(@"Down", self, @selector(down:), NSMakeRect(398, 22, 64, 32)),
-                     button(@"Remove", self, @selector(remove:), NSMakeRect(466, 22, 84, 32)), button(@"Open Folder", self, @selector(openFolder:), NSMakeRect(552, 22, 108, 32))];
+                     button(@"From File…", self, @selector(installFile:), NSMakeRect(184, 22, 104, 32)),
+                     button(@"Restore from Disc…", self, @selector(restoreDisc:), NSMakeRect(290, 22, 150, 32)),
+                     button(@"Up", self, @selector(up:), NSMakeRect(442, 22, 46, 32)), button(@"Down", self, @selector(down:), NSMakeRect(488, 22, 58, 32)),
+                     button(@"Remove", self, @selector(remove:), NSMakeRect(548, 22, 72, 32))];
     for (NSButton *b in row) [cv addSubview:b];
-    NSButton *done = button(@"Done", self, @selector(done:), NSMakeRect(616, 22, 92, 32)); done.keyEquivalent = @"\r"; done.autoresizingMask = NSViewMinXMargin;
-    ((NSButton *)row[5]).frame = NSMakeRect(552, 22, 64, 32); ((NSButton *)row[5]).title = @"Folder";
+    NSButton *done = button(@"Done", self, @selector(done:), NSMakeRect(624, 22, 84, 32)); done.keyEquivalent = @"\r"; done.autoresizingMask = NSViewMinXMargin;
     [cv addSubview:done];
     NSTextField *st = [NSTextField labelWithString:@""]; st.frame = NSMakeRect(16, 4, 690, 16); st.font = [NSFont systemFontOfSize:11]; st.textColor = NSColor.secondaryLabelColor;
     st.autoresizingMask = NSViewWidthSizable; self.status = st; [cv addSubview:st];
@@ -240,6 +241,44 @@ static NSScrollView *scroller(NSTableView *t, NSRect f)
             if (done) done(m != nil);
         });
     });
+}
+/* Restore from Disc: the player's own original PC disc (an image, or the mounted disc) through gta_restore.py (in the
+ * app's Resources): the content later releases changed or removed, as a mod at the top of the list */
+- (void)restoreDisc:(id)s
+{
+    NSString *tool = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"gta_restore.py"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:tool]) { self.status.stringValue = @"This copy of the app has no restore tool: run install.sh again."; NSBeep(); return; }
+    NSOpenPanel *o = [NSOpenPanel openPanel]; o.canChooseDirectories = YES; o.message = [NSString stringWithFormat:@"Your original %@ PC disc: its image (.iso) or the mounted disc", self.title];
+    [o beginSheetModalForWindow:self.panel completionHandler:^(NSModalResponse r) { if (r == NSModalResponseOK) [self restoreFrom:o.URL.path]; }];
+}
+- (void)restoreFrom:(NSString *)disc
+{
+    NSString *tool = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"gta_restore.py"];
+    {
+        NSString *folder = @"original-disc-content", *dest = [mods_dir(self.data) stringByAppendingPathComponent:folder];
+        for (NSMutableDictionary *m in [self.mods copy]) if ([m[@"folder"] isEqualToString:folder]) [self.mods removeObject:m];   /* again: replaced */
+        [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+        self.busy++; self.status.stringValue = @"Restoring from your disc… (the radio alone is about a gigabyte)";
+        NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
+        t.arguments = @[@"-I", tool, self.gameTag, disc, self.gameDir ?: @"", dest];
+        NSMutableDictionary *env = [NSProcessInfo.processInfo.environment mutableCopy]; env[@"PATH"] = [@"/opt/homebrew/bin:/usr/local/bin:" stringByAppendingString:env[@"PATH"] ?: @"/usr/bin:/bin"]; t.environment = env;
+        NSPipe *pipe = [NSPipe pipe]; t.standardOutput = pipe; t.standardError = pipe;
+        t.terminationHandler = ^(NSTask *task) {
+            NSString *out = [[NSString alloc] initWithData:[pipe.fileHandleForReading readDataToEndOfFile] encoding:NSUTF8StringEncoding] ?: @"";
+            int code = task.terminationStatus;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.busy--;
+                NSString *last = [[out stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
+                if (code == 0 && [[NSFileManager defaultManager] fileExistsAtPath:dest]) {
+                    [self.mods insertObject:[@{@"name": @"Original content (your disc)", @"folder": folder, @"kind": @"files", @"enabled": @YES, @"source": disc,
+                                               @"game": self.gameTag, @"added": NSDate.date,
+                                               @"note": @"As released on your disc: the full radio, original signage, loading screens and scripts"} mutableCopy] atIndex:0];
+                    [self saveAndNotify]; self.status.stringValue = @"Restored from your disc: on, at the top of the list.";
+                } else { self.status.stringValue = last.length ? last : @"Nothing was restored."; if (code) NSBeep(); }
+            });
+        };
+        if (![t launchAndReturnError:nil]) { self.busy--; self.status.stringValue = @"python3 could not be started."; NSBeep(); }
+    }
 }
 - (void)installFile:(id)s
 {
@@ -383,12 +422,13 @@ static void fetch_json(NSString *url, void (^done)(id))
 @end
 
 /* the Mods window for a game (one at a time); changed() runs whenever the list changes (the launcher's tile) */
-void gcm_show(NSWindow *parent, NSString *title, NSString *gameTag, int gamebanana, NSString *data, NSString *userFiles, void (^changed)(void))
+void gcm_show(NSWindow *parent, NSString *title, NSString *gameTag, int gamebanana, NSString *data, NSString *userFiles, NSString *gameDir, void (^changed)(void))
 {
     if (current) { [current.panel makeKeyAndOrderFront:nil]; return; }
-    GCMods *m = [GCMods new]; m.title = title; m.gameTag = gameTag; m.gb = gamebanana; m.data = data; m.userFiles = userFiles; m.changed = changed;
+    GCMods *m = [GCMods new]; m.title = title; m.gameTag = gameTag; m.gb = gamebanana; m.data = data; m.userFiles = userFiles; m.gameDir = gameDir; m.changed = changed;
     current = m; [m show:parent];
     /* development: GTAC_MODS_INSTALL=<archive> installs it; GTAC_MODS_GB=<GameBanana mod id> downloads its first file */
+    if (getenv("GTAC_MODS_RESTORE")) [m restoreFrom:@(getenv("GTAC_MODS_RESTORE"))];   /* development: Restore from Disc with this image */
     if (getenv("GTAC_MODS_INSTALL")) [m installPath:@(getenv("GTAC_MODS_INSTALL")) name:@(getenv("GTAC_MODS_INSTALL")).lastPathComponent.stringByDeletingPathExtension source:@"test" done:nil];
     if (getenv("GTAC_MODS_GB")) {
         fetch_json([NSString stringWithFormat:@"https://gamebanana.com/apiv11/Mod/%s?_csvProperties=_aFiles,_sName,_sProfileUrl", getenv("GTAC_MODS_GB")], ^(id j) {

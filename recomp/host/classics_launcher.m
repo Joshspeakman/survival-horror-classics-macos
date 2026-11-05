@@ -51,7 +51,7 @@ static const int GAMEBANANA[NGAMES] = {1445, 1431, 935};   /* GameBanana's game 
 /* classics_mods.m: the Mods window */
 NSString *gcm_env(NSString *data);
 void gcm_counts(NSString *data, NSUInteger *installed, NSUInteger *on);
-void gcm_show(NSWindow *parent, NSString *title, NSString *gameTag, int gamebanana, NSString *data, NSString *userFiles, void (^changed)(void));
+void gcm_show(NSWindow *parent, NSString *title, NSString *gameTag, int gamebanana, NSString *data, NSString *userFiles, NSString *gameDir, void (^changed)(void));
 
 @interface GCGame : NSObject
 @property const GameDef *def; @property BOOL installed;
@@ -596,7 +596,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     mods.activate = ^{
         GCGame *g = wv.chosen; if (!g.installed) { NSBeep(); return; }
         NSUInteger k = 0; for (; k < NGAMES; k++) if (&GAMES[k] == g.def) break;
-        gcm_show(wl.window, @(g.def->title), @(g.def->id), k < NGAMES ? GAMEBANANA[k] : 0, g.data, userFiles(g), ^{ wv.needsDisplay = YES; });
+        gcm_show(wl.window, @(g.def->title), @(g.def->id), k < NGAMES ? GAMEBANANA[k] : 0, g.data, userFiles(g), g.game, ^{ wv.needsDisplay = YES; });
     };
     [self setupUpdates];
     v.tiles = @[gfx, mods, saves, files, self.updates];

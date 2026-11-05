@@ -137,6 +137,7 @@ done
 echo "== installing $A (built now:${DONE:- none}; kept:${KEEP:- none})"
 STAGE="$HERE/build/stage/$NAME.app"; rm -rf "$STAGE"; mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 clang -O2 -fobjc-arc -Wall -framework Cocoa -o "$STAGE/Contents/MacOS/GTAClassics" "$HERE/recomp/host/classics_launcher.m" "$HERE/recomp/host/classics_mods.m"
+cp "$HERE/recomp/tools/gta_restore.py" "$STAGE/Contents/Resources/"   # the Mods window's Restore from Disc
 G="$STAGE/Contents/Resources/games.plist"; plutil -create xml1 "$G"
 for g in gta3 vc sa; do
   game_info $g
