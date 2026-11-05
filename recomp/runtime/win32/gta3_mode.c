@@ -281,9 +281,10 @@ static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, el
 {
     static int fps = -2;
     if (fps == -2) { const char *e = getenv("GTA_FPS"); fps = e && *e ? atoi(e) : -1;
-        if (fps >= 0) fprintf(stderr, "gta: frame rate %s%d\n", fps ? "capped at " : "uncapped", fps ? fps : 0); }
+        if (fps > 0) fprintf(stderr, "gta: frame rate capped at %d\n", fps); else if (!fps) fprintf(stderr, "gta: frame rate uncapped\n"); }
     return fps;
 }
+int gta_menu_cap(void) { int f = fps_env(); return f > 0 ? f : 0; }   /* ddraw.c: the menus' and loading screens' cap */
 static int wide_state = -1;
 int gta_wide(void) { if (wide_state < 0) { const char *e = getenv("GTA_WIDESCREEN"); wide_state = !(e && *e == '0'); } return wide_state; }
 void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */

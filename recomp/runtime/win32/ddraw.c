@@ -217,11 +217,6 @@ static void cmd_cap_wait(void)
 #ifdef DF_EDITION
         if (!v) { const char *h = getenv("DF_HIGH_FPS"); v = h && !atoi(h) ? "auto" : "display"; }   /* DF_HIGH_FPS=0: as before */
 #endif
-#ifdef GTA_EDITION
-        /* the GTA games pace themselves (their frame limiter, at the launcher's rate, by a steady clock: gta3_mode.c);
-           the auto cap held them at 60 whenever a frame's work passed 7.9 ms (Retina sizes), and took 30 s to rise */
-        if (!v) v = "0";
-#endif
         if (!v) v = "auto";
         if (!strncmp(v, "auto", 4)) { cap_auto = v[4] ? 2 : 1; cap_period_ms = 1000.0 / 60; }
         else if (!strcmp(v, "display")) { cap_display = 1; cap_period_ms = 1000.0 / 60; }
@@ -231,6 +226,12 @@ static void cmd_cap_wait(void)
         double hz = dsr_display_hz, p = (hz >= 20 && hz <= 1000 ? 1000.0 / hz : 1000.0 / 60) * cap_div;
         if (p != cap_period_ms) { cap_period_ms = p; dsr_log("fps cap: %.2f (the display's %.2f Hz / %d)", 1000 / p, 1000 * cap_div / p, cap_div); }
     }
+#ifdef GTA_EDITION
+    /* the games pace play themselves; their menus and loading screens run unlimited (VSync off: hundreds a second), so
+       those frames are held at the launcher's rate here */
+    if (!getenv("DSR_FPSCAP")) { int gta_menu_frame(void), gta_menu_cap(void); int f = gta_menu_frame() ? gta_menu_cap() : 0;
+                                 cap_period_ms = f > 0 ? 1000.0 / f : 0; cap_auto = cap_display = 0; }
+#endif
     uint64_t t = now_us();
     if (cap_period_ms <= 0) { released = t; return; }
     if (cap_auto && released) {
