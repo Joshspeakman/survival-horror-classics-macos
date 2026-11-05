@@ -51,3 +51,4 @@ cdkey-hash.txt
 *.scm
 *.b
 recomp/.venv
+.claude/
