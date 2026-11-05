@@ -18,7 +18,7 @@ typedef struct Prog {
 static Prog progs[MAXPROG]; static int nprogs; static pthread_mutex_t plock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t next_id = 0x10000;                      /* above d3d9.c's effect program ids */
 
-static int shlog(void) { static int on = -1; if (on < 0) on = getenv("D3D9_SHADERLOG") != 0; return on; }
+static int shlog(void) { static int on = -1; if (on < 0) on = getenv("D3D9_SHADERLOG") ? atoi(getenv("D3D9_SHADERLOG")) > 1 ? 2 : 1 : 0; return on; }   /* 2: the GLSL too */
 static const MOJOSHADER_parseData *parse(Shader9 *s)
 {
     const MOJOSHADER_parseData *pd = MOJOSHADER_parse(MOJOSHADER_PROFILE_GLSL120, "main", G_MEM + s->mem, s->len, 0, 0, 0, 0, 0, 0, 0);
@@ -127,6 +127,7 @@ static void create(Prog *p)
     cmd_end();
     if (shlog()) fprintf(stderr, "d3d9: program %u: vs %08x + ps %08x, %d attributes, constants vs %d/%d/%d ps %d/%d/%d\n", p->id, p->vs->g,
                          p->ps ? p->ps->g : 0, na, p->tf[0], p->ti[0], p->tb[0], p->tf[1], p->ti[1], p->tb[1]);
+    if (shlog() > 1) fprintf(stderr, "d3d9: program %u vertex GLSL:\n%s\nd3d9: program %u pixel GLSL:\n%s\n", p->id, vs, p->id, ps);
     free(ps); free(vs); MOJOSHADER_freeParseData(v); if (f) MOJOSHADER_freeParseData(f);
 }
 /* the bound shaders' program, created on first use; 0 if they could not be translated */
