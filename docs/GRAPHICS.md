@@ -53,18 +53,38 @@ screen of the time showed them: each colour to 5, 6 and 5 bits with a 4×4 order
 
 ## Antialiasing
 
-Multisampling: render targets and depth buffers are drawn with 2 or 4 samples (what the GPU offers) and resolved when
-the picture is read (the game's copies for its post effects and trails, the present, screenshots), so what it reads is
-the smoothed picture. The launcher's default is 2x; 4x doubles the GPU's work at Retina sizes (GTA III at 4112×2658 on
-an M1 Pro: about 13 ms a frame without, 15 ms with 2x, 29 ms with 4x). San
-Andreas' own Anti-Aliasing setting works; GTA III and Vice City have none, so the launcher's applies to them.
+Multisampling: render targets and depth buffers are drawn with 2 or 4 samples (what the GPU offers) and resolved as
+each pass that draws into them ends, so what the games read (their copies for post effects and trails, the present,
+screenshots) is the smoothed picture. On Apple's GPUs the costly part of a Retina-sized multisampled pass is loading and
+storing its samples (175 MB for a 4112×2658 4x picture), so the samples live only in the GPU's tile memory: each pass
+resolves them as it ends, and a later pass starts by drawing the picture so far back into them (or by clearing, when
+the game clears first). Draws that use no depth (the trails, the HUD) don't take the depth buffer into their pass, a
+depth buffer no later pass reads isn't stored, and copies at the same size copy only their rectangle. The launcher's
+default is 2x. San Andreas' own Anti-Aliasing setting works; GTA III and Vice City have none, so the launcher's applies
+to them.
+
+The fixed-function texture stages are drawn by shaders made for each combination of the stages' operations, arguments
+and alpha test (Metal function constants), not by one shader that chooses them for every pixel: at Retina sizes that
+choosing was most of the GPU's time.
+
+What an M1 Pro holds at 4112×2658 with 4x antialiasing and PS2 lighting, capped at 120, driving:
+
+| | GTA III | Vice City | San Andreas |
+|---|---|---|---|
+| Before | 60 | 60 (43 uncapped) | 60 |
+| Now | 120 | 120 | 75 |
+
+San Andreas' own game code takes about 13 ms a frame on this Mac (the same at any resolution or antialiasing), so it
+runs at about 75; with *Frame Rate: 60* it holds 60 evenly.
 
 ## Frame rate
 
 The games cap themselves at 30 fps (RsGlobal.maxFPS) while the frame limiter is on. *Frame Rate* sets the cap (60, the
-display's rate, or 30 as released). San Andreas' limiter measured each frame from the timer's update partway through
-the last one, so every frame took the limit plus that part of the frame (the PC game's 30 fps was 25; 60 was 43): it
-now waits for each frame's due time by a steady clock. Above 30 fps, the parts of each game that count frames instead of time run at 30
+display's rate, or 30 as released). The games' limiters measured each frame from the timer's update partway through
+the last one, so every frame took the limit plus that part of the frame (San Andreas' 30 fps was 25, 60 was 43; with
+VSync, GTA III and Vice City capped at 120 on a 120 Hz display rounded up to two refreshes, 60): each now waits for its
+frame's due time by a steady clock. (The runtime this port shares with the author's other ports also held games at 60
+until their work per frame left room for 120; the GTA games pace themselves, so it is off for them.) Above 30 fps, the parts of each game that count frames instead of time run at 30
 fps's pace, as FusionFix's HighFPS does: millisecond timers carry their fractions (mission countdowns, script timers,
 fades), things done every 16th or 32nd frame and the HUD's flashing count 30 fps frames, particles update 30 times a
 second, and the radio station's name, the clouds' turn, the spin damping of cars and people and the objects mission

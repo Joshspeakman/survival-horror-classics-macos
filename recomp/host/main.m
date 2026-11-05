@@ -142,6 +142,19 @@ static void *render_thread(void *arg)
                             } else if (tex) fprintf(stderr, "DungeonSiegeNative: screenshot: unexpected pixel format %lu\n", (unsigned long)tex.pixelFormat);
                         }
                     }
+                    static int bench = -1; if (bench < 0) bench = test_mode && getenv("DS_BENCH") && atoi(getenv("DS_BENCH")) > 0;
+                    if (bench) {   /* development: DS_BENCH=1 shows each frame in a texture of the window's size instead of the
+                                      window, so neither VSync nor the compositor (which slows a background window) paces it */
+                        static id<MTLTexture> bt[3]; static int bi; CGSize sz = layer.drawableSize;
+                        if (!bt[bi] || bt[bi].width != (NSUInteger)sz.width || bt[bi].height != (NSUInteger)sz.height) {
+                            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:(NSUInteger)sz.width height:(NSUInteger)sz.height mipmapped:NO];
+                            td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModePrivate; bt[bi] = [layer.device newTextureWithDescriptor:td];
+                        }
+                        id<MTLCommandBuffer> bcb = dsr_renderer_present_to(r, bt[bi]); bi = (bi + 1) % 3;
+                        if (bcb) [bcb addCompletedHandler:^(id<MTLCommandBuffer> c) { (void)c; __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE); }];
+                        dsr_renderer_flush(r, 0); if (!bcb) __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE);
+                        continue;
+                    }
                     id<CAMetalDrawable> d = [layer nextDrawable];
                     id<MTLCommandBuffer> cb = d ? dsr_renderer_present_to(r, d.texture) : nil;
                     if (cb) {
@@ -611,11 +624,13 @@ static void gta_pad_start(void)
             menu = g.buttonMenu.pressed;
         }
         int connected = g != nil;
-        if (test_mode && getenv("GTA_FAKE_PAD")) {   /* development: GTA_FAKE_PAD="frame:buttons(hex):lx:ly;..." a pad from the start, its state by presented frame */
+        if (test_mode && getenv("GTA_FAKE_PAD")) {   /* development: GTA_FAKE_PAD="frame:buttons(hex):lx:ly[:rx:ry];..." a pad from the start, its state by presented frame */
             extern int dsr_frame; double now = dsr_frame;
+            static double t0; if (!t0) t0 = CACurrentMediaTime(); double secs = CACurrentMediaTime() - t0;   /* "@seconds" steps: by time */
             connected = 1; memset(ax, 0, sizeof ax); b = 0;
             char *e = strdup(getenv("GTA_FAKE_PAD")), *save, *tok = strtok_r(e, ";", &save);
-            while (tok) { double at; unsigned bb; float lx, ly; if (sscanf(tok, "%lf:%x:%f:%f", &at, &bb, &lx, &ly) == 4 && now >= at) { b = bb; ax[0] = lx; ax[1] = ly; } tok = strtok_r(0, ";", &save); }
+            while (tok) { double at; unsigned bb; float lx, ly, rx = 0, ry = 0; int n = sscanf(tok + (tok[0] == '@'), "%lf:%x:%f:%f:%f:%f", &at, &bb, &lx, &ly, &rx, &ry);   /* (+ :rx:ry) */
+                          if (n >= 4 && (tok[0] == '@' ? secs >= at : now >= at)) { b = bb; ax[0] = lx; ax[1] = ly; ax[2] = ax[3] = rx; ax[5] = ax[4] = ry; } tok = strtok_r(0, ";", &save); }
             free(e);
         }
         w32_di_pad(connected, ax, b, pov);

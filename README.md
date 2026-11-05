@@ -22,8 +22,8 @@ macOS; this port takes the Windows executables from inside them.
   centred in a 4:3 frame); menus and loading screens are shown 4:3. Each game's own Widescreen switch turns it on and
   off.
 - **60 fps or the display's rate.** Timers, flashing, particles, spin damping and scripted gates and lifts are kept at
-  the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported). San Andreas' limiter, which turned
-  the PC game's 30 into 25 (and 60 into 43), keeps the rate exactly.
+  the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported). The games' frame limiters, which
+  turned San Andreas' 30 into 25 (and 60 into 43) and GTA III's and Vice City's 120 into 60, keep the rate exactly.
 - **PS2 lighting.** San Andreas' PS2 colour filter (the warm Los Santos look) and its radiosity glow, Vice City's PS2
   trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
 - **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
@@ -99,7 +99,7 @@ and the options above; they were checked with the games' own screenshots at 2054
 | Graphics | Direct3D 8 (GTA III, Vice City) and 9 (San Andreas) on Metal; the games' own vertex shaders translated to Metal (MojoShader) |
 | Sound | Miles Sound System and DirectSound on Core Audio |
 | Input | keyboard, mouse (DirectInput 8) and game controllers |
-| Frame rate | all three hold 60 fps on an M1 Pro (San Andreas' own frame limiter, which made 30 into 25, is paced by a steady clock) |
+| Frame rate | at 4112×2658 with 4x antialiasing on an M1 Pro: GTA III and Vice City 120 fps, San Andreas about 75 (its game code's limit; 60 evenly at *Frame Rate: 60*) |
 | Movies | the intro movies play (macOS's own MPEG-1 decoder); a key, click or pad button skips them |
 | Mods | file mods; models and textures meant for the `.img` archives, and ASI/CLEO code mods, are not supported yet |
 

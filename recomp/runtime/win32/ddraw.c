@@ -5,6 +5,7 @@
  * read and written at its 32-bit Windows offsets in guest memory; lockable memory (surfaces, vertex buffers) lives in
  * guest memory because the game writes through the pointers Lock returns. */
 #include "w32.h"
+#include "edition.h"
 #include "frame_wait.h"
 #include "dsr_producer.h"
 #include <stdarg.h>
@@ -216,6 +217,11 @@ static void cmd_cap_wait(void)
 #ifdef DF_EDITION
         if (!v) { const char *h = getenv("DF_HIGH_FPS"); v = h && !atoi(h) ? "auto" : "display"; }   /* DF_HIGH_FPS=0: as before */
 #endif
+#ifdef GTA_EDITION
+        /* the GTA games pace themselves (their frame limiter, at the launcher's rate, by a steady clock: gta3_mode.c);
+           the auto cap held them at 60 whenever a frame's work passed 7.9 ms (Retina sizes), and took 30 s to rise */
+        if (!v) v = "0";
+#endif
         if (!v) v = "auto";
         if (!strncmp(v, "auto", 4)) { cap_auto = v[4] ? 2 : 1; cap_period_ms = 1000.0 / 60; }
         else if (!strcmp(v, "display")) { cap_display = 1; cap_period_ms = 1000.0 / 60; }
@@ -259,8 +265,9 @@ static void stats_tick(void)
     if (!on) return;
     uint64_t t = now_us(); if (!t0) t0 = t;
     if (t - t0 < 1000000) return;
-    fprintf(stderr, "dsr: per s: present %u draw %u blt %u upload %u upload_over %u readback %u create %u destroy %u\n", st_ops[DSR_PRESENT], st_ops[DSR_DRAW],
-            st_ops[DSR_BLT], st_ops[DSR_SURFACE_UPLOAD], st_ops[DSR_UPLOAD_OVER], st_ops[DSR_READBACK], st_ops[DSR_SURFACE_CREATE], st_ops[DSR_SURFACE_DESTROY]);
+    static uint64_t waited0; uint64_t waited = dsr_cap_waited_us - waited0; waited0 = dsr_cap_waited_us;
+    fprintf(stderr, "dsr: per s: present %u draw %u blt %u upload %u upload_over %u readback %u create %u destroy %u; waited for the GPU %.0f ms\n", st_ops[DSR_PRESENT], st_ops[DSR_DRAW],
+            st_ops[DSR_BLT], st_ops[DSR_SURFACE_UPLOAD], st_ops[DSR_UPLOAD_OVER], st_ops[DSR_READBACK], st_ops[DSR_SURFACE_CREATE], st_ops[DSR_SURFACE_DESTROY], waited / 1000.0);
     memset(st_ops, 0, sizeof st_ops); t0 = t;
 }
 static void cmd_frame(void)

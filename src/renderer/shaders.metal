@@ -173,34 +173,45 @@ static float4 op(int o, float4 x, float4 y, float4 diffuse, float4 texel, float4
 /* Pipelines for draws without alpha testing are built with kAlphaTest false: a shader that can discard keeps the GPU
  * from removing hidden surfaces before shading (Apple GPUs' HSR) for every draw that uses it. */
 constant bool kAlphaTest [[function_constant(0)]];
+/* The texture stages' state as constants (renderer.m fs_key): each pipeline's shader keeps only what its stages do.
+ * kC0/kA0/kC1/kA1: stage 0/1 colour and alpha: op | arg1 << 8 | arg2 << 16. kFl: 1 texture 0, 2 texture 1, 4/8 those
+ * are XRGB (alpha 1), 0x10 specular added, 0x20 stage 0's coordinates the camera-space position, 0x40 projected,
+ * 0x1000 alpha test with function (kFl >> 8) & 15. */
+constant int kC0 [[function_constant(1)]];
+constant int kA0 [[function_constant(2)]];
+constant int kC1 [[function_constant(3)]];
+constant int kA1 [[function_constant(4)]];
+constant int kFl [[function_constant(5)]];
 fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]],
                         texture2d<float> t0 [[texture(0)]], sampler s0 [[sampler(0)]],
                         texture2d<float> t1 [[texture(1)]], sampler s1 [[sampler(1)]])
 {
-    float4 diffuse = in.diffuse, current = diffuse;
+    float4 diffuse = in.diffuse, current = diffuse, tf = u.tfactor;
     float2 uv0 = in.uv;
-    if ((u.a0.z & 0xffff0000) == 0x20000) uv0 = (u.a0.w & 0x100) ? in.tcproj.xy / in.tcproj.z : in.tcproj.xy;   // TCI_CAMERASPACEPOSITION
-    float4 texel = u.misc.z ? t0.sample(s0, uv0) : float4(1);
-    if (u.xrgb.x) texel.a = 1;
-    if (u.c0.x != 1) {
-        float4 c = op(u.c0.x, arg(u.c0.y, diffuse, current, texel, u.tfactor), arg(u.c0.z, diffuse, current, texel, u.tfactor), diffuse, texel, u.tfactor, current);
-        float4 a = u.c0.w == 1 ? current : op(u.c0.w, arg(u.a0.x, diffuse, current, texel, u.tfactor), arg(u.a0.y, diffuse, current, texel, u.tfactor), diffuse, texel, u.tfactor, current);
+    if (kFl & 0x20) uv0 = (kFl & 0x40) ? in.tcproj.xy / in.tcproj.z : in.tcproj.xy;   // TCI_CAMERASPACEPOSITION
+    float4 texel = (kFl & 1) ? t0.sample(s0, uv0) : float4(1);
+    if (kFl & 4) texel.a = 1;
+    const int c0 = kC0 & 0xff, c0a = (kC0 >> 8) & 0xff, c0b = (kC0 >> 16) & 0xff, a0 = kA0 & 0xff, a0a = (kA0 >> 8) & 0xff, a0b = (kA0 >> 16) & 0xff;
+    const int c1 = kC1 & 0xff, c1a = (kC1 >> 8) & 0xff, c1b = (kC1 >> 16) & 0xff, a1 = kA1 & 0xff, a1a = (kA1 >> 8) & 0xff, a1b = (kA1 >> 16) & 0xff;
+    if (c0 != 1) {
+        float4 c = op(c0, arg(c0a, diffuse, current, texel, tf), arg(c0b, diffuse, current, texel, tf), diffuse, texel, tf, current);
+        float4 a = a0 == 1 ? current : op(a0, arg(a0a, diffuse, current, texel, tf), arg(a0b, diffuse, current, texel, tf), diffuse, texel, tf, current);
         current = float4(c.rgb, a.a);
-        if (u.c1.x != 1) {
-            float4 texel1 = u.misc.w ? t1.sample(s1, in.uv1) : float4(1);
-            if (u.xrgb.y) texel1.a = 1;
-            float4 c1 = op(u.c1.x, arg(u.c1.y, diffuse, current, texel1, u.tfactor), arg(u.c1.z, diffuse, current, texel1, u.tfactor), diffuse, texel1, u.tfactor, current);
-            float4 a1 = u.c1.w == 1 ? current : op(u.c1.w, arg(u.a1.x, diffuse, current, texel1, u.tfactor), arg(u.a1.y, diffuse, current, texel1, u.tfactor), diffuse, texel1, u.tfactor, current);
-            current = float4(c1.rgb, a1.a);
+        if (c1 != 1) {
+            float4 texel1 = (kFl & 2) ? t1.sample(s1, in.uv1) : float4(1);
+            if (kFl & 8) texel1.a = 1;
+            float4 cc = op(c1, arg(c1a, diffuse, current, texel1, tf), arg(c1b, diffuse, current, texel1, tf), diffuse, texel1, tf, current);
+            float4 aa = a1 == 1 ? current : op(a1, arg(a1a, diffuse, current, texel1, tf), arg(a1b, diffuse, current, texel1, tf), diffuse, texel1, tf, current);
+            current = float4(cc.rgb, aa.a);
         }
     }
-    if (kAlphaTest && u.at.z != 0) {                     // alpha test (D3DCMP_*)
-        float a = current.a, r = u.at.x; int f = int(u.at.y); bool pass;
+    if (kAlphaTest && (kFl & 0x1000)) {                  // alpha test (D3DCMP_*)
+        float a = current.a, r = u.at.x; const int f = (kFl >> 8) & 15; bool pass;
         switch (f) { case 1: pass = false; break; case 2: pass = a < r; break; case 3: pass = a == r; break; case 4: pass = a <= r; break;
                      case 5: pass = a > r; break; case 6: pass = a != r; break; case 7: pass = a >= r; break; default: pass = true; }
         if (!pass) discard_fragment();
     }
-    if (u.tg.y) current.rgb = saturate(current.rgb + in.spec);
+    if (kFl & 0x10) current.rgb = saturate(current.rgb + in.spec);
     current.rgb = mix(u.fogcolor.rgb, current.rgb, in.fogf);
     return current;
 }

@@ -38,15 +38,22 @@ static uint32_t guest_call(Ctx *c, uint32_t fn, int n, const uint32_t *args)
  * is made 0.8, so every mode is listed. */
 enum { SA_MODE_SHAPE = 0x0074d3beu, SA_SHAPE_08 = 0x0083fe78u, SA_PREFS_AA = 0x00b880b8u };
 #endif
-#ifdef GTASA_EDITION
-/* San Andreas' frame limiter (WinMain's loop) runs a frame once the time since CTimer's last update passes
+/* The frame limiter (WinMain's loop, all three games) runs a frame once the time since CTimer's last update passes
  * 1000 / RsGlobal.maxFPS ms; that update comes partway through the frame, so every frame took the limit plus the work
- * before it (at 60: 16.7 + ~6.7 ms, 43 fps; the PC game's "30" gave 25). The test here sees the time since the last
- * frame's due time by a steady clock instead, each frame due one interval after the last: the limit is kept exactly. */
-enum { SA_LIMIT_TEST = 0x0075072du, SA_LIMIT_RUN = 0x00750744u };
-static double sa_due;
-static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec * 1e-6; }
+ * before it (San Andreas at 60: 16.7 + ~6.7 ms, 43 fps; the PC game's "30" gave 25). With VSync that rounds up to the
+ * next refresh: GTA III and Vice City capped at 120 on a 120 Hz display showed 60. The test here sees the time since the
+ * last frame's due time by a steady clock instead, each frame due one interval after the last: the limit is kept
+ * exactly. LIMIT_TEST: San Andreas' [esp+14] (the ms since, as a float), III's and VC's st(0) before the comparison
+ * (reached only with the limiter on); LIMIT_RUN: where a frame runs. */
+#if defined(GTASA_EDITION)
+enum { LIMIT_TEST = 0x0075072du, LIMIT_RUN = 0x00750744u };
+#elif defined(GTAVC_EDITION)
+enum { LIMIT_TEST = 0x006000e0u, LIMIT_RUN = 0x006000fcu };
+#else
+enum { LIMIT_TEST = 0x00583be3u, LIMIT_RUN = 0x00583bffu };
 #endif
+static double lim_due;
+static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec * 1e-6; }
 static void pick_mode(Ctx *c)
 {
     static int done; const char *e = getenv("GTA_MODE"), *dp = getenv("GTA_DEPTH"); unsigned w, h, depth = dp && atoi(dp) == 16 ? 16 : 32;
@@ -289,6 +296,18 @@ void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in 
     }
 #ifdef GTASA_EDITION
 #endif
+#ifdef GTAVC_EDITION
+    /* Vice City's car camera rolls with the steering (CCam::Process_Cam_On_A_String: f_Roll, eased towards the steering
+     * times the speed times about 10-15 degrees). A keyboard steers by degrees; a stick is at full lock at once, so the
+     * camera banked hard in every turn. The active camera's roll is kept at 0 in that mode and the boat's (a frame's easing from 0 is a
+     * fraction of a degree); GTA_CAR_ROLL=1 keeps the original. TheCamera 0x7e3690: ActiveCam +0x76, Cams[3] +0x188
+     * (0x1cc each: Mode +0xc, f_Roll +0x30, f_rollSpeed +0x34). */
+    { static int keep = -1; if (keep < 0) keep = getenv("GTA_CAR_ROLL") && atoi(getenv("GTA_CAR_ROLL")) > 0;
+      uint8_t a = G_MEM[0x7e3690u + 0x76];
+      if (!keep && a < 3) { uint32_t cam = 0x7e3690u + 0x188 + a * 0x1ccu;
+          uint16_t mode = rt_r16(G_MEM, cam + 0xc);
+          if (mode == 18 || mode == 22) { wrf(cam + 0x30, 0); wrf(cam + 0x34, 0); } } }   /* MODE_CAM_ON_A_STRING, MODE_BEHINDBOAT */
+#endif
     gta_wide();
     if (menu) { if (first || !was_menu) G_MEM[WIDE_PREF] = (uint8_t)wide_state; else wide_state = G_MEM[WIDE_PREF] != 0; }
     else { if (was_menu && !first) wide_state = G_MEM[WIDE_PREF] != 0; G_MEM[WIDE_PREF] = 0; }
@@ -526,12 +545,16 @@ int gta3_hook(Ctx *c, uint32_t addr)
 #endif
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
 #ifdef GTASA_EDITION
-    if (addr == SA_LIMIT_TEST) { wrf(c->esp + 0x14, (float)(now_ms() - sa_due)); return 1; }   /* [esp+14]: the time since, ms */
-    if (addr == SA_LIMIT_RUN) {
+    if (addr == LIMIT_TEST) { wrf(c->esp + 0x14, (float)(now_ms() - lim_due)); return 1; }   /* [esp+14]: the time since, ms */
+#else
+    if (addr == LIMIT_TEST) { ST(0) = now_ms() - lim_due; return 1; }                         /* st(0): the time since, ms */
+#endif
+    if (addr == LIMIT_RUN) {
         double now = now_ms(), per = 1000.0 / (rt_r32(G_MEM, RS_MAX_FPS) ? rt_r32(G_MEM, RS_MAX_FPS) : 30);
-        sa_due = now - sa_due > 2 * per ? now : sa_due + per;   /* behind by more than a frame: from now */
+        lim_due = now - lim_due > 2 * per ? now : lim_due + per;   /* behind by more than a frame: from now */
         return 1;
     }
+#ifdef GTASA_EDITION
     if (addr == SA_MODE_SHAPE) { rt_w32(G_MEM, c->esp + 4, rt_r32(G_MEM, SA_SHAPE_08)); return 1; }
 #endif
     if (addr == CD_SYNC_WAIT) { cd_sync_wait(c); return 1; }
