@@ -25,6 +25,7 @@
 #define VM_HI         0x7ffe0000u
 #define THUNK_BASE    0xfff00000u     /* import thunks: THUNK_BASE + 16 * index (never mapped) */
 #define MAX_THUNKS    4096
+#define W32_HOST_DIRS 68                 /* overlay, up to 64 mods, expansion layer, game folder (files.c w32_host_dirs) */
 
 /* loader / process */
 extern uint32_t w32_image_base, w32_image_size, w32_entry, w32_tls_index_addr, w32_tls_template, w32_tls_size, w32_tls_zero;

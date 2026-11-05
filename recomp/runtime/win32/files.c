@@ -61,6 +61,22 @@ static char *win_trim(char *t)
     if (strcmp(t, ".") && strcmp(t, "..")) { size_t n = strlen(t); while (n && (t[n - 1] == ' ' || t[n - 1] == '.')) t[--n] = 0; }
     return t;
 }
+/* Mods (the launcher's Mods window): GTA_MODS lists the enabled mods' folders, one per line, the first winning. Each
+ * holds files at their game-folder paths (data/handling.cfg, models/generic/vehicle.txd, ...); a game file a mod has is
+ * read from the mod, a write copies it to the overlay as for the game's own files. The game folder stays untouched. */
+#define MAX_MODS 64
+static char mod_dir[MAX_MODS][1024]; static int nmods = -1;
+static void mods_init(void)
+{
+    if (nmods >= 0) return;
+    nmods = 0; const char *e = getenv("GTA_MODS"); if (!e) return;
+    while (*e && nmods < MAX_MODS) {
+        const char *nl = strchr(e, '\n'); size_t n = nl ? (size_t)(nl - e) : strlen(e);
+        if (n && n < sizeof mod_dir[0]) { snprintf(mod_dir[nmods], sizeof mod_dir[0], "%.*s", (int)n, e); nmods++; }
+        e += n; if (*e) e++;
+    }
+    if (nmods) fprintf(stderr, "w32: %d mod%s on\n", nmods, nmods == 1 ? "" : "s");
+}
 /* Windows path -> host path. mode 0: read (overlay if present, else base); 1: create/write (overlay, copied up). */
 static int host_path(const char *win, char *out, size_t cap, int mode, const char *overlay, const char *layer)
 {
@@ -103,6 +119,14 @@ static int host_path(const char *win, char *out, size_t cap, int mode, const cha
     if (!*overlay) { resolve(w32_game_dir, parts, 2, np, out, cap); return 0; }
     char ov[2048]; resolve(overlay, parts, 2, np, ov, sizeof ov);
     if (exists(ov)) { snprintf(out, cap, "%s", ov); return 0; }
+    mods_init();
+    for (int m = 0; m < nmods && np > 2; m++) {   /* the enabled mods, first wins: read there, or copied up to be written */
+        char md[2048]; resolve(mod_dir[m], parts, 2, np, md, sizeof md);
+        struct stat mst; if (stat(md, &mst)) continue;
+        if (!mode) { snprintf(out, cap, "%s", md); return 0; }
+        if (S_ISREG(mst.st_mode)) { copy_file(md, ov); snprintf(out, cap, "%s", ov); return 0; }
+        break;
+    }
     if (*layer) {                       /* the expansion layer: read where it has the file */
         char ly[2048]; resolve(layer, parts, 2, np, ly, sizeof ly);
         struct stat lst;
@@ -120,18 +144,23 @@ int w32_host_path(const char *win, char *out, size_t cap, int mode)
 {
     return host_path(win, out, cap, mode, w32_game_overlay, w32_game_layer);
 }
-/* every host directory behind a game-folder directory (overlay, expansion layer, game folder); returns how many exist */
-int w32_host_dirs(const char *win, char dirs[3][2048])
+/* every host directory behind a game-folder directory (overlay, mods, expansion layer, game folder); returns how many exist */
+int w32_host_dirs(const char *win, char dirs[W32_HOST_DIRS][2048])
 {
-    const char *layers[] = { w32_game_overlay, w32_game_layer, "" };
+    mods_init();
     int n = 0;
-    for (int pass = 0; pass < 3; pass++) {
-        if (pass < 2 && !*layers[pass]) continue;
+    for (int pass = 0; pass < 3 + nmods && n < W32_HOST_DIRS; pass++) {
         char d[2048];
-        if (!host_path(win, d, sizeof d, 0, layers[pass], "") && exists(d)) {
-            int dup = 0; for (int j = 0; j < n; j++) if (!strcmp(dirs[j], d)) dup = 1;
-            if (!dup) snprintf(dirs[n++], 2048, "%s", d);
+        if (pass >= 2 && pass < 2 + nmods) {   /* a mod's folder for this directory (resolved below the mod, any case) */
+            const char *md = mod_dir[pass - 2]; size_t ml = strlen(md);
+            if (host_path(win, d, sizeof d, 0, md, "") || strncmp(d, md, ml) || !exists(d)) continue;
+        } else {
+            const char *layer = pass == 0 ? w32_game_overlay : pass == 1 ? w32_game_layer : "";
+            if (pass < 2 && !*layer) continue;
+            if (host_path(win, d, sizeof d, 0, layer, "") || !exists(d)) continue;
         }
+        int dup = 0; for (int j = 0; j < n; j++) if (!strcmp(dirs[j], d)) dup = 1;
+        if (!dup) snprintf(dirs[n++], 2048, "%s", d);
     }
     return n;
 }
@@ -434,7 +463,7 @@ IMPL(kernel32, FindFirstFileA)
     char *sl = strrchr(win, '\\'); const char *pat = sl ? sl + 1 : win;
     char dirwin[2048]; if (sl) snprintf(dirwin, sizeof dirwin, "%.*s", (int)(sl - win), win); else snprintf(dirwin, sizeof dirwin, ".");
     if (!*dirwin) snprintf(dirwin, sizeof dirwin, "\\");
-    char dirs[3][2048]; int nd = w32_host_dirs(dirwin, dirs);
+    static _Thread_local char dirs[W32_HOST_DIRS][2048]; int nd = w32_host_dirs(dirwin, dirs);
     if (!nd) { w32_set_last_error(c, 3); RET(0xffffffffu, 2); }
     (void)p;
     Find *fd = calloc(1, sizeof *fd); fd->ndir = nd; for (int k = 0; k < nd; k++) snprintf(fd->dir[k], sizeof fd->dir[k], "%s", dirs[k]);
