@@ -204,14 +204,24 @@ def df_moved(features, edition):
 GTA3_HOOKS = {
     0x005829f8: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0040604a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
+    0x00527b00: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
+    0x0046f4c9: 'CCamera::CalculateDerivedValues: the frustum half angle widened (widescreen)',
 }
 GTAVC_HOOKS = {
     0x00600a95: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0040840a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
+    0x00580690: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
+    0x0046c2dc: 'CCamera::CalculateDerivedValues: the frustum half angle widened (widescreen)',
+    0x0054a1ba: 'CDraw::FindAspectRatio: the screen\'s aspect (widescreen)',
 }
 GTASA_HOOKS = {
     0x0074daec: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x00407a9e: 'CdStreamSync: the wait for a streaming read, without the lost-release race (gta3_mode.c)',
+    0x007389a0: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
+    0x00518350: 'CCamera::CalculateFrustumPlanes: the half angle widened (widescreen)',
+    0x0070b0aa: 'CDraw::CalculateAspectRatio: the screen\'s aspect (widescreen)',
+    0x0070b0bb: 'CDraw::CalculateAspectRatio: the screen\'s aspect (widescreen)',
+    0x0070b0c8: 'CDraw::CalculateAspectRatio: the screen\'s aspect (widescreen)',
 }
 
 def df_table(features, edition):
