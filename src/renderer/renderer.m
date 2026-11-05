@@ -363,8 +363,11 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     else { v.attributes[5].offset = 0; v.attributes[5].bufferIndex = 3; }
     uint32_t stride = off; for (uint32_t k = 0; k < ntc; k++) stride += tsz[k];
     v.layouts[0].stride = stride;
-    v.layouts[2].stride = 16; v.layouts[2].stepFunction = MTLVertexStepFunctionConstant; v.layouts[2].stepRate = 0;
-    v.layouts[3].stride = 16; v.layouts[3].stepFunction = MTLVertexStepFunctionConstant; v.layouts[3].stepRate = 0;
+    /* the constant buffers only when an attribute reads one: Metal refuses a layout no attribute uses (a vertex with a
+     * normal and two coordinate sets needs no buffer 3: San Andreas) */
+    int use2 = 0, use3 = 0; for (int a = 1; a <= 5; a++) { use2 |= v.attributes[a].bufferIndex == 2; use3 |= v.attributes[a].bufferIndex == 3; }
+    if (use2) { v.layouts[2].stride = 16; v.layouts[2].stepFunction = MTLVertexStepFunctionConstant; v.layouts[2].stepRate = 0; }
+    if (use3) { v.layouts[3].stride = 16; v.layouts[3].stepFunction = MTLVertexStepFunctionConstant; v.layouts[3].stepRate = 0; }
     d.vertexDescriptor = v;
     double t0 = CACurrentMediaTime();
     p = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
@@ -582,7 +585,7 @@ static id<MTLRenderPipelineState> prog_pipeline(DSRRenderer *r, uint32_t mask, i
         else { v.attributes[sl].bufferIndex = 3; v.attributes[sl].offset = 16u * (uint32_t)sl; }
     }
     v.layouts[0].stride = 16u * (uint32_t)(ns ? ns : 1);
-    v.layouts[3].stride = 256; v.layouts[3].stepFunction = MTLVertexStepFunctionConstant; v.layouts[3].stepRate = 0;
+    if (ns < 16) { v.layouts[3].stride = 256; v.layouts[3].stepFunction = MTLVertexStepFunctionConstant; v.layouts[3].stepRate = 0; }   /* only if read */
     d.vertexDescriptor = v;
     id<MTLRenderPipelineState> pso = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
     if (!pso) { fprintf(stderr, "dsr: effect pipeline (program %u): %s\n", r->cur_prog, err.localizedDescription.UTF8String); return nil; }
