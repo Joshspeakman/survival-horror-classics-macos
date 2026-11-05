@@ -202,6 +202,8 @@ def df_moved(features, edition):
 
 # GTA III and San Andreas: native additions (runtime/win32/gta3_mode.c gta3_hook)
 GTA3_HOOKS = {
+    0x00583be3: 'WinMain frame limiter: the time since the last frame due, by a steady clock (gta3_mode.c LIMIT_TEST)',
+    0x00583bff: 'WinMain frame limiter: a frame runs, the next one due an interval later (LIMIT_RUN)',
     0x005829f8: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0040604a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
     0x00527b00: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',
@@ -257,6 +259,8 @@ GTA3_HOOKS = {
 }
 GTA3_OVERRIDES = {0x0050e630: 'CParticle::Update: 30 times a second at high frame rates (gta3_mode.c gta3_override)'}
 GTAVC_HOOKS = {
+    0x006000e0: 'WinMain frame limiter: the time since the last frame due, by a steady clock (gta3_mode.c LIMIT_TEST)',
+    0x006000fc: 'WinMain frame limiter: a frame runs, the next one due an interval later (LIMIT_RUN)',
     0x00600a95: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0048fdbf: 'CMBlur::BlurOn = 0 at start (the PC release): the PS2 trails kept on (gta3_mode.c vc_trails)',
     0x0049975f: 'CMBlur::BlurOn = 0 (the PC release): the PS2 trails kept on',

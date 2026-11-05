@@ -344,6 +344,12 @@ IMPL(kernel32, CompareFileTime)
 IMPL(kernel32, Sleep)
 {
     uint32_t ms = ARG(0);
+    { static int on = -1; if (on < 0) on = getenv("W32_SLEEPLOG") != 0;   /* development: who sleeps, how often (each second) */
+      if (on) { static uint32_t who[8], n[8], tot[8]; static double t0; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec * 1e-9;
+                uint32_t ra = rt_r32(G_MEM, c->esp), k = 0; while (k < 8 && who[k] && who[k] != ra) k++; if (k < 8) { who[k] = ra; n[k]++; tot[k] += ms; }
+                if (!t0) t0 = now;
+                if (now - t0 >= 1) { for (k = 0; k < 8 && who[k]; k++) fprintf(stderr, "sleep: from %08x (thread %u) %u calls, %u ms asked\n", who[k], w32_tid(c), n[k], tot[k]);
+                                     memset(who, 0, sizeof who); memset(n, 0, sizeof n); memset(tot, 0, sizeof tot); t0 = now; } } }
     void w32_crash_wait_begin(int, uint32_t, uint32_t), w32_crash_wait_end(void);
     if (w32_deterministic) fake_us += (uint64_t)ms * 1000; else if (ms) { w32_crash_wait_begin(3, 0, ms); usleep(ms * 1000); w32_crash_wait_end(); } else sched_yield();
     RET(0, 1);

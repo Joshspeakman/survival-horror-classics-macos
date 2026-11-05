@@ -60,6 +60,10 @@ have no counterpart in these games: LB steps to the next weapon, the D-pad chang
 changes its joypad layout.) The triggers are buttons, as on the PS2. Menu is the Escape key, as the PC versions can't
 put the pause menu on a pad button.
 
+Vice City's car camera leans into turns by the steering times the speed. With a keyboard, which turns the wheel a little
+at a time, the lean stays slight; a stick is at full lock at once, so the camera banked hard in every turn. The lean is
+kept off (`GTA_CAR_ROLL=1` brings it back).
+
 How it works: the host reads the controller with Apple's GameController framework (`recomp/host/main.m`) and the
 runtime's DirectInput 8 (`recomp/runtime/win32/dinput8.c`) reports it as a gamepad that is always attached; its axes
 are signed (−32768..32767), as the games read them without setting a range. `W32_NO_PAD=1` hides it.

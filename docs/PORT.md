@@ -27,7 +27,9 @@ hand-written x87 code in GTA III's `_rwcseg` (flagged as data): `tools/pe.py` tr
   GPU drew is a GPU copy (the Trails copy the screen every frame).
 - **Direct3D 9 on Metal** (`src/renderer`): fixed-function lighting (materials, directional/point/spot lights,
   COLORVERTEX and the material sources), generated texture coordinates (the cars' environment maps), table fog,
-  blend operations, multisampled targets resolved at the end of each pass, and San Andreas' own vertex shaders
+  blend operations, the texture stages as shaders specialised per combination (function constants), multisampled
+  targets kept in tile memory and resolved as each pass ends, depth only in the passes whose draws use it, new targets
+  cleared to black, and San Andreas' own vertex shaders
   translated to Metal by MojoShader (`d3d9_shader.c`: peds and CJ skinned on the GPU).
 - **Full screen**: the window takes the mode's size before the device is made (RenderWare checks the client rectangle).
 
@@ -48,7 +50,8 @@ the code in `recomp/runtime/win32/gta3_mode.c`); overrides replace a whole funct
 | PS2 trails kept on (`CMBlur::BlurOn`) | (Display Setup) | 0x48fdbf, 0x49975f | |
 | PS2 colour filter passes; radiosity after them | | | 0x718a6c, 0x718abd, 0x718ac0 |
 | The streaming read's lost release (`CdStreamSync`) | 0x40604a | 0x40840a | 0x407a9e |
-| The frame limiter paced by a steady clock | | | 0x75072d, 0x750744 |
+| The frame limiter paced by a steady clock | 0x583be3, 0x583bff | 0x6000e0, 0x6000fc | 0x75072d, 0x750744 |
+| The car camera's lean with the steering kept off (`TheCamera`, each frame) | | 0x7e3690 | |
 
 Their addresses were found with FusionFix's (MIT) search patterns, and checked by disassembling each build.
 
@@ -77,7 +80,16 @@ ends or is stopped (it skips them itself when the app isn't in front). `GTA_NO_M
 Test mode (`DS_TEST=1`) runs a game in the background with scripted input: `DS_SCRIPT="frame:key:13;frame:shot:<png>"`
 or `DS_CMDFILE=<file>` (lines appended while it runs: `key:13`, `shot:<png>`, `peek:<address>`); `DS_SHOT_FINAL=1`
 saves screenshots as shown (after gamma and the 16-bit look); `W32_AUDIO_MUTE=1` mixes but plays nothing and
-`W32_AUDIOLOG=1` reports the output level each second; `GTA_FAKE_PAD="frame:buttons:lx:ly;..."` is a controller.
+`W32_AUDIOLOG=1` reports the output level each second; `GTA_FAKE_PAD="frame:buttons:lx:ly[:rx:ry];..."` is a
+controller (`@seconds` in place of a frame number: by time).
+
+For speed: `DS_BENCH=1` shows each frame in a texture instead of the (background, compositor-paced) window, so the
+frame rate is what the game and GPU manage; `DSR_PROFILE=1` counts each frame's GPU passes by kind and the waits for
+the GPU (each pass in a command buffer of its own: their times are only relative); `DSR_PASSLOG=<frame>` lists that
+frame's passes and copies; `DSR_RINGLOG=1` the upload ring's use; `DSR_STATS=1` the commands a second and the time the
+game waited for the GPU; `W32_SLEEPLOG=1` who calls `Sleep`; `kill -INFO <pid>` writes every guest thread's stack to the
+data folder's CrashReports (the reliable way to see what the game's thread is doing: `W32_PROFILE`'s CPU-time signal
+lands on whichever thread macOS picks, often a sleeping one).
 For rendering: `D3D9_FRAMELOG=<frame>` (or `D3D9_FRAMELOG_FILE=<path>`: the frame after the file appears) logs one
 frame's render targets, copies, clears and draws, reading small targets back; with `D3D9_PROBE=x,y` it names each
 draw that changes that pixel. `D3D8_COPYLOG=1` logs Direct3D 8 copies; `D3D9_SHADERLOG=2` prints the translated
