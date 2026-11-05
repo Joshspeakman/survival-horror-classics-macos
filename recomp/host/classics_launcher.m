@@ -47,6 +47,11 @@ static const GameDef GAMES[3] = {
     {"sa", "Grand Theft Auto: San Andreas", "SAN ANDREAS", "San Andreas", "GTASA", "gta_sa.exe", "GTASANative", "GTA San Andreas", "GTA San Andreas User Files", 0.62, 0.2, 0.50, 0.44, 0.28},
 };
 enum { NGAMES = 3 };
+static const int GAMEBANANA[NGAMES] = {1445, 1431, 935};   /* GameBanana's game ids: the Mods window's browser */
+/* classics_mods.m: the Mods window */
+NSString *gcm_env(NSString *data);
+void gcm_counts(NSString *data, NSUInteger *installed, NSUInteger *on);
+void gcm_show(NSWindow *parent, NSString *title, NSString *gameTag, int gamebanana, NSString *data, NSString *userFiles, void (^changed)(void));
 
 @interface GCGame : NSObject
 @property const GameDef *def; @property BOOL installed;
@@ -578,8 +583,23 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
         GCGame *g = wv.chosen; if (!g.installed || ![[NSFileManager defaultManager] fileExistsAtPath:g.game]) { NSBeep(); return; }
         [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:g.game isDirectory:YES]];
     };
+    GCTile *mods = [GCTile new]; mods.title = @"Mods";
+    mods.current = ^NSDictionary * {
+        GCGame *g = wv.chosen;
+        if (!g.installed) return @{@"label": @"—", @"off": @YES, @"note": [NSString stringWithFormat:@"%s isn't installed", g.def->place]};
+        NSUInteger n = 0, on = 0; gcm_counts(g.data, &n, &on);
+        return @{@"label": n ? [NSString stringWithFormat:@"%lu On", (unsigned long)on] : @"Add Mods",
+                 @"note": n ? [NSString stringWithFormat:@"%lu installed, %lu on: browse GameBanana, install, order and switch them", (unsigned long)n, (unsigned long)on]
+                            : @"Browse GameBanana's mods for this game, or drop in a zip, rar or 7z"};
+    };
+    __weak Launcher *wl = self;
+    mods.activate = ^{
+        GCGame *g = wv.chosen; if (!g.installed) { NSBeep(); return; }
+        NSUInteger k = 0; for (; k < NGAMES; k++) if (&GAMES[k] == g.def) break;
+        gcm_show(wl.window, @(g.def->title), @(g.def->id), k < NGAMES ? GAMEBANANA[k] : 0, g.data, userFiles(g), ^{ wv.needsDisplay = YES; });
+    };
     [self setupUpdates];
-    v.tiles = @[gfx, saves, files, self.updates];
+    v.tiles = @[gfx, mods, saves, files, self.updates];
     __weak Launcher *ws = self;
     v.onPlay = ^{ [ws play]; };
     v.onQuit = ^{ [NSApp terminate:nil]; };
@@ -603,6 +623,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     self.window = w; [w center]; [w makeKeyAndOrderFront:nil]; [w makeFirstResponder:v];
     [NSApp activateIgnoringOtherApps:YES];
     if (getenv("GTAC_LAUNCHER_PLAY")) dispatch_async(dispatch_get_main_queue(), ^{ [ws play]; });   /* development: Play at once */
+    if (getenv("GTAC_MODS_OPEN")) dispatch_async(dispatch_get_main_queue(), ^{ mods.activate();   /* development: the Mods window (and its browser) */
+        if (getenv("GTAC_MODS_BROWSE")) dispatch_async(dispatch_get_main_queue(), ^{ void gcm_browse(void); gcm_browse(); }); });
 }
 - (void)setupUpdates
 {
@@ -671,7 +693,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     NSDictionary *env = @{@"DS_NO_LAUNCHER": @"1", @"DS_DISPLAY": c[@"display"], @"DS_NOTCH": c[@"notch"], @"DSR_VSYNC": c[@"vsync"],
                           /* always set, "" for as set in the game: the game's own launch code keeps a value already set,
                            * and would otherwise take one from an older launcher.plist in its data folder */
-                          @"GTA_MODE": mode_for(c[@"display"], c[@"notch"], c[@"resolution"]), @"DS_LOG_FILE": log};
+                          @"GTA_MODE": mode_for(c[@"display"], c[@"notch"], c[@"resolution"]), @"DS_LOG_FILE": log,
+                          @"GTA_MODS": gcm_env(g.data)};   /* the Mods window's enabled mods (runtime/win32/files.c) */
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];
     if (getenv("GTAC_LAUNCHER_DRY")) {                                   /* development: what Play runs */
         for (NSString *k in [env.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [env[k] UTF8String]);
