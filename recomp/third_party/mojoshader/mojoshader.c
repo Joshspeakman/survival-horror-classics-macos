@@ -753,9 +753,9 @@ static int parse_source_token(Context *ctx, SourceArgInfo *info)
             // figure out what array we're in...
             if (!ctx->ignores_ctab)
             {
-                if (!ctx->ctab.have_ctab)  // hard to do efficiently without!
-                    fail(ctx, "relative addressing unsupported without a CTAB");
-                else
+                // gta-classics-macos: a shader without a constant table (San
+                //  Andreas' skinning shaders, bones read with c[a0.x + n]) gets
+                //  one array, the whole register file, below
                 {
                     determine_constants_arrays(ctx);
 
@@ -774,8 +774,11 @@ static int parse_source_token(Context *ctx, SourceArgInfo *info)
                         if (var != NULL)
                         {
                             var->type = MOJOSHADER_UNIFORM_FLOAT;
-                            var->index = reltarget;
-                            var->count = (shader_is_vertex(ctx) ? 256 : 224) - reltarget;
+                            /* without a CTAB every relative read shares one
+                               array from c0, whatever its base register (an
+                               array from each base would overlap the others) */
+                            var->index = ctx->ctab.have_ctab ? reltarget : 0;
+                            var->count = (shader_is_vertex(ctx) ? 256 : 224) - var->index;
                             var->constant = NULL;
                             var->emit_position = -1;
                             var->next = ctx->variables;
