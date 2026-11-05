@@ -209,6 +209,7 @@ GTAVC_HOOKS = {
 }
 GTASA_HOOKS = {
     0x0074daec: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
+    0x00407a9e: 'CdStreamSync: the wait for a streaming read, without the lost-release race (gta3_mode.c)',
 }
 
 def df_table(features, edition):

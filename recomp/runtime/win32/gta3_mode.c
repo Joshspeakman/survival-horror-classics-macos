@@ -47,9 +47,40 @@ static void pick_mode(Ctx *c)
     fprintf(stderr, "gta3: no %ux%u video mode: the game's own choice\n", w, h);
 }
 
+#ifdef GTASA_EDITION
+/* CdStreamSync's wait for a streaming read (San Andreas 3.0, 0x407a70). The game checks the channel's sector count, then
+ * sets its "locked" flag and waits on the channel's semaphore; the streaming thread (0x407b70) clears the count, then
+ * releases the semaphore only if the flag is set. Nothing orders the two: when the thread finishes between the game's
+ * check and its flag (reads here take microseconds, not a disc's milliseconds), nobody releases the semaphore and the
+ * game waits for ever (hang report: main thread in 0x407a70, streaming thread idle in 0x407b70). The hook waits a
+ * millisecond at a time until the semaphore is released or the thread is done with the channel (count 0, and its "in
+ * use" flag, cleared after the release step, 0); the game's own wait then has a timeout of 0 and only takes a release
+ * that came in between. Channel (esi): +4 sectors to read, +0xd locked, +0xe in use, +0x14 semaphore. */
+enum { CD_SYNC_WAIT = 0x00407a9eu };     /* call WaitForSingleObject(semaphore, INFINITE): [esp] handle, [esp + 4] timeout */
+int w32_wait_one(Ctx *c, uint32_t h, uint32_t ms);
+static void cd_sync_wait(Ctx *c)
+{
+    uint32_t ch = c->esi, sema = rt_r32(G_MEM, c->esp);
+    if (rt_r32(G_MEM, c->esp + 4) != 0xffffffffu || sema != rt_r32(G_MEM, ch + 0x14)) return;   /* not the expected call */
+    for (;;) {
+        if (w32_wait_one(c, sema, 1) == 0) break;
+        uint32_t left = __atomic_load_n((uint32_t *)(G_MEM + ch + 4), __ATOMIC_ACQUIRE);
+        uint8_t busy = __atomic_load_n(G_MEM + ch + 0xe, __ATOMIC_ACQUIRE);
+        if (!left && !busy) {
+            static int n; if (n++ < 5) fprintf(stderr, "gtasa: streaming read on channel %08x finished without a release (the CdStreamSync race): not waiting\n", ch);
+            break;
+        }
+    }
+    rt_w32(G_MEM, c->esp + 4, 0);
+}
+#endif
+
 int gta3_hook(Ctx *c, uint32_t addr)
 {
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
+#ifdef GTASA_EDITION
+    if (addr == CD_SYNC_WAIT) { cd_sync_wait(c); return 1; }
+#endif
     return 0;
 }
 #endif
