@@ -12,11 +12,10 @@ int dsr_verbose; long dsr_stat[8]; double dsr_gpu_ms[100000]; int dsr_frame;
 /* ms: a multisampled target's samples, resolved into tex as each pass drawing into them ends (tex is what copies, the
  * present and readbacks read: such surfaces are never bound as textures); ms_dirty: drawn since the last resolve (only
  * while a pass is open). auxz: its depth when the bound depth buffer has another sample count.
- * gen/ok/dropped/never, by attachment: [0] the colour samples (when stored, DSR_MS_KEEP): gen the frame of the first
- * pass into them, ok the frames in a row whose first pass cleared them, so what the frame's last pass leaves need not be
- * stored at the present; [1] depth and stencil: gen the frame a pass last loaded them (every pass that used them since
- * cleared them first), so after 120 such frames they are not stored. dropped: the last store was skipped; a pass that
- * loads them after all stops it for good (never). */
+ * gen/ok/dropped/never [0], the colour samples when they are stored (DSR_MS_KEEP): gen the frame of the first pass into
+ * them, ok the frames in a row whose first pass cleared them, so what the frame's last pass leaves need not be stored at
+ * the present (dropped); a frame that reads them after all stops that for good (never). ([1] is unused: depth is always
+ * stored, since the games' later passes read it.) */
 typedef struct { id<MTLTexture> tex, view2d, ms, auxz, tex_alt; uint32_t w, h, kind, fmt, level, root, slice, samples; int used, fxrt, ms_dirty, ms_tile;
                  int gen[2], ok[2], dropped[2], never[2]; } Surf;
 /* ms_tile: the colour samples live only in the GPU's tile memory (memoryless): each pass resolves them into tex_alt,
@@ -176,13 +175,7 @@ static void end_enc(DSRRenderer *r)
             [r->enc setColorStoreAction:drop ? MTLStoreActionMultisampleResolve : MTLStoreActionStoreAndMultisampleResolve atIndex:0];
             if (c) { c->ms_dirty = 0; c->dropped[0] = drop; }
         }
-        if (r->enc_zu) {   /* depth and stencil: not stored once no pass has loaded them for 120 frames (each starts by clearing) */
-            Surf *z = surf(r, r->enc_zid);
-            int drop = z && dsr_frame + 1 - z->gen[1] > 120 && !z->never[1];
-            [r->enc setDepthStoreAction:drop ? MTLStoreActionDontCare : MTLStoreActionStore];
-            [r->enc setStencilStoreAction:drop ? MTLStoreActionDontCare : MTLStoreActionStore];
-            if (z) z->dropped[1] = drop;
-        }
+        if (r->enc_zu) { [r->enc setDepthStoreAction:MTLStoreActionStore]; [r->enc setStencilStoreAction:MTLStoreActionStore]; }
         [r->enc endEncoding]; r->enc = nil; r->enc_ms = nil; r->enc_cid = r->enc_zid = 0; r->enc_zu = r->enc_tile = 0;
     }
     if (r->blit) { [r->blit endEncoding]; r->blit = nil; }
@@ -385,14 +378,7 @@ static id<MTLRenderCommandEncoder> enc_for(DSRRenderer *r, uint32_t rt, uint32_t
         p.depthAttachment.texture = zt; p.depthAttachment.loadAction = (pf & 2) ? MTLLoadActionClear : MTLLoadActionLoad; p.depthAttachment.clearDepth = r->pend_z;
         p.stencilAttachment.texture = zt; p.stencilAttachment.loadAction = (pf & 4) ? MTLLoadActionClear : MTLLoadActionLoad; p.stencilAttachment.clearStencil = r->pend_stencil & 255;
         if (zt == c->auxz) { p.depthAttachment.storeAction = p.stencilAttachment.storeAction = MTLStoreActionStore; }
-        else {                                         /* its own depth surface: stored as the pass ends (end_enc) */
-            p.depthAttachment.storeAction = p.stencilAttachment.storeAction = MTLStoreActionUnknown; r->enc_zid = ds; r->enc_zu = 1;
-            if ((pf & 6) != 6) {                       /* loaded: what was stored is wanted */
-                if (z->dropped[1] && !z->never[1]) { z->never[1] = 1; fprintf(stderr, "dsr: depth %u is read after a pass after all: kept\n", ds); }
-                z->gen[1] = dsr_frame + 1;
-            }
-            z->dropped[1] = 0;
-        } }
+        else { p.depthAttachment.storeAction = p.stencilAttachment.storeAction = MTLStoreActionUnknown; r->enc_zid = ds; r->enc_zu = 1; } }   /* stored as the pass ends (end_enc) */
     if (cs > 1) helpers_for(r, cs);
     r->enc = [cmdbuf(r) renderCommandEncoderWithDescriptor:p]; r->enc_rt = rt; r->enc_ds = z ? ds : 0; r->encoders++;
     [r->enc setFrontFacingWinding:MTLWindingClockwise];   // same convention as D3D
@@ -425,7 +411,6 @@ static void surface_create(DSRRenderer *r, const uint32_t *p, uint32_t size)
     if (id >= MAXSURF) return;
     Surf *s = &r->s[id]; s->tex = s->view2d = s->ms = s->auxz = s->tex_alt = nil; s->samples = 0; s->ms_tile = 0; s->used = 1; s->fxrt = 0; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id; s->slice = face;
     memset(s->gen, 0, sizeof s->gen); memset(s->ok, 0, sizeof s->ok); memset(s->dropped, 0, sizeof s->dropped); memset(s->never, 0, sizeof s->never);
-    s->gen[1] = dsr_frame + 1;   /* a new depth buffer is stored for its first 120 frames at least */
     if (parent && surf(r, parent)) {                       // a mip level (or another cube face): shares the root's texture
         Surf *root = surf(r, parent); s->tex = root->tex; s->root = parent;
         if (cube && level == 0)                            // a cube face: its own 2D view
@@ -657,6 +642,7 @@ static id<MTLFunction> fs_main_for(DSRRenderer *r, int atest, FsKey k)
     [fc setConstantValue:&k.fl type:MTLDataTypeInt atIndex:5];
     id<MTLFunction> f = [r->lib newFunctionWithName:@"fs_main" constantValues:fc error:&err];
     if (!f) { fprintf(stderr, "dsr: fs_main: %s\n", err.localizedDescription.UTF8String); return nil; }
+    if (r->fsf_n >= 768) { static int w; if (!w++) fprintf(stderr, "dsr: fs_main cache full (768): new variants are no longer kept\n"); }
     if (r->fsf_n < 768) { r->fsf_k[h] = key; r->fsf_v[h] = f; r->fsf_n++; }
     return f;
 }
@@ -715,6 +701,7 @@ static id<MTLRenderPipelineState> pipeline_for(DSRRenderer *r, uint32_t fvf, int
     if (!p) { fprintf(stderr, "pipeline fvf %x: %s\n", fvf, err.localizedDescription.UTF8String); return nil; }
     static int psolog = -1; if (psolog < 0) psolog = getenv("DSR_PSOLOG") != 0;
     if (psolog) fprintf(stderr, "dsr: new pipeline %#llx in %.1f ms (frame %d)\n", (unsigned long long)key, (CACurrentMediaTime() - t0) * 1000, dsr_frame);
+    if (r->pso_n >= 3072) { static int w; if (!w++) fprintf(stderr, "dsr: pipeline cache full (3072): new pipelines are no longer kept\n"); }
     if (r->pso_n < 3072) { r->pso_k[h] = key; r->pso_v[h] = p; r->pso_n++; r->pso_last = h; }   // the game uses a few dozen
     return p;
 }
@@ -1027,6 +1014,7 @@ static id<MTLRenderPipelineState> mprog_pipeline(DSRRenderer *r, uint32_t mask, 
     d.vertexDescriptor = v;
     id<MTLRenderPipelineState> pso = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
     if (!pso) { static int n; if (n++ < 10) fprintf(stderr, "dsr: shader pipeline (program %u): %s\n", r->cur_mp - 1 + 0x10000, err.localizedDescription.UTF8String); return nil; }
+    if (r->mpso_n >= 3072) { static int w; if (!w++) fprintf(stderr, "dsr: shader pipeline cache full (3072): new pipelines are no longer kept\n"); }
     if (r->mpso_n < 3072) { r->mpso_k[h] = key; r->mpso_v[h] = pso; r->mpso_n++; }
     return pso;
 }
@@ -1244,6 +1232,7 @@ id<MTLCommandBuffer> dsr_renderer_present_to(DSRRenderer *r, id<MTLTexture> dst)
         r->gamma_dirty = 0;
     }
     end_enc(r); prof_print(); ring_log(); prof_cut(r, "present");
+    if (dsr_prof > 0 && dsr_frame % 240 == 0) fprintf(stderr, "dsr profile: pipelines %d, shader pipelines %d, fs_main variants %d\n", r->pso_n, r->mpso_n, r->fsf_n);
     MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
     p.colorAttachments[0].texture = dst; p.colorAttachments[0].loadAction = MTLLoadActionDontCare; p.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> e = [cmdbuf(r) renderCommandEncoderWithDescriptor:p];
@@ -1295,7 +1284,6 @@ static void depth_readback(DSRRenderer *r, const uint32_t *p)
 {
     Surf *s = surf(r, p[0]); uint32_t x = p[1], y = p[2], w = p[3], h = p[4]; int ok = 0;
     if (s && r->rb_buf && s->fmt == 3 && w && h && (uint64_t)x + w <= s->w && (uint64_t)y + h <= s->h && (uint64_t)w * h * 4 <= r->rb_buf.length) {
-        s->never[1] = 1;   /* read back: always stored */
         if (r->enc) end_enc(r);
         [blit_enc(r) copyFromTexture:s->tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(x, y, 0) sourceSize:MTLSizeMake(w, h, 1)
                              toBuffer:r->rb_buf destinationOffset:0 destinationBytesPerRow:w * 4 destinationBytesPerImage:w * h * 4 options:MTLBlitOptionDepthFromDepthStencil];
