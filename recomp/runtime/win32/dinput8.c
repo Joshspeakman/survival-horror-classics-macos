@@ -1,7 +1,7 @@
 /* DirectInput 8 for Fallout: New Vegas: the system keyboard (DIK scan codes) and mouse (relative motion, buttons,
  * wheel), in immediate (GetDeviceState) and buffered (GetDeviceData) mode. The host feeds it from its input events
  * (w32_di_key / w32_di_mouse_*). A game controller (the GTA games: the host's GameController pad, w32_di_pad) is one
- * gamepad: six axes (left stick X/Y, right stick as Z and Rz, the triggers as Rx and Ry), sixteen buttons in the order
+ * gamepad: six axes (left stick X/Y, the right stick as Z/Rz and again as Rx/Ry), sixteen buttons in the order
  * the host gives them, and the D-pad as a point-of-view hat. */
 #include "w32.h"
 #include <pthread.h>
@@ -71,9 +71,9 @@ void w32_di_release_all(void)                                       /* focus los
 /* ---- the game controller ---- */
 #define JOY_GUID 0x6f1d2b70u                                  /* our instance GUID's first dword (the system devices' family) */
 #define JOY_VIDPID 0x02ea045eu                                /* product GUID data1 = PID << 16 | VID: an Xbox controller */
-static struct { int connected; float ax[6]; uint32_t buttons; int pov; int32_t lo[6], hi[6]; } pad = {.lo = {0}, .hi = {65535, 65535, 65535, 65535, 65535, 65535}};
+static struct { int connected; float ax[6]; uint32_t buttons; int pov; int32_t lo[6], hi[6]; } pad = {.lo = {-32768, -32768, -32768, -32768, -32768, -32768}, .hi = {32767, 32767, 32767, 32767, 32767, 32767}};   /* centred on 0 unless the game sets a range: the GTA games read the axes signed */
 static Dev *joy;
-/* host: the pad's state (axes -1..1: X right, Y down, Z/Rz the right stick, Rx/Ry the triggers 0..1), buttons, the hat
+/* host: the pad's state (axes -1..1: X right, Y down; Z/Rz and Rx/Ry the right stick), buttons, the hat
  * in hundredths of a degree (-1 centred); connected 0: no controller */
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov)
 {
@@ -96,7 +96,7 @@ static const uint32_t AXIS_GUID[6] = {0xa36d02e0u, 0xa36d02e1u, 0xa36d02e2u, 0xa
 static const char *AXIS_NAME[6] = {"X Axis", "Y Axis", "Z Axis", "X Rotation", "Y Rotation", "Z Rotation"};
 static int32_t axis_value(int k)                             /* di_lock held: the axis in the range the game set */
 {
-    float v = pad.ax[k]; if (k == 3 || k == 4) v = v * 2 - 1;  /* triggers 0..1 -> -1..1 */
+    float v = pad.ax[k];
     if (v < -1) v = -1; if (v > 1) v = 1;
     return pad.lo[k] + (int32_t)((double)(v + 1) * 0.5 * ((double)pad.hi[k] - pad.lo[k]) + 0.5);
 }

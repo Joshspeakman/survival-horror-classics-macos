@@ -482,7 +482,8 @@ static void pad_start(void)
  * modern controller plays like the PS2 (GTA III's generic table, InitDefaultControlConfigJoyPad: 1 fire, 2 sprint /
  * accelerate, 3 jump / brake, 4 enter / exit, 5-8 L2 R2 L1 R1, 9 camera, 10 horn, 11 look behind, 13-16 the D-pad):
  * B A X Y, then LT RT LB RB, View, L3, R3, D-pad up right down left. Menu is Esc (the pause menu, which the PC versions
- * can't put on a pad button). */
+ * can't put on a pad button). Axes: the left stick, and the right stick as both Z/Rz and Rx/Ry; the triggers are buttons
+ * only (an axis would rest at one end, read as a stick held over). */
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov);
 static void gta_pad_key(int vk, int down) { for (uint16_t k = 0; k < 128; k++) if (keymap[k].vk == vk) { key_event(k, down, 0); return; } }
 static void gta_pad_start(void)
@@ -496,8 +497,8 @@ static void gta_pad_start(void)
         float ax[6] = {0, 0, 0, 0, 0, 0}; uint32_t b = 0; int pov = -1, menu = 0;
         if (g && NSApp.active) {
             ax[0] = g.leftThumbstick.xAxis.value; ax[1] = -g.leftThumbstick.yAxis.value;
-            ax[2] = g.rightThumbstick.xAxis.value; ax[5] = -g.rightThumbstick.yAxis.value;
-            ax[3] = g.leftTrigger.value; ax[4] = g.rightTrigger.value;
+            ax[2] = ax[3] = g.rightThumbstick.xAxis.value; ax[5] = ax[4] = -g.rightThumbstick.yAxis.value;   /* the right stick as Z/Rz and Rx/Ry
+                                                                                                                (games read one pair or the other) */
             GCControllerButtonInput *in[11] = {g.buttonB, g.buttonA, g.buttonX, g.buttonY, g.leftTrigger, g.rightTrigger, g.leftShoulder, g.rightShoulder,
                                                g.buttonOptions, g.leftThumbstickButton, g.rightThumbstickButton};
             for (int k = 0; k < 11; k++) if (in[k].pressed) b |= 1u << k;
