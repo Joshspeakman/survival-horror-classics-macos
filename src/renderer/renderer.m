@@ -41,7 +41,8 @@ struct DSRRenderer {
     uint32_t smp_k[1024]; id<MTLSamplerState> smp_v[1024]; int pso_n, dso_n, smp_n; uint32_t pso_last;   // filled at most 3/4, then uncached
     /* the current render encoder's state, so unchanged state isn't set again (cleared with each new encoder) */
     struct { __unsafe_unretained id pso, dso, tex[2], smp[2]; int cull, ring_bound; uint32_t sref; MTLViewport vp; } es;
-    id<MTLRenderPipelineState> hq[4], hqo[4], hz[4]; int dither16;   /* quad, quad "over", depth clear: by sample count 1, 2, 4, 8 */
+    id<MTLRenderPipelineState> hq[4], hqo[4], hz[4]; int dither16;
+    id<MTLRenderPipelineState> glow_x, glow_b, glow_add[4]; id<MTLTexture> glow_t[2];   /* DSR_GLOW */   /* quad, quad "over", depth clear: by sample count 1, 2, 4, 8 */
     id<MTLRenderPipelineState> quad_pso, quad_over_pso, zclear_pso, zupload_pso, present_pso; id<MTLTexture> zup_tex; id<MTLTexture> scratch, gamma_lut; uint16_t gamma[3][256]; int gamma_dirty; id<MTLDepthStencilState> zclear_ds, nodepth_ds, zsclear_ds[4];
     id<MTLSamplerState> point_clamp, linear_clamp; id<MTLTexture> dummy;
     /* effect programs (DSR_PROG_*): Metal compiled from the game's HLSL effects (runtime/win32/hlsl.c) */
@@ -367,6 +368,52 @@ static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t sr
     [e setFragmentTexture:fill == 2 ? r->scratch : s ? tex2d(s) : r->dummy atIndex:0]; [e setFragmentSamplerState:r->point_clamp atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     memset(&r->es, 0, sizeof r->es); r->es.cull = -1;   // the draw-state cache no longer matches the encoder
+}
+
+// ---------- the PS2's radiosity (DSR_GLOW) ----------
+static id<MTLRenderPipelineState> glow_pso(DSRRenderer *r, NSString *fs, int samples, int add)
+{
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; NSError *err = nil;
+    d.vertexFunction = [r->lib newFunctionWithName:@"vs_present"]; d.fragmentFunction = [r->lib newFunctionWithName:fs];
+    d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm; d.rasterSampleCount = (NSUInteger)samples;
+    if (add) { d.colorAttachments[0].blendingEnabled = YES; d.colorAttachments[0].sourceRGBBlendFactor = d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+               d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorZero; d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne; }
+    id<MTLRenderPipelineState> p = [r->dev newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!p) fprintf(stderr, "dsr: glow pipeline %s: %s\n", fs.UTF8String, err.localizedDescription.UTF8String);
+    return p;
+}
+static void glow_pass(DSRRenderer *r, id<MTLTexture> dst, id<MTLRenderPipelineState> pso, id<MTLTexture> src, const float g[4])
+{
+    MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+    p.colorAttachments[0].texture = dst; p.colorAttachments[0].loadAction = MTLLoadActionDontCare; p.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [cmdbuf(r) renderCommandEncoderWithDescriptor:p]; r->encoders++;
+    [e setRenderPipelineState:pso]; [e setFragmentTexture:src atIndex:0]; [e setFragmentSamplerState:r->linear_clamp atIndex:0];
+    [e setFragmentBytes:g length:16 atIndex:0]; [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [e endEncoding];
+}
+static void glow(DSRRenderer *r, uint32_t limit, uint32_t strength)
+{
+    Surf *c = surf(r, r->rt); if (!c || c->fmt == 3 || c->kind == 3 || !strength) return;
+    end_enc(r); maybe_commit(r);                                       /* (a multisampled target is resolved as its pass ends) */
+    uint32_t w = c->w / 4 > 0 ? c->w / 4 : 1, h = c->h / 4 > 0 ? c->h / 4 : 1;
+    if (!r->glow_t[0] || r->glow_t[0].width != w || r->glow_t[0].height != h)
+        for (int k = 0; k < 2; k++) {
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate; r->glow_t[k] = [r->dev newTextureWithDescriptor:d];
+        }
+    if (!r->glow_x) { r->glow_x = glow_pso(r, @"fs_glow_extract", 1, 0); r->glow_b = glow_pso(r, @"fs_glow_blur", 1, 0); }
+    int ns = samples_of(c), k = sidx(ns);
+    if (!r->glow_add[k]) r->glow_add[k] = glow_pso(r, @"fs_glow_add", ns, 1);
+    if (!r->glow_x || !r->glow_b || !r->glow_add[k]) return;
+    float gx[4] = {limit / 255.0f, 0, 1.0f / c->w, 1.0f / c->h}; glow_pass(r, r->glow_t[0], r->glow_x, c->tex, gx);
+    float gh[4] = {1.0f / w, 0, 0, 0}; glow_pass(r, r->glow_t[1], r->glow_b, r->glow_t[0], gh);
+    float gv[4] = {0, 1.0f / h, 0, 0}; glow_pass(r, r->glow_t[0], r->glow_b, r->glow_t[1], gv);
+    id<MTLRenderCommandEncoder> e = enc_for(r, r->rt, 0); if (!e) return;   /* added over the frame */
+    float ga[4] = {0, strength / 255.0f * 2.0f, 0, 0};
+    [e setRenderPipelineState:r->glow_add[k]]; [e setDepthStencilState:r->nodepth_ds]; [e setCullMode:MTLCullModeNone];
+    [e setViewport:(MTLViewport){0, 0, c->w, c->h, 0, 1}];
+    [e setFragmentTexture:r->glow_t[0] atIndex:0]; [e setFragmentSamplerState:r->linear_clamp atIndex:0]; [e setFragmentBytes:ga length:16 atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    memset(&r->es, 0, sizeof r->es); r->es.cull = -1;
 }
 
 // ---------- fixed-function draws ----------
@@ -1037,7 +1084,8 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
         break;
     case DSR_SURFACE_CREATE: surface_create(r, p, size); break;
     case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = r->s[p[0]].ms = r->s[p[0]].auxz = nil; } break;
-    case DSR_MODE: r->dither16 = size >= 12 && p[2] == 16; break;   /* a 16-bit screen (the present dithers to 5/6/5) */
+    case DSR_MODE: r->dither16 = size >= 12 && p[2] == 16; break;
+    case DSR_GLOW: if (size >= 8) glow(r, p[0], p[1]); break;   /* a 16-bit screen (the present dithers to 5/6/5) */
     case DSR_SURFACE_UPLOAD: surface_upload(r, p, size); break;
     case DSR_UPLOAD_OVER: upload_over(r, p, size); break;
     case DSR_DEPTH_UPLOAD: if (size >= 12) depth_upload(r, p, size); break;

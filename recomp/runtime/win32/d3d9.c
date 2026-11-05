@@ -7,6 +7,7 @@
  * with a vertex shader are skipped; with only a pixel shader they are drawn fixed-function).
  * D3D9_LOG=1: every method's first calls; any method not written yet says so once. */
 #include <dlfcn.h>
+#include <unistd.h>
 #include "d3d9_priv.h"
 #include "edition.h"
 #include "../../../src/dsr/dsr_shm.h"
@@ -22,6 +23,8 @@ static void surf_destroy(Surf9 *s);
 static int fmt_code(uint32_t fmt) { return d9_fmt_depth(fmt) ? 3 : d9_fmt_float(fmt) ? 4 + (int)(fmt - 111) : d9_fmt_alpha(fmt) ? 1 : 2; }
 /* samples for the next surf_new (render targets, depth buffers, the back buffer): D3DMULTISAMPLE_TYPE n (2-16) is n
  * samples; the renderer draws into multisampled storage and resolves when the surface is read */
+static int frame_log;   /* (D3D9_FRAMELOG, below) */
+typedef struct Dev9 Dev9; static void probe(Dev9 *d, const char *what, uint32_t a, uint32_t b);
 static _Thread_local uint32_t new_samples;   /* per thread: loader threads create textures meanwhile */
 static uint32_t ms_samples(uint32_t type) { return type >= 2 && type <= 16 ? type : 0; }
 static Surf9 *surf_new(Dev9 *d, uint32_t w, uint32_t h, uint32_t fmt, uint32_t usage, uint32_t pool, int kind, Tex9 *tex, uint32_t level, uint32_t face, uint32_t parent_id, uint32_t levels)
@@ -121,7 +124,7 @@ static uint32_t surf_unlock(Surf9 *s)
     }
     return D3D_OK;
 }
-M(sf_LockRect, 4) ME(Surf9, O9_SURF) RET(surf_lock(me, ARG(1), ARG(2), ARG(3)), 4); END
+M(sf_LockRect, 4) ME(Surf9, O9_SURF) if (frame_log) fprintf(stderr, "flog: LockRect surface %u (%ux%u%s) flags %#x\n", me->id, me->w, me->h, me == me->dev->back ? ", back buffer" : "", ARG(3)); RET(surf_lock(me, ARG(1), ARG(2), ARG(3)), 4); END
 M(sf_UnlockRect, 1) ME(Surf9, O9_SURF) RET(surf_unlock(me), 1); END
 TODO_M(sf_GetDC, 2, D3DERR_INVALIDCALL)
 TODO_M(sf_ReleaseDC, 2, D3DERR_INVALIDCALL)
@@ -471,6 +474,14 @@ static void set_vp(Dev9 *d, const uint32_t *v)
 static int frame_log;   /* development: D3D9_FRAMELOG=<frame> logs that frame's targets, copies and 2D draws */
 static void set_rt(Dev9 *d)
 {
+    static Surf9 *flog_prev;
+    if (frame_log && flog_prev && flog_prev != d->rt && flog_prev != d->back && flog_prev->w <= 256 && flog_prev->h <= 256 && flog_prev->size <= 256 * 256 * 4) {
+        static uint8_t px[256 * 256 * 4]; int32_t r[4] = {0, 0, (int32_t)flog_prev->w, (int32_t)flog_prev->h}; cmd_readback(flog_prev->id, r, px, flog_prev->w * 4, 4);
+        double sum[3] = {0, 0, 0}; uint32_t n = flog_prev->w * flog_prev->h;
+        for (uint32_t k = 0; k < n; k++) for (int ch = 0; ch < 3; ch++) sum[ch] += px[4 * k + ch];
+        fprintf(stderr, "flog:   left %u: mean B %.0f G %.0f R %.0f; centre %08x\n", flog_prev->id, sum[0] / n, sum[1] / n, sum[2] / n, ((uint32_t *)px)[(flog_prev->h / 2) * flog_prev->w + flog_prev->w / 2]);
+    }
+    flog_prev = d->rt;
     if (frame_log) fprintf(stderr, "flog: target %u (%ux%u%s) depth %u\n", d->rt ? d->rt->id : 0, d->rt ? d->rt->w : 0, d->rt ? d->rt->h : 0, d->rt && d->rt == d->back ? ", back buffer" : "", d->ds ? d->ds->id : 0);
     { static int lg = -1, n; if (lg < 0) lg = getenv("D3D9_RTLOG") != 0;
       if (lg && n++ < 400) fprintf(stderr, "rtlog: rt %u %ux%u fmt %u x%u | ds %u %ux%u fmt %u x%u\n", d->rt ? d->rt->id : 0, d->rt ? d->rt->w : 0, d->rt ? d->rt->h : 0,
@@ -626,6 +637,13 @@ static void run_extent(float *x0, float *x1, float y0, float y1)   /* the last f
         if (fabsf(r->y0 - y0) <= 0.3f * h + 1 && fabsf(r->y1 - y1) <= 0.3f * h + 1 && *x0 >= r->x0 - 1 && *x1 <= r->x1 + 1) { *x0 = r->x0; *x1 = r->x1; return; }   /* (y: a shadowed line's box is a little taller) */
     }
 }
+/* the PS2's radiosity over the frame drawn so far (gta3_mode.c, San Andreas with PS2 lighting) */
+void gta_glow(uint32_t limit, uint32_t strength)
+{
+    if (!the_dev || the_dev->rt != the_dev->back) return;
+    uint32_t *p = cmd_begin(DSR_GLOW, 8); p[0] = limit; p[1] = strength; cmd_end();
+    the_dev->back->gpu_newer = 1;
+}
 /* returns the width of the black at each side when a menu's whole-screen picture was narrowed, else 0 */
 static float gta_wide2d(Dev9 *d, uint32_t prim, uint8_t *v, uint32_t st, uint32_t nv, uint32_t ni)
 {
@@ -693,8 +711,21 @@ static void emit(Dev9 *d, uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_
     if (frame_log && (fvf & 0xe) == 4) {
         float x0 = 1e9f, x1 = -1e9f; for (uint32_t i = 0; i < nv; i++) { float x = *(const float *)(v + (size_t)i * st); if (x < x0) x0 = x; if (x > x1) x1 = x; }
         uint32_t col = (fvf & 0x40) ? *(const uint32_t *)(v + 16 + ((fvf & 0x10) ? 12 : 0)) : 0;
-        fprintf(stderr, "flog: 2D prim %u nv %u x %.0f..%.0f into %u tex %u | blend %u src %u dst %u op %u | colorop %u arg %u,%u alphaop %u | colour %08x\n", prim, nv, x0, x1,
-                d->rt ? d->rt->id : 0, d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0, d->rs[27], d->rs[19], d->rs[20], d->rs[171], d->tss[0][1], d->tss[0][2], d->tss[0][3], d->tss[0][4], col);
+        float y0 = 1e9f, y1 = -1e9f; for (uint32_t i = 0; i < nv; i++) { float y = *(const float *)(v + (size_t)i * st + 4); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        fprintf(stderr, "flog: 2D prim %u nv %u x %.0f..%.0f y %.0f..%.0f into %u tex %u | blend %u src %u dst %u op %u atest %u | st0 %u(%u,%u) a%u(%u,%u) st1 %u | ps %d vs %d | colour %08x",
+                prim, nv, x0, x1, y0, y1, d->rt ? d->rt->id : 0, d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0, d->rs[27], d->rs[19], d->rs[20], d->rs[171], d->rs[15],
+                d->tss[0][1], d->tss[0][2], d->tss[0][3], d->tss[0][4], d->tss[0][5], d->tss[0][6], d->tss[1][1], d->ps != 0, d->vs != 0, col);
+        if ((fvf & 0x40) && (fvf & 0xf00)) { uint32_t co = 16 + ((fvf & 0x10) ? 12 : 0); for (uint32_t i = 0; i < nv && i < 6; i++) fprintf(stderr, " [%08x %.3f,%.3f]", *(const uint32_t *)(v + (size_t)i * st + co),
+            *(const float *)(v + (size_t)i * st + co + 4 + ((fvf & 0x80) ? 4 : 0)), *(const float *)(v + (size_t)i * st + co + 8 + ((fvf & 0x80) ? 4 : 0))); }
+        fprintf(stderr, "\n");
+    }
+    if (frame_log && (fvf & 0xe) != 4 && (fvf & 0x40)) {   /* 3D with vertex colours: positions and the first colours */
+        uint32_t co = 12 + ((fvf & 0x10) ? 12 : 0); float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+        for (uint32_t i = 0; i < nv; i++) for (int k = 0; k < 3; k++) { float f = *(const float *)(v + (size_t)i * st + 4 * k); if (f < mn[k]) mn[k] = f; if (f > mx[k]) mx[k] = f; }
+        fprintf(stderr, "flog: 3D prim %u nv %u ni %u tex %u blend %u src %u dst %u z %u/%u | box %.0f,%.0f,%.0f .. %.0f,%.0f,%.0f | colours", prim, nv, ni,
+                d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0, d->rs[27], d->rs[19], d->rs[20], d->rs[7], d->rs[14], mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
+        for (uint32_t i = 0; i < nv && i < 4; i++) fprintf(stderr, " %08x", *(const uint32_t *)(v + (size_t)i * st + co));
+        fprintf(stderr, "\n");
     }
     uint32_t *p = cmd_begin(DSR_DRAW, 16 + vb + ib);
     p[0] = prim; p[1] = fvf; p[2] = nv; p[3] = ni;
@@ -965,10 +996,14 @@ M(dv_Reset, 2) DEV_ME RET(dev_reset(me, ARG(1)), 2); END
 static void cursor_overlay(Dev9 *d);
 static void dev_present(Ctx *c, Dev9 *d)
 {
+    probe(d, 0, 0, 0);
     cursor_overlay(d); dsr_present(c, d->back->id);
 #ifdef GTA_EDITION
     gta_last3d = gta_frame3d; gta_frame3d = 0; runs_frame(); gta_frames++;
-    { static int at = -2; if (at == -2) at = getenv("D3D9_FRAMELOG") ? atoi(getenv("D3D9_FRAMELOG")) : -1; frame_log = at >= 0 && gta_frames == at; if (frame_log) fprintf(stderr, "flog: frame %d\n", gta_frames); }
+    { static int at = -2; if (at == -2) at = getenv("D3D9_FRAMELOG") ? atoi(getenv("D3D9_FRAMELOG")) : -1; frame_log = at >= 0 && gta_frames == at;
+      static const char *tf; static int tfi; if (!tfi) { tfi = 1; tf = getenv("D3D9_FRAMELOG_FILE"); }   /* or the frame after this file appears */
+      if (tf && !access(tf, F_OK)) { unlink(tf); frame_log = 1; }
+      if (frame_log) fprintf(stderr, "flog: frame %d\n", gta_frames); }
     { void gta_frame_prefs(int); gta_frame_prefs(!gta_last3d); }   /* gta3_mode.c: frame limiter, widescreen */
 #endif
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
@@ -1085,6 +1120,7 @@ OK_M(dv_BeginScene, 1)
 OK_M(dv_EndScene, 1)
 M(dv_Clear, 7) DEV_ME                                  /* (count, rects, flags, color, z, stencil) */
     uint32_t n = ARG(1), rects = ARG(2); if (!rects || n > 4096) n = 0;
+    if (frame_log) fprintf(stderr, "flog: Clear target %u flags %x colour %08x\n", me->rt ? me->rt->id : 0, ARG(3), ARG(4));
     uint32_t *p = cmd_begin(DSR_CLEAR, 20 + 16 * n);
     p[0] = ARG(3); p[1] = ARG(4); p[2] = ARG(5); p[3] = ARG(6); p[4] = n; if (n) memcpy(p + 5, GP(rects), 16 * n);
     cmd_end(); if (me->rt) me->rt->gpu_newer = 1; RET(D3D_OK, 7);
@@ -1154,7 +1190,25 @@ static int shader_bind(Dev9 *d)
           fprintf(stderr, "\n"); } } }
     d9_program_use(d, id); d9_shader_consts(d, id); return 1;
 }
+/* development (with D3D9_FRAMELOG): D3D9_PROBE=x,y names each draw of the logged frame that changes that pixel of the
+ * back buffer (read back before the next draw: slow, one frame) */
+static char probe_desc[600]; static uint32_t probe_last = 0xdeadbeefu;
+static void probe(Dev9 *d, const char *what, uint32_t a, uint32_t b)
+{
+    static int px = -2, py; if (px == -2) { px = -1; const char *e = getenv("D3D9_PROBE"); if (e) sscanf(e, "%d,%d", &px, &py); }
+    if (!frame_log || px < 0 || !d->back) { probe_last = 0xdeadbeefu; return; }
+    uint32_t v = 0; int32_t r[4] = {px, py, px + 1, py + 1}; cmd_readback(d->back->id, r, (uint8_t *)&v, 4, 4);
+    if (v != probe_last && probe_desc[0]) fprintf(stderr, "flog: PROBE %08x -> %08x by %s\n", probe_last, v, probe_desc);
+    probe_last = v;
+    if (!what) { probe_desc[0] = 0; return; }
+    snprintf(probe_desc, sizeof probe_desc, "%s(%u, %u) into %u | vs %08x ps %08x | tex %u | blend %u %u/%u op %u | z %u/%u | st0 %u(%u,%u) | tf %08x | fvf %x decl %d",
+             what, a, b, d->rt ? d->rt->id : 0, d->vs ? d->vs->g : 0, d->ps ? d->ps->g : 0, d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0,
+             d->rs[27], d->rs[19], d->rs[20], d->rs[171], d->rs[7], d->rs[14], d->tss[0][1], d->tss[0][2], d->tss[0][3], d->rs[60], d->fvf, d->decl != 0);
+    if (d->tex[0]) { size_t l = strlen(probe_desc); snprintf(probe_desc + l, sizeof probe_desc - l, " | tex fmt %u %ux%u lv %u", d->tex[0]->fmt, d->tex[0]->w, d->tex[0]->h, d->tex[0]->levels); }
+    { size_t l = strlen(probe_desc); snprintf(probe_desc + l, sizeof probe_desc - l, " | light %u ambient %08x colorvertex %u diffsrc %u | alpharef %u afunc %u atest %u", d->rs[137], d->rs[139], d->rs[141], d->rs[145], d->rs[24], d->rs[25], d->rs[15]); }
+}
 M(dv_DrawPrimitive, 4) DEV_ME                          /* (type, start vertex, primitives) */
+    probe(me, "DrawPrimitive", ARG(1), ARG(3));
     if (me->vs) { if (shader_bind(me) && !prog_draw_vb(me, ARG(1), (int32_t)ARG(2), 0, prim_verts(ARG(1), ARG(3)), 0, 0)) prog_draw(me, ARG(1), ARG(2), prim_verts(ARG(1), ARG(3)), 0, 0, 0, 0); RET(D3D_OK, 4); }
     if (me->prog) { prog_draw(me, ARG(1), ARG(2), prim_verts(ARG(1), ARG(3)), 0, 0, 0, 0); RET(D3D_OK, 4); }
     if (!can_draw(me)) RET(D3D_OK, 4);
@@ -1194,7 +1248,15 @@ static void callers_log(Ctx *c, int quad)   /* development (D3D9_CALLERS=<frame>
     fprintf(stderr, "\n");
 }
 M(dv_DrawIndexedPrimitive, 7) DEV_ME                   /* (type, base vertex, min index, vertices, start index, primitives) */
+    probe(me, "DrawIndexedPrimitive", ARG(1), ARG(6));
     callers_log(c, ARG(4) == 4 && ARG(6) == 2 && ((me->decl ? me->decl->fvf : me->fvf) & 0xe) == 4);
+    if (frame_log && me->rt != me->back)
+        fprintf(stderr, "flog: DIP into %u prims %u | vs %d ps %d light %u | tex %u st0 %u(%u,%u) a%u(%u,%u) st1 %u | tfactor %08x | mat %02x%02x%02x%02x amb %08x | blend %u %u/%u\n",
+                me->rt ? me->rt->id : 0, ARG(6), me->vs != 0, me->ps != 0, me->rs[137], me->tex[0] && me->tex[0]->lv[0][0] ? me->tex[0]->lv[0][0]->id : 0,
+                me->tss[0][1], me->tss[0][2], me->tss[0][3], me->tss[0][4], me->tss[0][5], me->tss[0][6], me->tss[1][1], me->rs[60],
+                (int)(((float *)me->material)[3] * 255), (int)(((float *)me->material)[0] * 255), (int)(((float *)me->material)[1] * 255), (int)(((float *)me->material)[2] * 255), me->rs[139],
+                me->rs[27], me->rs[19], me->rs[20]);
+    if (frame_log && me->rt != me->back && me->vs) { static int nd; if (nd++ < 2) { fprintf(stderr, "flog:   vs constants"); for (int k = 0; k < 40; k++) fprintf(stderr, " c%d(%.2f %.2f %.2f %.2f)", k, me->vsc[k][0], me->vsc[k][1], me->vsc[k][2], me->vsc[k][3]); fprintf(stderr, "\n"); } }
     if (me->vs && (!me->ib || !shader_bind(me))) RET(D3D_OK, 7);
     if ((!me->prog && !can_draw(me)) || !me->ib) RET(D3D_OK, 7);
     uint32_t ni = prim_verts(ARG(1), ARG(6)), is = me->ib->fmt == 102 ? 4 : 2;
@@ -1205,6 +1267,7 @@ M(dv_DrawIndexedPrimitive, 7) DEV_ME                   /* (type, base vertex, mi
     ps2f_end(me); RET(D3D_OK, 7);
 END
 M(dv_DrawPrimitiveUP, 5) DEV_ME                        /* (type, primitives, data, stride) */
+    probe(me, "DrawPrimitiveUP", ARG(1), ARG(2));
     if (me->vs) { if (shader_bind(me)) prog_draw(me, ARG(1), 0, prim_verts(ARG(1), ARG(2)), 0, 0, G_MEM + ARG(3), ARG(4)); RET(D3D_OK, 5); }
     if (me->prog) { prog_draw(me, ARG(1), 0, prim_verts(ARG(1), ARG(2)), 0, 0, G_MEM + ARG(3), ARG(4)); RET(D3D_OK, 5); }
     if (!can_draw(me)) RET(D3D_OK, 5);
@@ -1212,6 +1275,7 @@ M(dv_DrawPrimitiveUP, 5) DEV_ME                        /* (type, primitives, dat
     if (v) emit(me, ARG(1), fvf, v, nv, 0, 0); RET(D3D_OK, 5);
 END
 M(dv_DrawIndexedPrimitiveUP, 9) DEV_ME                 /* (type, min index, vertices, primitives, indices, index format, data, stride) */
+    probe(me, "DrawIndexedPrimitiveUP", ARG(1), ARG(4));
     callers_log(c, ARG(3) == 4 && ARG(4) == 2 && ((me->decl ? me->decl->fvf : me->fvf) & 0xe) == 4);
     if (me->vs && !shader_bind(me)) RET(D3D_OK, 9);
     if (!me->prog && !can_draw(me)) RET(D3D_OK, 9);

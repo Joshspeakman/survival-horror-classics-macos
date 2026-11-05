@@ -253,6 +253,26 @@ fragment float4 fs_present(POut in [[stage_in]], texture2d<float> src [[texture(
     return float4(lut.read(i.r).r, lut.read(i.g).g, lut.read(i.b).b, 1);
 }
 
+// The PS2's radiosity (DSR_GLOW): g = (limit, strength, source texel w, h)
+fragment float4 fs_glow_extract(POut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float4 &g [[buffer(0)]])
+{
+    float2 d = g.zw;   // four bilinear taps: the average of the 4x4 block this quarter-size pixel covers
+    float3 c = src.sample(s, in.uv + float2(-d.x, -d.y)).rgb + src.sample(s, in.uv + float2(d.x, -d.y)).rgb
+             + src.sample(s, in.uv + float2(-d.x, d.y)).rgb + src.sample(s, in.uv + float2(d.x, d.y)).rgb;
+    return float4(max(c * 0.25 - g.x, 0.0), 1);
+}
+constant float glow_w[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+fragment float4 fs_glow_blur(POut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float4 &g [[buffer(0)]])
+{
+    float3 c = src.sample(s, in.uv).rgb * glow_w[0];   // g.xy: one texel along the blur's direction
+    for (int i = 1; i < 5; i++) c += (src.sample(s, in.uv + g.xy * i).rgb + src.sample(s, in.uv - g.xy * i).rgb) * glow_w[i];
+    return float4(c, 1);
+}
+fragment float4 fs_glow_add(POut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]], constant float4 &g [[buffer(0)]])
+{
+    return float4(src.sample(s, in.uv).rgb * g.y, 1);   // added (one, one) over the frame
+}
+
 // Frame-time graph: 240 columns (oldest left), y = 0..40 ms. g[0..239] game frame interval, g[240..479] time on screen.
 fragment float4 fs_graph(POut in [[stage_in]], constant float *g [[buffer(0)]])
 {

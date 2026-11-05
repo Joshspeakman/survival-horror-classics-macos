@@ -166,8 +166,7 @@ enum { WIDE_PREF = 0x0096e05bu };      /* CMenuManager::m_PrefsUseWideScreen */
 #elif defined(GTAVC_EDITION)
 enum { WIDE_PREF = 0x0086865au };
 #else
-enum { WIDE_PREF = 0x00b8803bu,        /* FrontEndMenuManager.m_bWidescreenOn */
-       SA_RADIOSITY = 0x00c3031cu };   /* CPostEffects::m_bRadiosity (CPostEffects::Radiosity 0x7173d0, from Render 0x719a30) */
+enum { WIDE_PREF = 0x00b8803bu };     /* FrontEndMenuManager.m_bWidescreenOn */
 #endif
 static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, else the cap */
 {
@@ -187,10 +186,6 @@ void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in 
         if (fps) rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)fps);
     }
 #ifdef GTASA_EDITION
-    /* radiosity (CPostEffects::m_bRadiosity: the PS2's soft glow of bright areas, its "trails"; on the PC only some
-     * missions' scripts switch it on). Development only (GTA_RADIOSITY=1 keeps it on): drawn here it darkens the frame
-     * (its passes don't come out as on Windows yet), so it isn't part of PS2 lighting until that is fixed. */
-    { static int on = -1; if (on < 0) on = getenv("GTA_RADIOSITY") && atoi(getenv("GTA_RADIOSITY")) > 0; if (on) G_MEM[SA_RADIOSITY] = 1; }
 #endif
     gta_wide();
     if (menu) { if (first || !was_menu) G_MEM[WIDE_PREF] = (uint8_t)wide_state; else wide_state = G_MEM[WIDE_PREF] != 0; }
@@ -381,6 +376,16 @@ int gta3_override(Ctx *c, uint32_t addr) { (void)c; (void)addr; return 0; }
  * texture times the colour doubled (d3d9.c gta_filter_pass), as aap's SkyGfx describes the PS2's filter. */
 #ifdef GTASA_EDITION
 enum { FILTER_PASS1 = 0x00718a6cu, FILTER_PASS2 = 0x00718abdu, FILTER_DONE = 0x00718ac0u };
+/* The PS2's radiosity, its soft glow of the bright parts of the picture (the "trails" of San Andreas): the PC game has it
+ * (CPostEffects::m_bRadiosity 0xc3031c, CPostEffects::Radiosity 0x7173d0, called from Render 0x719a30) but off, switched
+ * on only by some mission scripts with their own settings; with the PC defaults it only darkens. With PS2 lighting the
+ * renderer draws it instead (DSR_GLOW: what is brighter than the limit, at a quarter size, blurred, added back) once the
+ * colour filter is done, as on the PS2, except under night or infrared vision (CPostEffects 0xc30310, 0xc30311).
+ * GTA_GLOW=<limit>,<strength> (0-255) changes it. */
+enum { SA_NIGHT_VISION = 0x00c30310u, SA_INFRARED = 0x00c30311u };
+static int glow_v(int k) { static int v[2] = {-1, -1}; if (v[0] < 0) { v[0] = 140; v[1] = 96; const char *e = getenv("GTA_GLOW"); if (e) sscanf(e, "%d,%d", &v[0], &v[1]); } return v[k]; }
+static uint32_t glow_limit(void) { return (uint32_t)glow_v(0); }
+static uint32_t glow_strength(void) { return (uint32_t)glow_v(1); }
 int gta_filter_pass;
 static int ps2_light(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_LIGHTING"); on = e && !strcmp(e, "ps2"); } return on; }
 #endif
@@ -401,6 +406,7 @@ int gta3_hook(Ctx *c, uint32_t addr)
 #ifdef GTASA_EDITION
     if (addr == FILTER_PASS1 || addr == FILTER_PASS2 || addr == FILTER_DONE) {
         gta_filter_pass = !ps2_light() ? 0 : addr == FILTER_PASS1 ? 1 : addr == FILTER_PASS2 ? 2 : 0;
+        if (addr == FILTER_DONE && ps2_light() && !G_MEM[SA_NIGHT_VISION] && !G_MEM[SA_INFRARED]) { void gta_glow(uint32_t, uint32_t); gta_glow(glow_limit(), glow_strength()); }
         return 1;
     }
 #endif

@@ -54,6 +54,8 @@ enum {
                               kinds (2 bits per sampler: 0 2D, 1 cube, 2 3D), {u32 input register, u32 attribute slot}[nattr],
                               vertex MSL, pixel MSL (each NUL-terminated, padded to 4): the game's own shader pair translated to
                               Metal (d3d9_shader.c, macOS); its constants come as DSR_SHADER_CONST, its draws as DSR_DRAW_PROG */
+    DSR_GLOW,              /* u32 limit (0-255), u32 strength (0-255): the PS2's radiosity on the render target: its parts brighter
+                              than the limit, at a quarter of its size, blurred and added back over it (GTA San Andreas, gta3_mode.c) */
 };
 #define DSR_VBUFS 65536
 #endif
