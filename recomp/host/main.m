@@ -116,6 +116,12 @@ static void *render_thread(void *arg)
                         if (sp) { snprintf(shot_path, sizeof shot_path, "%s", sp); shot_at = fno; }
                         if ((long)fno == shot_at) {
                             id<MTLTexture> tex = dsr_renderer_presented(r); dsr_renderer_flush(r, 1);
+                            if (tex && getenv("DS_SHOT_FINAL")) {   /* the picture as shown: after gamma and the 16-bit look */
+                                MTLTextureDescriptor *od = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:tex.width height:tex.height mipmapped:NO];
+                                od.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; od.storageMode = MTLStorageModePrivate;
+                                id<MTLTexture> fin = [layer.device newTextureWithDescriptor:od];
+                                if (fin && dsr_renderer_present_to(r, fin)) { dsr_renderer_flush(r, 1); tex = fin; }
+                            }
                             if (tex && tex.pixelFormat == MTLPixelFormatBGRA8Unorm) {
                                 NSUInteger tw = tex.width, th = tex.height;
                                 id<MTLBuffer> buf = [layer.device newBufferWithLength:tw * th * 4 options:MTLResourceStorageModeShared];
@@ -532,6 +538,15 @@ static void capture(int on)
     if (on) { [NSCursor hide]; CGAssociateMouseAndMouseCursorPosition(false); }
     else { CGAssociateMouseAndMouseCursorPosition(true); [NSCursor unhide]; }
 }
+/* the window's shape: 4:3, or (GTA) the launch window's video mode's (GTA_MODE: widescreen, 16:9) */
+static double win_aspect(void)
+{
+#ifdef GTA_EDITION
+    unsigned w, h; const char *e = getenv("GTA_MODE");
+    if (e && sscanf(e, "%ux%u", &w, &h) == 2 && w >= 320 && h >= 200) return (double)w / h;
+#endif
+    return 4.0 / 3;
+}
 static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t style)
 {
     (void)x; (void)y; (void)w; (void)h; (void)style;
@@ -554,7 +569,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         NSWindowStyleMask sm = NSWindowStyleMaskBorderless;
         if (test_mode && !getenv("DS_DISPLAY")) { f = NSMakeRect(80, 80, 960, 620); sm = NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable; }
         else if (windowed()) {   /* the launch window's Display: Window, 4:3 at three quarters of the desktop's height */
-            NSRect vf = NSScreen.mainScreen.visibleFrame; CGFloat h = floor(vf.size.height * 0.78), w = floor(h * 4 / 3);
+            NSRect vf = NSScreen.mainScreen.visibleFrame; CGFloat h = floor(vf.size.height * 0.78), w = floor(h * win_aspect());
             f = NSMakeRect(NSMidX(vf) - w / 2, NSMidY(vf) - h / 2, w, h);
             sm = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
         }
@@ -574,7 +589,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         if (windowed()) [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil
                                                                      usingBlock:^(NSNotification *n) { (void)n; [NSApp terminate:nil]; }];
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
-        if (windowed()) { win.contentMinSize = NSMakeSize(640, 480); win.contentAspectRatio = NSMakeSize(4, 3); }
+        if (windowed()) { win.contentMinSize = NSMakeSize(640, 480); win.contentAspectRatio = NSMakeSize(win_aspect() * 1000, 1000); }
         [win setLevel:NSNormalWindowLevel];
         NSWindow *w0 = win;   // the frame cap follows the display the window is on, and a changed refresh rate
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeScreenNotification object:w0 queue:nil usingBlock:^(NSNotification *n) { (void)n; note_display(w0.screen); }];

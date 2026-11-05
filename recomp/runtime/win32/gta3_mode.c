@@ -31,20 +31,32 @@ static uint32_t guest_call(Ctx *c, uint32_t fn, int n, const uint32_t *args)
     return v;
 }
 
+#ifdef GTASA_EDITION
+/* San Andreas lists only video modes of five shapes (height over width 0.8, 0.75, 0.6, 0.625, 0.5625): a Mac display
+ * is often none of them (a 16-inch MacBook Pro below its notch, 2054x1290), and the launch window's mode was then
+ * dropped for 800x600. At the first comparison (fld [0.8]; fld [esp+4] (the mode's shape); fucompp) the mode's shape
+ * is made 0.8, so every mode is listed. */
+enum { SA_MODE_SHAPE = 0x0074d3beu, SA_SHAPE_08 = 0x0083fe78u, SA_PREFS_AA = 0x00b880b8u };
+#endif
 static void pick_mode(Ctx *c)
 {
-    static int done; const char *e = getenv("GTA_MODE"); unsigned w, h;
-    if (done || !e || sscanf(e, "%ux%u", &w, &h) != 2) return;
+    static int done; const char *e = getenv("GTA_MODE"), *dp = getenv("GTA_DEPTH"); unsigned w, h, depth = dp && atoi(dp) == 16 ? 16 : 32;
+#ifdef GTASA_EDITION
+    /* the launcher's Antialiasing (GTA_MSAA=<samples>, 1 off) as the game's own (FrontEndMenuManager's applied level,
+     * given to RwD3D9EngineSetMultiSamplingLevels just after this) */
+    { const char *m = getenv("GTA_MSAA"); if (!done && m && *m) { int n = atoi(m) < 1 ? 1 : atoi(m); rt_w32(G_MEM, SA_PREFS_AA, (uint32_t)n); } }
+#endif
+    if (done || !e || sscanf(e, "%ux%u", &w, &h) != 2) { done = 1; return; }
     done = 1;
     uint32_t buf = (c->esp - 0x400) & ~15u, n = guest_call(c, RW_NUM_MODES, 0, 0);   /* scratch well below the frame */
     for (uint32_t i = 1; i < n && i < 512; i++) {
         uint32_t a[2] = {buf, i}; guest_call(c, RW_MODE_INFO, 2, a);
-        if (rt_r32(G_MEM, buf) == w && rt_r32(G_MEM, buf + 4) == h && rt_r32(G_MEM, buf + 8) == 32 && (rt_r32(G_MEM, buf + 12) & 1)) {
-            fprintf(stderr, "gta3: video mode %ux%u (RenderWare mode %u, was %u)\n", w, h, i, rt_r32(G_MEM, PREFS_MODE));
+        if (rt_r32(G_MEM, buf) == w && rt_r32(G_MEM, buf + 4) == h && rt_r32(G_MEM, buf + 8) == depth && (rt_r32(G_MEM, buf + 12) & 1)) {
+            fprintf(stderr, "gta3: video mode %ux%ux%u (RenderWare mode %u, was %u)\n", w, h, depth, i, rt_r32(G_MEM, PREFS_MODE));
             rt_w32(G_MEM, PREFS_MODE, i); return;
         }
     }
-    fprintf(stderr, "gta3: no %ux%u video mode: the game's own choice\n", w, h);
+    fprintf(stderr, "gta3: no %ux%ux%u video mode: the game's own choice\n", w, h, depth);
 }
 
 /* CdStreamSync's wait for a streaming read (San Andreas 3.0, 0x407a70; the same code in GTA III and Vice City). The game checks the channel's sector count, then
@@ -104,7 +116,8 @@ enum { CAMERA_SIZE = 0x00580690u, FRUSTUM_HALF = 0x0046c2dcu, VC_ASPECT_RET = 0x
 enum { CAMERA_SIZE = 0x007389a0u, FRUSTUM_HALF = 0x00518350u, SA_ASPECT = 0x00c24058u };
 static const uint32_t sa_aspect_ret[] = {0x0070b0aau, 0x0070b0bbu, 0x0070b0c8u};   /* CDraw::CalculateAspectRatio's three returns */
 #endif
-static int wide_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_WIDESCREEN"); on = !(e && *e == '0'); } return on; }
+int gta_wide(void);
+static int wide_on(void) { return gta_wide(); }
 static double screen_aspect(void)   /* the screen's width over height; 4/3 when off or before there is a device */
 {
     int w, h; if (!wide_on() || !w32_d3d_size(&w, &h)) return 4.0 / 3; return (double)w / h;
@@ -141,14 +154,42 @@ enum { RS_MAX_FPS = 0x009b38f4u, PREF_LIMITER = 0x0086865du };
 #else
 enum { RS_MAX_FPS = 0x00bf8504u, PREF_LIMITER = 0x00b8803cu };
 #endif
-void gta_frame_prefs(void)
+/* The game's own menu settings and the launcher's (each set at the start from the launch window, then the game's
+ * Display Setup changes them for the session):
+ *   Frame Limiter: on caps at GTA_FPS (RsGlobal.maxFPS, set every frame), off runs as fast as the display shows;
+ *   Widescreen: the 3D view and HUD of this port (Hor+, above) on or off. The game's own widescreen (a 16:9 view
+ *     cropped from the 4:3 one, a longer draw distance, no cinema bars) is never used: its setting holds this port's
+ *     choice only while a menu or loading screen is up (no 3D drawn: d3d9.c), where Display Setup shows and changes
+ *     it, and the game saves it; in play it is 0. */
+#if defined(GTA3_EDITION)
+enum { WIDE_PREF = 0x0096e05bu };      /* CMenuManager::m_PrefsUseWideScreen */
+#elif defined(GTAVC_EDITION)
+enum { WIDE_PREF = 0x0086865au };
+#else
+enum { WIDE_PREF = 0x00b8803bu };      /* FrontEndMenuManager.m_bWidescreenOn */
+#endif
+static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, else the cap */
 {
     static int fps = -2;
     if (fps == -2) { const char *e = getenv("GTA_FPS"); fps = e && *e ? atoi(e) : -1;
         if (fps >= 0) fprintf(stderr, "gta: frame rate %s%d\n", fps ? "capped at " : "uncapped", fps ? fps : 0); }
-    if (fps < 0) return;
-    if (fps) { rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)fps); G_MEM[PREF_LIMITER] = 1; }
-    else G_MEM[PREF_LIMITER] = 0;
+    return fps;
+}
+static int wide_state = -1;
+int gta_wide(void) { if (wide_state < 0) { const char *e = getenv("GTA_WIDESCREEN"); wide_state = !(e && *e == '0'); } return wide_state; }
+void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */
+{
+    static int first = 1, was_menu;
+    int fps = fps_env();
+    if (fps >= 0) {
+        if (first) G_MEM[PREF_LIMITER] = fps > 0;
+        if (fps) rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)fps);
+    }
+    gta_wide();
+    if (menu) { if (first || !was_menu) G_MEM[WIDE_PREF] = (uint8_t)wide_state; else wide_state = G_MEM[WIDE_PREF] != 0; }
+    else { if (was_menu && !first) wide_state = G_MEM[WIDE_PREF] != 0; G_MEM[WIDE_PREF] = 0; }
+    { static int last = -1; if (last != wide_state) { if (last >= 0) fprintf(stderr, "gta: widescreen %s (the game's menu)\n", wide_state ? "on" : "off"); last = wide_state; } }
+    was_menu = menu; first = 0;
 }
 
 /* ---- High frame rates (above 30 a second): the parts of the game that count frames instead of time run as at 30,
@@ -223,7 +264,9 @@ static int hf_in(const uint32_t *a, unsigned n, uint32_t addr)   /* the lists ar
     unsigned lo = 0, hi = n; while (lo < hi) { unsigned m = (lo + hi) / 2; if (a[m] < addr) lo = m + 1; else hi = m; }
     return lo < n && a[lo] == addr;
 }
-static int hf_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("GTA_FPS"); on = e && *e && (atoi(e) > 30 || atoi(e) == 0); } return on; }
+static int fps_env(void);
+/* above 30 frames a second: a cap over 30, uncapped, or the game's Frame Limiter turned off */
+static int hf_on(void) { int f = fps_env(); return f > 30 || f == 0 || (f > 0 && !G_MEM[PREF_LIMITER]); }
 static void hf_update(void)   /* once a game frame (CTimer::m_FrameCounter changed) */
 {
     uint32_t n = rt_r32(G_MEM, FRAME_COUNTER); if (n == hf.last) return;
@@ -356,6 +399,9 @@ int gta3_hook(Ctx *c, uint32_t addr)
     }
 #endif
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
+#ifdef GTASA_EDITION
+    if (addr == SA_MODE_SHAPE) { rt_w32(G_MEM, c->esp + 4, rt_r32(G_MEM, SA_SHAPE_08)); return 1; }
+#endif
     if (addr == CD_SYNC_WAIT) { cd_sync_wait(c); return 1; }
     return 0;
 }

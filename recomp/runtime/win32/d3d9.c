@@ -6,6 +6,7 @@
  * turned into an FVF layout (gathered from their streams at draw time). Shaders: created and kept, not run yet (draws
  * with a vertex shader are skipped; with only a pixel shader they are drawn fixed-function).
  * D3D9_LOG=1: every method's first calls; any method not written yet says so once. */
+#include <dlfcn.h>
 #include "d3d9_priv.h"
 #include "edition.h"
 #include "../../../src/dsr/dsr_shm.h"
@@ -584,12 +585,12 @@ static int gta_frame3d, gta_last3d = 1, gta_frames;   /* 3D draws this frame and
  * taken together. World sprites drawn in 2D (coronas, the sun) sit at their own depth, not at the near screen depth
  * the HUD uses, and are left alone. In the menus and loading screens (no 3D drawn) everything, their pictures too, is
  * narrowed about the middle: a 4:3 screen between black, the menu and its pointer together. GTA_WIDE_HUD=center: always about the middle; off: stretched as the games do. */
+int gta_wide(void);   /* gta3_mode.c: the Widescreen setting (the launcher's, then the game's menu) */
 static int wide_hud_mode(void)
 {
     static int m = -1;
-    if (m < 0) { const char *e = getenv("GTA_WIDE_HUD"), *w = getenv("GTA_WIDESCREEN");
-        m = (w && *w == '0') || (e && !strcmp(e, "off")) ? 0 : e && !strcmp(e, "center") ? 2 : 1; }
-    return m;
+    if (m < 0) { const char *e = getenv("GTA_WIDE_HUD"); m = e && !strcmp(e, "off") ? 0 : e && !strcmp(e, "center") ? 2 : 1; }
+    return gta_wide() ? m : 0;
 }
 /* Text comes a letter (or a few) per draw, so a line's extent is known only when it is done: the lines of each frame
  * are kept (pieces that follow on, at about the same height, along one line) and a piece takes the anchor of the
@@ -959,7 +960,7 @@ static void dev_present(Ctx *c, Dev9 *d)
     cursor_overlay(d); dsr_present(c, d->back->id);
 #ifdef GTA_EDITION
     gta_last3d = gta_frame3d; gta_frame3d = 0; runs_frame(); gta_frames++;
-    { void gta_frame_prefs(void); gta_frame_prefs(); }   /* gta3_mode.c: the frame rate choice */
+    { void gta_frame_prefs(int); gta_frame_prefs(!gta_last3d); }   /* gta3_mode.c: frame limiter, widescreen */
 #endif
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
     if (fps) {
@@ -1373,11 +1374,14 @@ static void dev_surfaces(Dev9 *d, uint32_t pp)          /* back buffer (and the 
     if (!d->pp[3]) d->pp[3] = 1;
     memcpy(GP(pp), d->pp, 56);                          /* (the game reads back what was chosen) */
     dsr_d3d9_w = d->pp[0]; dsr_d3d9_h = d->pp[1];
+    { static uint32_t was = 0xffffffffu; if (d->pp[4] != was) { if (was != 0xffffffffu || d->pp[4]) fprintf(stderr, "d3d9: screen %ux%u, multisample type %u\n", d->pp[0], d->pp[1], d->pp[4]); was = d->pp[4]; } }
     new_samples = ms_samples(d->pp[4]); d->back = surf_new(d, d->pp[0], d->pp[1], d->pp[2] == 21 ? 21 : 22, USAGE_RENDERTARGET, 0, 1, 0, 0, 0, 0, 0);
     if (d->pp[9]) new_samples = ms_samples(d->pp[4]);
     d->depth = d->pp[9] ? surf_new(d, d->pp[0], d->pp[1], d->pp[10] ? d->pp[10] : 75, USAGE_DEPTHSTENCIL, 0, 2, 0, 0, 0, 0, 0) : 0;
     d->rt = d->back; surf_addref(d->back); d->ds = d->depth; if (d->depth) surf_addref(d->depth);
-    uint32_t *p = cmd_begin(DSR_MODE, 8); p[0] = d->pp[0]; p[1] = d->pp[1]; cmd_end();
+    /* a 16-bit mode (R5G6B5, X1R5G5B5): drawn in 32 bits, shown as a 16-bit screen would show it (the renderer's present:
+     * each colour to 5/6 bits, dithered) */
+    uint32_t *p = cmd_begin(DSR_MODE, 12); p[0] = d->pp[0]; p[1] = d->pp[1]; p[2] = d->pp[2] == 23 || d->pp[2] == 24 || d->pp[2] == 25 ? 16 : 32; cmd_end();
     set_rt(d);
 }
 static uint32_t dev_reset(Dev9 *d, uint32_t pp)
@@ -1420,29 +1424,47 @@ static int modes(uint32_t (*out)[2])                    /* the standard sizes th
     return ds_display_modes(out, (uint32_t)w32_screen_w, (uint32_t)w32_screen_h, getenv("DS_RESOLUTION"));
 #else
     static const uint32_t std[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720}, {1280, 800}, {1280, 960}, {1280, 1024}, {1366, 768},
-                                      {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050}, {1920, 1080}, {1920, 1200}, {2560, 1440}, {2560, 1600}};
+                                      {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050}, {1920, 1080}, {1920, 1200}, {2560, 1440}, {2560, 1600},
+                                      {2880, 1620}, {2880, 1800}, {3200, 1800}, {3840, 2160}, {3840, 2400}};
     int n = 0; uint32_t sw = (uint32_t)w32_screen_w, sh = (uint32_t)w32_screen_h;
     for (unsigned k = 0; k < sizeof std / sizeof *std; k++) if (std[k][0] <= sw && std[k][1] <= sh && !(std[k][0] == sw && std[k][1] == sh)) { out[n][0] = std[k][0]; out[n][1] = std[k][1]; n++; }
     out[n][0] = sw; out[n][1] = sh; n++;
 #ifdef GTA_EDITION
-    {   /* the launch window's mode (GTA_MODE, gta3_mode.c): a 4:3 one the height of the display, in points or pixels */
-        unsigned gw, gh; const char *e = getenv("GTA_MODE");
-        if (e && sscanf(e, "%ux%u", &gw, &gh) == 2 && gw >= 640 && gh >= 480 && n < DS_DISPLAY_MODE_CAP) {
-            int have = 0; for (int k = 0; k < n; k++) have |= out[k][0] == gw && out[k][1] == gh;
-            if (!have) { out[n][0] = gw; out[n][1] = gh; n++; }
+    /* the GTA games: the standard sizes up to the display's pixels (they draw at Retina sharpness), the display's own
+     * size in points and pixels, the launch window's mode (GTA_MODE) and its list of the display's shapes (GTA_MODES:
+     * below the notch, 16:9, 16:10, in points and pixels), in order of size: the games' Resolution lists them all */
+    {   extern double w32_screen_scale; double sc = w32_screen_scale > 1 ? w32_screen_scale : 1;
+        uint32_t pw = (uint32_t)(sw * sc + 0.5), ph = (uint32_t)(sh * sc + 0.5);
+        n = 0;
+        for (unsigned k = 0; k < sizeof std / sizeof *std; k++) if (std[k][0] <= pw && std[k][1] <= ph) { out[n][0] = std[k][0]; out[n][1] = std[k][1]; n++; }
+        out[n][0] = sw; out[n][1] = sh; n++;
+        if (pw != sw) { out[n][0] = pw; out[n][1] = ph; n++; }
+        char list[1024]; snprintf(list, sizeof list, "%s,%s", getenv("GTA_MODE") ? getenv("GTA_MODE") : "", getenv("GTA_MODES") ? getenv("GTA_MODES") : "");
+        for (char *t = strtok(list, ","); t && n < DS_DISPLAY_MODE_CAP; t = strtok(0, ",")) {
+            unsigned gw, gh; if (sscanf(t, "%ux%u", &gw, &gh) == 2 && gw >= 640 && gh >= 480 && gw <= 16384 && gh <= 16384) { out[n][0] = gw; out[n][1] = gh; n++; }
         }
+        for (int a = 0; a < n; a++) for (int b = a + 1; b < n; b++)   /* by size; the same size once */
+            if ((uint64_t)out[b][0] * out[b][1] < (uint64_t)out[a][0] * out[a][1] || ((uint64_t)out[b][0] * out[b][1] == (uint64_t)out[a][0] * out[a][1] && out[b][0] < out[a][0])) {
+                uint32_t x = out[a][0], y = out[a][1]; out[a][0] = out[b][0]; out[a][1] = out[b][1]; out[b][0] = x; out[b][1] = y; }
+        int m = 0; for (int k = 0; k < n; k++) if (!m || out[k][0] != out[m - 1][0] || out[k][1] != out[m - 1][1]) { out[m][0] = out[k][0]; out[m][1] = out[k][1]; m++; }
+        n = m;
     }
 #endif
     return n;
 #endif
 }
-M(d9_GetAdapterModeCount, 3) uint32_t m[DS_DISPLAY_MODE_CAP][2]; RET(ARG(2) == 22 || ARG(2) == 21 ? (uint32_t)modes(m) : 0, 3); END
+#ifdef GTA_EDITION
+#define MODE_FMT_OK(f) ((f) == 22 || (f) == 21 || (f) == 23)   /* and 16-bit (R5G6B5): the games' Resolution lists "x 16" */
+#else
+#define MODE_FMT_OK(f) ((f) == 22 || (f) == 21)
+#endif
+M(d9_GetAdapterModeCount, 3) uint32_t m[DS_DISPLAY_MODE_CAP][2]; RET(MODE_FMT_OK(ARG(2)) ? (uint32_t)modes(m) : 0, 3); END
 M(d9_EnumAdapterModes, 5)                              /* (adapter, format, index, D3DDISPLAYMODE *) */
-    uint32_t m[DS_DISPLAY_MODE_CAP][2]; int n = modes(m); if (ARG(3) >= (uint32_t)n) RET(D3DERR_INVALIDCALL, 5);
+    uint32_t m[DS_DISPLAY_MODE_CAP][2]; int n = MODE_FMT_OK(ARG(2)) ? modes(m) : 0; if (ARG(3) >= (uint32_t)n) RET(D3DERR_INVALIDCALL, 5);
     uint32_t v[4] = {m[ARG(3)][0], m[ARG(3)][1], (uint32_t)w32_screen_hz, ARG(2)}; memcpy(GP(ARG(4)), v, 16); RET(D3D_OK, 5);
 END
 M(d9_GetAdapterDisplayMode, 3) uint32_t v[4] = {(uint32_t)w32_screen_w, (uint32_t)w32_screen_h, (uint32_t)w32_screen_hz, 22}; memcpy(GP(ARG(2)), v, 16); RET(D3D_OK, 3); END
-M(d9_CheckDeviceType, 6) RET(ARG(3) == 22 || ARG(3) == 21 ? D3D_OK : D3DERR_NOTAVAILABLE, 6); END
+M(d9_CheckDeviceType, 6) RET(MODE_FMT_OK(ARG(3)) ? D3D_OK : D3DERR_NOTAVAILABLE, 6); END
 M(d9_CheckDeviceFormat, 7)                             /* (adapter, type, adapter format, usage, resource type, format) */
     uint32_t usage = ARG(4), f = ARG(6);
     /* render targets: 8-bit RGB(A) and the floating-point formats the renderer draws into (asked for by FNV for its shadow
@@ -1455,7 +1477,15 @@ END
  * D3D9_GAME_MSAA=1: its MSAA path then draws the scene into a multisampled target with no depth buffer bound (the depth
  * it pairs with it is never created here). Antialiasing is the renderer's instead (DSR_MSAA, DSR_FXAA). */
 M(d9_CheckDeviceMultiSampleType, 7)
+#ifdef GTA_EDITION
+    /* San Andreas' Antialiasing (RenderWare takes the most samples offered, 2-16, and steps down from the level asked
+     * for to one offered): the sample counts the GPU draws with */
+    static int (*msaa_ok)(int); static int looked;   /* the renderer's (in the app, not this library) */
+    if (!looked) { looked = 1; msaa_ok = (int (*)(int))dlsym(RTLD_DEFAULT, "dsr_msaa_ok"); }
+    uint32_t t = ARG(5); int ok = t == 0 || (t >= 2 && t <= 16 && (msaa_ok ? msaa_ok((int)t) : t == 2 || t == 4));
+#else
     uint32_t t = ARG(5); int ok = t == 0 || ((t == 2 || t == 4 || t == 8) && getenv("D3D9_GAME_MSAA"));
+#endif
     if (getenv("D3D9_RTLOG")) fprintf(stderr, "rtlog: CheckDeviceMultiSampleType(devtype %u, format %u, windowed %u, type %u) -> %s\n", ARG(2), ARG(3), ARG(4), t, ok ? "ok" : "no");
     if (ARG(6)) rt_w32(G_MEM, ARG(6), ok ? 1 : 0); RET(ok ? D3D_OK : D3DERR_NOTAVAILABLE, 7);
 END
