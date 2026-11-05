@@ -1,4 +1,5 @@
-// DSR fixed-function emulation for Dungeon Siege's Direct3D 7 usage (lighting off; 2 texture stages; vertex fog).
+// DSR fixed-function emulation: Direct3D 7-9 fixed function (vertex lighting, texture-coordinate generation, 2 texture
+// stages, fog).
 #include <metal_stdlib>
 using namespace metal;
 
@@ -19,12 +20,21 @@ struct Uniforms {
     int4 xrgb;           // stage 0/1 texture has no alpha channel
     float4x4 tex1;       // texture-1 transform
     int4 s1;             // stage 1: texcoordindex, texturetransformflags, unused, unused
+    float4x4 nrm;        // normals to camera space: the inverse transpose of world*view
+    float4 amb;          // D3DRS_AMBIENT
+    float4 md, ma, ms, me;   // the material: diffuse, ambient, specular, emissive (after D3DRS_*MATERIALSOURCE)
+    int4 lit;            // lighting on, lights, material sources (diffuse | ambient << 4 | emissive << 8: 0 material, 1 colour 1, 2 colour 2), normalize normals
+    int4 tg;             // local viewer, specular on (D3DRS_SPECULARENABLE), unused x2
+    float4 lt[8 * 7];    // each light (camera space): diffuse, ambient, position (w type), direction, attenuation 0-2 + range, spot (cos theta/2, cos phi/2, falloff), specular
 };
 
 struct VIn {
     float4 pos [[attribute(0)]];     // xyz (w=1) or xyz+rhw
     float4 diffuse [[attribute(1)]]; // BGRA8 normalized (bound to a constant white buffer when absent)
     float2 uv [[attribute(2)]];
+    float3 normal [[attribute(3)]];  // (0, 0, 0) when absent
+    float4 specular [[attribute(4)]];// colour 2 (BGRA8)
+    float2 uv1 [[attribute(5)]];     // texture coordinate set 1 ((0, 0) when absent)
 };
 struct VOut {
     float4 pos [[position]];
@@ -32,19 +42,66 @@ struct VOut {
     float2 uv;                       // stage 0 coordinates (after its texture transform)
     float2 uv1;                      // stage 1 coordinates
     float3 tcproj;                   // projected texgen (camera-space position * tex0)
+    float3 spec;                     // specular colour, added after the texture stages (D3DRS_SPECULARENABLE)
     float fogf;
 };
 
-/* D3DTSS_TEXTURETRANSFORMFLAGS on passed-through coordinates: 2-D coordinates enter the texture matrix as (u, v, 1, 0),
- * so translation lives in the third row (how the game scrolls river and waterfall layers). Camera-space texgen is
- * handled separately (tcproj). */
-static float2 ttf(float2 uv, float4x4 m, int tci, int flags)
+/* A stage's texture coordinates: D3DTSS_TEXCOORDINDEX picks a set (low bits) or generates them (D3DTSS_TCI_* in the
+ * upper bits: 1 camera-space normal, 2 camera-space position, 3 camera-space reflection vector), then
+ * D3DTSS_TEXTURETRANSFORMFLAGS runs them through the stage's texture matrix. Passed-through 2-D coordinates enter it as
+ * (u, v, 1, 0), so translation lives in the third row (how Dungeon Siege scrolls its river layers); generated ones as
+ * (x, y, z, 1) (RenderWare's car reflections: the normal's x and y scaled by 0.5 and moved by 0.5). Projected
+ * camera-space positions are divided per pixel instead (tcproj). */
+static float2 texcoord(float2 uv0, float2 uv1, float4x4 m, int tci, int flags, float3 cam, float3 n, bool local)
 {
-    int count = flags & 0xff;
-    if (count == 0 || (tci & 0xffff0000) != 0) return uv;
-    float4 t = m * float4(uv, 1.0, 0.0);
+    int count = flags & 0xff, gen = (tci >> 16) & 0xffff;
+    float4 t;
+    if (gen == 0) {
+        float2 uv = (tci & 7) == 1 ? uv1 : uv0;
+        if (count == 0) return uv;
+        t = m * float4(uv, 1.0, 0.0);
+    } else {
+        float3 g = gen == 1 ? n : gen == 2 ? cam : reflect(local ? normalize(cam) : float3(0, 0, 1), n);
+        if (count == 0) return g.xy;
+        t = m * float4(g, 1.0);
+    }
     if (flags & 0x100) { float q = count == 2 ? t.y : count == 3 ? t.z : t.w; return q != 0 ? t.xy / q : t.xy; }
     return t.xy;
+}
+/* Direct3D's vertex lighting (D3DRS_LIGHTING): emissive + ambient * (D3DRS_AMBIENT + each light's ambient) + diffuse *
+ * each light's diffuse * N.L, attenuated by distance (point and spot lights) and the spot cone; alpha is the diffuse
+ * colour's. Specular: each light's specular * (N.H)^power (H halfway to the viewer). Colours come from the material or
+ * the vertex (D3DRS_COLORVERTEX + *MATERIALSOURCE). */
+static float4 light_vertex(constant Uniforms &u, float3 p, float3 n, float4 c1, float4 c2, thread float3 &spec)
+{
+    int src = u.lit.z;
+    float4 cs = ((src >> 12) & 15) == 1 ? c1 : ((src >> 12) & 15) == 2 ? c2 : u.ms;
+    float3 view = u.tg.x ? (dot(p, p) > 0 ? -normalize(p) : float3(0, 0, -1)) : float3(0, 0, -1), sp = float3(0);
+    float4 cd = (src & 15) == 1 ? c1 : (src & 15) == 2 ? c2 : u.md;
+    float4 ca = ((src >> 4) & 15) == 1 ? c1 : ((src >> 4) & 15) == 2 ? c2 : u.ma;
+    float4 ce = ((src >> 8) & 15) == 1 ? c1 : ((src >> 8) & 15) == 2 ? c2 : u.me;
+    float3 amb = u.amb.rgb, dif = float3(0);
+    for (int i = 0; i < u.lit.y; i++) {
+        float4 ld = u.lt[i * 7], la = u.lt[i * 7 + 1], lp = u.lt[i * 7 + 2], dir = u.lt[i * 7 + 3], att = u.lt[i * 7 + 4], spot = u.lt[i * 7 + 5];
+        int type = int(lp.w); float3 l; float a = 1.0;
+        if (type == 3) l = -normalize(dir.xyz);                     // directional
+        else {                                                      // point (1), spot (2)
+            float3 v = lp.xyz - p; float d = length(v);
+            if (d > att.w) continue;
+            l = d > 0 ? v / d : float3(0, 0, 1);
+            float k = att.x + att.y * d + att.z * d * d; a = k > 0 ? 1.0 / k : 1.0;
+            if (type == 2) {
+                float rho = dot(normalize(dir.xyz), -l);
+                a *= rho > spot.x ? 1.0 : rho <= spot.y ? 0.0 : pow(saturate((rho - spot.y) / max(spot.x - spot.y, 1e-6)), spot.z);
+            }
+        }
+        amb += a * la.rgb;
+        float nl = dot(n, l);
+        dif += a * max(nl, 0.0) * ld.rgb;
+        if (u.tg.y && nl > 0 && u.ms.a > 0) sp += a * pow(max(dot(n, normalize(l + view)), 0.0), u.ms.a) * u.lt[i * 7 + 6].rgb;
+    }
+    spec = saturate(cs.rgb * sp);
+    return float4(saturate(ce.rgb + ca.rgb * amb + cd.rgb * dif), cd.a);
 }
 vertex VOut vs_main(VIn in [[stage_in]], constant Uniforms &u [[buffer(1)]])
 {
@@ -62,12 +119,18 @@ vertex VOut vs_main(VIn in [[stage_in]], constant Uniforms &u [[buffer(1)]])
         o.pos.x += o.pos.w / u.vp.z;      // half-pixel: same rasterisation as D3D7
         o.pos.y -= o.pos.w / u.vp.w;
         float4 cam = u.wv * p;
-        o.fogf = u.fog.z != 0 ? clamp((u.fog.y - cam.z) / (u.fog.y - u.fog.x), 0.0, 1.0) : 1.0;
+        // fog (D3DRS_FOGTABLEMODE, else D3DRS_FOGVERTEXMODE): 1 exp, 2 exp2, 3 linear, by camera-space depth
+        float fd = cam.z, fm = u.fog.z;
+        o.fogf = fm == 3 ? clamp((u.fog.y - fd) / (u.fog.y - u.fog.x), 0.0, 1.0) : fm == 1 ? exp(-fd * u.fog.w) : fm == 2 ? exp(-(fd * u.fog.w) * (fd * u.fog.w)) : 1.0;
         o.tcproj = (u.tex0 * cam).xyz;
     }
-    o.diffuse = in.diffuse;
-    o.uv = ttf(in.uv, u.tex0, u.a0.z, u.a0.w);
-    o.uv1 = ttf(in.uv, u.tex1, u.s1.x, u.s1.y);
+    float3 cam3 = u.misc.x ? float3(0) : (u.wv * float4(in.pos.xyz, 1.0)).xyz;
+    float3 n = u.misc.x ? float3(0) : (u.nrm * float4(in.normal, 0.0)).xyz;
+    if (u.lit.w && dot(n, n) > 0) n = normalize(n);
+    o.spec = u.tg.y ? in.specular.rgb : float3(0);   // unlit: the vertex's own specular colour (black when it has none)
+    o.diffuse = u.lit.x ? light_vertex(u, cam3, n, in.diffuse, in.specular, o.spec) : in.diffuse;
+    o.uv = texcoord(in.uv, in.uv1, u.tex0, u.a0.z, u.a0.w, cam3, n, u.tg.x != 0);
+    o.uv1 = texcoord(in.uv, in.uv1, u.tex1, u.s1.x, u.s1.y, cam3, n, u.tg.x != 0);
     return o;
 }
 
@@ -131,6 +194,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
                      case 5: pass = a > r; break; case 6: pass = a != r; break; case 7: pass = a >= r; break; default: pass = true; }
         if (!pass) discard_fragment();
     }
+    if (u.tg.y) current.rgb = saturate(current.rgb + in.spec);
     current.rgb = mix(u.fogcolor.rgb, current.rgb, in.fogf);
     return current;
 }
