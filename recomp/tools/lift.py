@@ -203,9 +203,11 @@ def df_moved(features, edition):
 # GTA III and San Andreas: native additions (runtime/win32/gta3_mode.c gta3_hook)
 GTA3_HOOKS = {
     0x005829f8: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
+    0x0040604a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
 }
 GTAVC_HOOKS = {
     0x00600a95: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
+    0x0040840a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
 }
 GTASA_HOOKS = {
     0x0074daec: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
