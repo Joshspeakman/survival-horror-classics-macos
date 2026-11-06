@@ -5,6 +5,7 @@
  * Display Setup shows it; without the variable (or empty) the saved choice stands ("As Set in Game"). */
 #include "w32.h"
 #include "edition.h"
+#include <time.h>
 
 #ifdef GTA_EDITION
 #if defined(GTA3_EDITION) || defined(GTASA_EDITION) || defined(GTAVC_EDITION)
@@ -195,7 +196,50 @@ static int pad_context(void)
 #endif
     return CTX_VEHICLE;
 }
-uint32_t gta_pad_layout(uint32_t b)   /* the controller's buttons -> the PS2 pad's (same bit numbering) */
+/* Modern: the right stick drives the games' own mouse camera (a free orbit camera, as in today's games: up looks up),
+ * not their joystick look (GTA III and Vice City's had up and down the other way; San Andreas, whose PC camera on foot
+ * follows the mouse in its Mouse + Keys control method, ignored it on foot). Its axes are then not reported as the
+ * joystick's. GTA III and Vice City have no mouse camera in vehicles: there the stick keeps the game's own look.
+ * Counts a second at full tilt, after a dead zone and a curve (fine aim near the centre). */
+void w32_di_mouse_move(int dx, int dy);
+int gta_menu_frame(void);
+uint32_t gta_pad_axes(float ax[6])   /* dinput8.c w32_di_pad, 250 times a second: ax as the host reports (right stick 2/3,
+                                       4/5); returns PS2 buttons to add (GTA III and Vice City in vehicles: the looks) */
+{
+    static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
+    if (!modern) return 0;
+    static double last, fx, fy; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec * 1e-9;
+    double dt = last > 0 ? now - last : 0; last = now; if (dt > 0.05) dt = 0.05;
+    if (gta_menu_frame()) { fx = fy = 0; return 0; }   /* menus: the stick as the PS2's */
+    int ctx = pad_context();
+#if !defined(GTASA_EDITION)
+    if (ctx != CTX_FOOT) {   /* no free camera in their vehicles: the stick looks left, right (L2, R2) or back (both) */
+        float rx = ax[2], ry = ax[4]; ax[2] = ax[3] = ax[4] = ax[5] = 0; fx = fy = 0;
+        if (ry > 0.6f) return 3u << 4;
+        return rx < -0.6f ? 1u << 4 : rx > 0.6f ? 1u << 5 : 0;
+    }
+#else
+    if (ctx == CTX_AIRCRAFT) { fx = fy = 0; return 0; }   /* the mouse would fly the plane: the stick's own controls */
+#endif
+    float rx = ax[2], ry = ax[4]; ax[2] = ax[3] = ax[4] = ax[5] = 0;
+    double m = sqrt((double)rx * rx + (double)ry * ry), dz = 0.15;
+    if (m <= dz) return 0;
+    double k = (m - dz) / (1 - dz); if (k > 1) k = 1; k = k * k / m;        /* radial dead zone, then squared */
+    static double sx = -1, sy; if (sx < 0) { const char *e = getenv("GTA_STICK_LOOK"); sx = e ? atof(e) : 1400; if (sx <= 0) sx = 1400; sy = sx * 0.7; }
+#if defined(GTASA_EDITION)
+    ry = -ry;   /* San Andreas' mouse cameras (on foot and in vehicles) pitch the other way to GTA III's and Vice City's, as
+                   set by default */
+#endif
+    fx += rx * k * sx * dt; fy += ry * k * sy * dt;
+    int dx = (int)fx, dy = (int)fy; fx -= dx; fy -= dy;
+    if (dx || dy) w32_di_mouse_move(dx, dy);
+    return 0;
+}
+static volatile uint32_t pad_mapped;   /* the PS2 buttons last reported (gta_pad_aiming) */
+uint32_t gta_pad_layout_(uint32_t b);
+uint32_t gta_pad_layout(uint32_t b) { uint32_t r = gta_pad_layout_(b); pad_mapped = r; return r; }
+static int gta_pad_aiming(void) { return (pad_mapped >> 7) & 1; }   /* R1 (Modern: LT): targeting */
+uint32_t gta_pad_layout_(uint32_t b)   /* the controller's buttons -> the PS2 pad's (same bit numbering) */
 {
     static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
     if (!modern) return b;
@@ -646,6 +690,17 @@ int gta3_hook(Ctx *c, uint32_t addr)
     if (addr == LIMIT_TEST) { wrf(c->esp + 0x14, (float)(now_ms() - lim_due)); return 1; }   /* [esp+14]: the time since, ms */
 #else
     if (addr == LIMIT_TEST) { ST(0) = now_ms() - lim_due; return 1; }                         /* st(0): the time since, ms */
+#endif
+#if defined(GTA3_EDITION)
+    /* Modern: GTA III's player on foot with the mouse camera (the right stick) moves as on the PS2, toward where the
+     * left stick points from the camera (CPlayerPed::PlayerControlZelda), not by turning with the stick as its PC
+     * controls do (PlayerControl1stPersonRunAround); while aiming (LT) the PC control keeps him facing where the
+     * camera looks. 0x4f0bca: the test of CCam::Using3rdPersonMouseCam()'s answer in CPlayerPed::ProcessControl. */
+    if (addr == 0x004f0bcau) {
+        static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
+        if (modern && !gta_pad_aiming()) c->eax &= ~0xffu;
+        return 1;
+    }
 #endif
     if (addr == LIMIT_RUN) {
         double now = now_ms(), per = 1000.0 / (rt_r32(G_MEM, RS_MAX_FPS) ? rt_r32(G_MEM, RS_MAX_FPS) : 30);

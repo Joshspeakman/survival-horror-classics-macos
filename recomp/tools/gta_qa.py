@@ -112,6 +112,60 @@ PLANS = {
                  ('a car (cheat)', ['cheat:CQZIJMB'], 3, []), ('in the car', ['key:70'], 4, ['peek:b64788,58c,4c0']),
                  ('driving fast (speed blur)', ['gta:vspeed,0.8,400'], 2, ['framelog']), ('still fast', [], 1, []),
                  ('engine on fire', ['gta:vhealth,200'], 3, []), ('explosion', ['gta:vhealth,0'], 2, []), ('after', [], 3, [])],
+    # controls on foot: the left stick moves, the right stick looks (pad: buttons, lx, ly, rx, ry; up is -1)
+    'sa-controls': [('on foot', [], 2, []),
+        ('left stick right (0.7 s)', ['pad:0,1,0,0,0'], 0.7, []), ('left stick right (2 s)', [], 1.3, ['pad:0,0,0,0,0']),
+        ('settled', [], 1.5, []),
+        ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']),
+        ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0']),
+        ('left stick up (forward, 1 s)', ['pad:0,0,-1,0,0'], 1, ['pad:0,0,0,0,0']),
+        ('left stick left (1 s)', ['pad:0,-1,0,0,0'], 1, ['pad:0,0,0,0,0'])],
+    'gta3-controls': [('on foot', [], 2, []),
+        ('left stick right (0.7 s)', ['pad:0,1,0,0,0'], 0.7, []), ('left stick right (2 s)', [], 1.3, ['pad:0,0,0,0,0']),
+        ('settled', [], 1.5, []),
+        ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']),
+        ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0']),
+        ('left stick up (forward, 1 s)', ['pad:0,0,-1,0,0'], 1, ['pad:0,0,0,0,0']),
+        ('left stick left (1 s)', ['pad:0,-1,0,0,0'], 1, ['pad:0,0,0,0,0'])],
+    'vc-controls': [('out of the car', ['key:70'], 4, [])] + [('on foot', [], 2, []),
+        ('left stick right (0.7 s)', ['pad:0,1,0,0,0'], 0.7, []), ('left stick right (2 s)', [], 1.3, ['pad:0,0,0,0,0']),
+        ('settled', [], 1.5, []),
+        ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']),
+        ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0']),
+        ('left stick up (forward, 1 s)', ['pad:0,0,-1,0,0'], 1, ['pad:0,0,0,0,0']),
+        ('left stick left (1 s)', ['pad:0,-1,0,0,0'], 1, ['pad:0,0,0,0,0'])],
+    'sa-controls2': [('on foot', [], 2, []),
+        ('camera turned a little (right stick)', ['pad:0,0,0,0.6,0'], 0.4, ['pad:0,0,0,0,0']), ('settled', [], 1.5, []),
+        ('left stick right 0.3 s', ['pad:0,1,0,0,0'], 0.3, []), ('left stick right 0.8 s', [], 0.5, []), ('left stick right 1.5 s', [], 0.7, ['pad:0,0,0,0,0']),
+        ('stopped', [], 1, []),
+        ('left stick left 0.3 s', ['pad:0,-1,0,0,0'], 0.3, []), ('left stick left 0.8 s', [], 0.5, ['pad:0,0,0,0,0']),
+        ('right stick up (look up)', ['pad:0,0,0,0,-1'], 0.6, ['pad:0,0,0,0,0']),
+        ('right stick down (look down)', ['pad:0,0,0,0,1'], 1.2, ['pad:0,0,0,0,0'])],
+    'gta3-controls2': [('on foot', [], 2, []),
+        ('camera turned a little (right stick)', ['pad:0,0,0,0.6,0'], 0.4, ['pad:0,0,0,0,0']), ('settled', [], 1.5, []),
+        ('left stick right 0.3 s', ['pad:0,1,0,0,0'], 0.3, []), ('left stick right 0.8 s', [], 0.5, []), ('left stick right 1.5 s', [], 0.7, ['pad:0,0,0,0,0']),
+        ('stopped', [], 1, []),
+        ('left stick left 0.3 s', ['pad:0,-1,0,0,0'], 0.3, []), ('left stick left 0.8 s', [], 0.5, ['pad:0,0,0,0,0']),
+        ('right stick up (look up)', ['pad:0,0,0,0,-1'], 0.6, ['pad:0,0,0,0,0']),
+        ('right stick down (look down)', ['pad:0,0,0,0,1'], 1.2, ['pad:0,0,0,0,0'])],
+    'vc-controls2': [('out of the car', ['key:70'], 4, [])] + [('on foot', [], 2, []),
+        ('camera turned a little (right stick)', ['pad:0,0,0,0.6,0'], 0.4, ['pad:0,0,0,0,0']), ('settled', [], 1.5, []),
+        ('left stick right 0.3 s', ['pad:0,1,0,0,0'], 0.3, []), ('left stick right 0.8 s', [], 0.5, []), ('left stick right 1.5 s', [], 0.7, ['pad:0,0,0,0,0']),
+        ('stopped', [], 1, []),
+        ('left stick left 0.3 s', ['pad:0,-1,0,0,0'], 0.3, []), ('left stick left 0.8 s', [], 0.5, ['pad:0,0,0,0,0']),
+        ('right stick up (look up)', ['pad:0,0,0,0,-1'], 0.6, ['pad:0,0,0,0,0']),
+        ('right stick down (look down)', ['pad:0,0,0,0,1'], 1.2, ['pad:0,0,0,0,0'])],
+    'gta3-vt': [('on foot', [], 2, ['peek:952628,0', 'peek:952628,0,20', 'peek:952628,0,2c'])],
+    'vc-carlook': [('in the car', [], 2, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
+    'gta3-carlook': [('in the car', ['key:70'], 5, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
+    'sa-carlook': [('airport', ['gta:weather,0', hold((SA_HOUR, 13)), 'tp:1477,1500,11'], 8, []), ('a car', ['cheat:CQZIJMB'], 3, []),
+                   ('in the car', ['key:70'], 4, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
+        ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
     # finding the weather: memory around the clock before and after a weather cheat
     'vc-weather-find': [('before', ['dump:a0e000,3000,{out}/before.bin'], 2, []), ('rain', ['cheat:CATSANDDOGS'], 3, ['dump:a0e000,3000,{out}/after.bin'])],
     'gta3-weather-find': [('before', ['dump:96c000,4000,{out}/before.bin'], 2, []), ('rain', ['cheat:ILOVESCOTLAND'], 3, ['dump:96c000,4000,{out}/after.bin'])],
@@ -147,13 +201,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('game', choices=sorted(GAMES)); ap.add_argument('plan', choices=sorted(PLANS))
     ap.add_argument('--out', default=None); ap.add_argument('--mode', default='1600x1000'); ap.add_argument('--msaa', default='2')
-    ap.add_argument('--light', default='ps2'); ap.add_argument('--keep', action='store_true', help='keep the run\'s data folder')
+    ap.add_argument('--light', default='ps2'); ap.add_argument('--controls', default='modern'); ap.add_argument('--keep', action='store_true', help='keep the run\'s data folder')
     a = ap.parse_args()
     g = GAMES[a.game]; out = os.path.abspath(a.out or os.path.join(WORK, 'qa', a.game + '-' + a.plan))
     shutil.rmtree(out, ignore_errors=True); os.makedirs(out)
     data = os.path.join(out, 'data'); os.makedirs(data); cmd = os.path.join(out, 'cmd.txt'); open(cmd, 'w').close()
     env = dict(os.environ, DS_TEST='1', DS_NO_LAUNCHER='1', W32_AUDIO_MUTE='1', GTA_NO_MOVIES='1', DS_SHOT_FINAL='1', DS_CMDFILE=cmd,
-               GTA_MODE=a.mode, GTA_MSAA=a.msaa, D3D9_FRAMELOG_FILE=os.path.join(out, 'framelog.go'), GTA_LIGHTING=a.light, GTA_WIDESCREEN='1', GTA_FPS='60')
+               GTA_MODE=a.mode, GTA_MSAA=a.msaa, D3D9_FRAMELOG_FILE=os.path.join(out, 'framelog.go'), GTA_LIGHTING=a.light, GTA_CONTROLS=a.controls, GTA_WIDESCREEN='1', GTA_FPS='60')
     log = open(os.path.join(out, 'game.log'), 'w')
     p = subprocess.Popen([os.path.join(WORK, g['bin']), '--exe', os.path.join(WORK, g['exe']), '--game', os.path.expanduser(g['game']),
                           '--data', data], env=env, stdout=log, stderr=subprocess.STDOUT)
