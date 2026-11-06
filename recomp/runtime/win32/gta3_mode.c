@@ -335,13 +335,14 @@ static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, el
         if (fps > 0) fprintf(stderr, "gta: frame rate capped at %d\n", fps); else if (!fps) fprintf(stderr, "gta: frame rate uncapped\n"); }
     return fps;
 }
-int gta_menu_cap(void) { int f = fps_env(); return f > 0 ? f : 0; }   /* ddraw.c: the menus' and loading screens' cap */
+static int auto_cap;
+int gta_menu_cap(void) { int f = fps_env(); return f > 0 ? (auto_cap ? auto_cap : f) : 0; }   /* ddraw.c: the menus' and loading screens' cap */
 /* A Frame Rate above 60 that the game can't come near: on a 120 Hz display frames that take, say, 13 ms stay up for one
  * refresh, then two, unevenly, and an even 60 looks better. Each frame's work (from the limiter letting it run to the
  * limiter's next test) is timed: when over 3 s it averages more than 1.2 intervals (under ~100 at a cap of 120), the cap
  * halves (120 -> 60, presented evenly: gta_present_cap); when over 10 s it averages under 0.95 of the full rate's
- * interval, it goes back up. Loading hitches (over 100 ms) don't count. GTA_FPS_AUTO=0: never. */
-static int auto_cap;
+ * interval, it goes back up (each later drop waits twice as long before going up). Loading hitches (over 100 ms) don't
+ * count. GTA_FPS_AUTO=0: never. */
 static void auto_cap_frame(double work_ms)
 {
     { static double lg = -1; if (lg < 0) { const char *e = getenv("GTA_SLOWLOG"); lg = e ? (atof(e) > 0 ? atof(e) : 25) : 0; }   /* development: frames whose work passed GTA_SLOWLOG ms (25), by the steady clock (W32_PROFILE_GAME's) */
@@ -350,12 +351,13 @@ static void auto_cap_frame(double work_ms)
     int fps = fps_env();
     if (!on || fps < 90 || !G_MEM[PREF_LIMITER]) { auto_cap = 0; return; }
     if (work_ms > 100) return;
-    static double win_t, sum; static int n, slow;
+    static double win_t, sum; static int n, slow, drops;
     double per = 1000.0 / fps, now = now_ms(); if (!win_t) win_t = now;
     n++; sum += work_ms; if (work_ms > per * 1.1) slow++;
-    if (now - win_t < (auto_cap ? 10000 : 3000)) return;
+    if (now - win_t < (auto_cap ? 10000.0 * (1 << (drops > 5 ? 5 : drops - 1)) : 3000)) return;   /* back up after 10 s, then 20, 40 ... 5 min:
+                                                                                               no see-saw where a full-rate frame waits on the GPU */
     if (!auto_cap && n >= 30 && sum / n > per * 1.2) {
-        auto_cap = fps / 2;
+        auto_cap = fps / 2; drops++;
         fprintf(stderr, "gta: frame rate %d -> %d (frames take %.1f ms, %d of %d over %.1f; GTA_FPS_AUTO=0 keeps %d)\n", fps, auto_cap, sum / n, slow, n, per, fps);
     } else if (auto_cap && n >= 100 && sum / n < per * 0.95) {
         fprintf(stderr, "gta: frame rate back to %d (frames take %.1f ms)\n", fps, sum / n); auto_cap = 0;
@@ -778,8 +780,10 @@ int gta3_hook(Ctx *c, uint32_t addr)
     /* San Andreas' Idle (0x542630) starts each frame by spinning on the timer until 14 ms have passed since the last one:
      * a cap of ~71 fps (what looked like 13 ms of game code a frame), and, after a frame the limiter let run late, a
      * frame that waits most of its interval, so frames took 2-8 ms and 12-16 ms in turn. With the launcher's Frame Rate
-     * the limiter above paces the frames: the wait ends at once (eax: the ms since the last frame, compared with 14). */
-    if (addr == 0x0054265au) { if (fps_env() >= 0 && c->eax < 14) c->eax = 14; return 1; }
+     * the limiter above paces the frames: the wait ends at once (eax: the ms since the last frame, compared with 14).
+     * With the game's own Frame Limiter off nothing paces them: the game is left as released (its physics aren't made
+     * for hundreds a second with VSync off). */
+    if (addr == 0x0054265au) { if (fps_env() >= 0 && G_MEM[PREF_LIMITER] && c->eax < 14) c->eax = 14; return 1; }
 #endif
     if (addr == LIMIT_TEST && run_t) { auto_cap_frame(now_ms() - run_t); run_t = 0; }       /* the frame's work is done */
     if (addr == LIMIT_TEST) {   /* waiting for the next frame: the game spun in PeekMessage and QueryPerformanceCounter until it was

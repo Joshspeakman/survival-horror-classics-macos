@@ -105,7 +105,8 @@ scripts rotate and slide (gates, lifts) go by the time step.
 San Andreas also waited at the start of every frame (`Idle`) until 14 ms had passed since the last one, spinning on the
 timer: at most about 71 fps, and after a frame the limiter let run late, a frame that waited most of its interval, so
 its frames took 2–8 ms and 12–16 ms in turn. With the launcher's Frame Rate the limiter paces the frames and that wait
-ends at once.
+ends at once. With the game's own Frame Limiter turned off in its Display Setup, nothing else paces them, so the wait
+stays, as released.
 
 **Even frames.** A frame is shown when the game finishes it, and the games' frames vary; capped below the display's
 rate (60 on a 120 Hz display) each one is presented at least 1/cap after the last (whole refreshes), so none shows for
