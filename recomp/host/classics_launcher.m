@@ -108,11 +108,12 @@ enum { W = 960, H = 660 };
 - (NSRect)quitRect { return NSMakeRect(W - 60 - 200 - 20 - 150, H - 66, 150, 46); }
 /* rows of 60 points with their notes under them; more than seven: rows of 40, the note of the row in focus at the foot */
 - (BOOL)compact { return self.rows.count > 7; }
-- (CGFloat)pitch { return self.rows.count > 10 ? 37 : self.compact ? 40 : 60; }
+- (BOOL)tight { return self.rows.count > 12; }   /* (the controls' rows too: smaller rows, so the panel stays above the buttons) */
+- (CGFloat)pitch { return self.tight ? 31 : self.rows.count > 10 ? 37 : self.compact ? 40 : 60; }
 - (NSRect)panelRect { CGFloat h = 86 + self.pitch * (CGFloat)self.rows.count + (self.compact ? 34 : 0); return NSMakeRect(130, MAX(30, 486 - h), 700, h); }
 - (NSRect)rowRect:(NSInteger)k { NSRect p = self.panelRect; return NSMakeRect(p.origin.x + 30, p.origin.y + 70 + self.pitch * k, p.size.width - 60, self.pitch - 8); }
-- (NSRect)rowArrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + 3, 30, 30); }
-- (NSRect)rowValue:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + 4, 262, 28); }
+- (NSRect)rowArrow:(NSInteger)k right:(BOOL)right { NSRect r = [self rowRect:k]; CGFloat a = self.tight ? 24 : 30; return NSMakeRect(right ? NSMaxX(r) - 34 : NSMaxX(r) - 330, r.origin.y + (self.tight ? 0 : 3), a, a); }
+- (NSRect)rowValue:(NSInteger)k { NSRect r = [self rowRect:k]; return NSMakeRect(NSMaxX(r) - 300, r.origin.y + (self.tight ? 1 : 4), 262, self.tight ? 24 : 28); }
 - (void)openPanel { self.open = YES; self.rowFocus = 0; self.hover = HIT_NONE; self.needsDisplay = YES; }
 - (void)closePanel { self.open = NO; self.hover = HIT_NONE; self.needsDisplay = YES; }
 - (void)choose:(NSInteger)g { if (g == self.game) return; self.game = g; self.needsDisplay = YES; if (self.onChange) self.onChange(); }
@@ -289,17 +290,17 @@ static void stroke_rect(NSRect r, NSColor *c, CGFloat w) { [c setStroke]; NSBezi
     NSShadow *glow = [NSShadow new]; glow.shadowColor = [NSColor colorWithWhite:0 alpha:0.9]; glow.shadowBlurRadius = 30; glow.shadowOffset = NSMakeSize(0, -8);
     [NSGraphicsContext saveGraphicsState]; [glow set]; [[NSColor colorWithSRGBRed:0.05 green:0.05 blue:0.06 alpha:0.98] setFill]; NSRectFill(p); [NSGraphicsContext restoreGraphicsState];
     [accent() setFill]; NSRectFill(NSMakeRect(p.origin.x, p.origin.y, p.size.width, 50));   /* the game's menu title bar */
-    draw_text(@"FOR EVERY GAME", heavy(14), [ink() colorWithAlphaComponent:0.7], NSMakeRect(p.origin.x + 30, p.origin.y + 18, 300, 20), NSTextAlignmentLeft, nil, 2.5);
+    draw_text([NSString stringWithFormat:@"FOR %s", self.games[self.game].def->place].uppercaseString, heavy(14), [ink() colorWithAlphaComponent:0.7], NSMakeRect(p.origin.x + 30, p.origin.y + 18, 300, 20), NSTextAlignmentLeft, nil, 2.5);
     draw_text(@"GRAPHICS OPTIONS", heavy(30), ink(), NSMakeRect(p.origin.x + 30, p.origin.y + 6, p.size.width - 60, 40), NSTextAlignmentRight, nil, 3);
     for (NSInteger k = 0; k < (NSInteger)self.rows.count; k++) {
         GCTile *t = self.rows[k]; NSRect r = [self rowRect:k]; NSDictionary *c = t.choices[t.index];
         BOOL hot = self.hover >= HIT_ROW + 10 * k && self.hover <= HIT_ROW + 10 * k + 2, foc = self.rowFocus == k;
         if (foc || hot) { [[accent() colorWithAlphaComponent:foc ? 0.16 : 0.08] setFill]; fill_over(NSInsetRect(r, -10, -2));   /* the game's highlight band */
                           if (foc) { [accent() setFill]; NSRectFill(NSMakeRect(r.origin.x - 10, r.origin.y - 2, 4, r.size.height + 4)); } }
-        draw_text(t.title.uppercaseString, heavy(21), foc || hot ? accent() : text_c(), NSMakeRect(r.origin.x + 6, r.origin.y + 4, 260, 28), NSTextAlignmentLeft, sh, 2.5);
+        draw_text(t.title.uppercaseString, heavy(self.tight ? 17 : 21), foc || hot ? accent() : text_c(), NSMakeRect(r.origin.x + 6, r.origin.y + (self.tight ? 2 : 4), 260, self.tight ? 24 : 28), NSTextAlignmentLeft, sh, 2.5);
         [self drawArrow:[self rowArrow:k right:NO] right:NO lit:self.hover == HIT_ROW + 10 * k];
         [self drawArrow:[self rowArrow:k right:YES] right:YES lit:self.hover == HIT_ROW + 10 * k + 2];
-        draw_text(c[@"label"], body(18, YES), self.hover == HIT_ROW + 10 * k + 1 ? NSColor.whiteColor : text_c(), [self rowValue:k], NSTextAlignmentCenter, sh, 0.3);
+        draw_text(c[@"label"], body(self.tight ? 16 : 18, YES), self.hover == HIT_ROW + 10 * k + 1 ? NSColor.whiteColor : text_c(), [self rowValue:k], NSTextAlignmentCenter, sh, 0.3);
         if (!self.compact) draw_text(c[@"note"] ?: @"", body(12, NO), dim(), NSMakeRect(r.origin.x + 6, r.origin.y + 32, r.size.width - 12, 18), NSTextAlignmentRight, nil, 0);
         if (k + 1 < (NSInteger)self.rows.count) { [[text_c() colorWithAlphaComponent:0.1] setFill]; fill_over(NSMakeRect(r.origin.x, NSMaxY(r) + 4, r.size.width, 1)); }
     }
@@ -501,6 +502,25 @@ static double shape_for(NSString *wide, double area)
 static NSString *wh(double w, double h) { return [NSString stringWithFormat:@"%dx%d", (int)lround(w) & ~1, (int)lround(h) & ~1]; }
 static NSString *fit(double aw, double ah, double shape)   /* the largest size of this shape in aw x ah */
 { return aw / ah > shape ? wh(floor(ah) * shape, floor(ah)) : wh(floor(aw), floor(aw) / shape); }
+/* The panel's own pixels: a scaled display mode (a MacBook Pro's "More Space", 2056 x 1329 points = 4112 x 2658 pixels)
+ * draws more pixels than the panel has (3456 x 2234) and macOS scales them down. The mode that shows the panel's pixels
+ * one to one at twice its points (macOS's default for the display), if it isn't the current one; *pw, *ph its pixels. */
+static CGDisplayModeRef native_panel_mode(CGDirectDisplayID d, size_t *pw, size_t *ph)
+{
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(d, (__bridge CFDictionaryRef)@{(__bridge id)kCGDisplayShowDuplicateLowResolutionModes: @YES});
+    if (!modes) return NULL;
+    size_t nw = 0, nh = 0; CFIndex n = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < n; i++) { CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if ((CGDisplayModeGetIOFlags(m) & 0x02000000) && CGDisplayModeGetPixelWidth(m) > nw) { nw = CGDisplayModeGetPixelWidth(m); nh = CGDisplayModeGetPixelHeight(m); } }   /* kDisplayModeNativeFlag */
+    CGDisplayModeRef cur = CGDisplayCopyDisplayMode(d), best = NULL; double cr = cur ? CGDisplayModeGetRefreshRate(cur) : 0;
+    for (CFIndex i = 0; nw && i < n; i++) { CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (CGDisplayModeGetPixelWidth(m) != nw || CGDisplayModeGetPixelHeight(m) != nh || CGDisplayModeGetWidth(m) * 2 != nw || !CGDisplayModeIsUsableForDesktopGUI(m)) continue;
+        if (!best || fabs(CGDisplayModeGetRefreshRate(m) - cr) < fabs(CGDisplayModeGetRefreshRate(best) - cr)) best = m; }
+    if (best && cur && CGDisplayModeGetPixelWidth(cur) == nw && CGDisplayModeGetPixelHeight(cur) == nh) best = NULL;   /* already one to one */
+    if (best) { CGDisplayModeRetain(best); if (pw) *pw = nw; if (ph) *ph = nh; }
+    if (cur) CGDisplayModeRelease(cur); CFRelease(modes);
+    return best;
+}
 static NSString *mode_for(NSString *display, NSString *notch, NSString *res, NSString *wide)
 {
     if ([res isEqualToString:@"game"]) return @"";
@@ -510,7 +530,14 @@ static NSString *mode_for(NSString *display, NSString *notch, NSString *res, NSS
     double shape = shape_for(wide, s.frame.size.width / (s.frame.size.height - band));   /* the area the picture has */
     CGFloat w = s.frame.size.width, h = s.frame.size.height - band;
     if (win) { h = floor(s.visibleFrame.size.height * 0.78) - 28; w = s.visibleFrame.size.width * 0.9; }   /* main.m's window */
-    if ([res isEqualToString:@"retina"]) { w *= s.backingScaleFactor; h *= s.backingScaleFactor; }
+    if ([res isEqualToString:@"native"] && !win) {   /* the panel's pixels (the display switched while the game runs); the notch's
+                                                         band is the same height of glass */
+        size_t pw = 0, ph = 0; CGDisplayModeRef m = native_panel_mode([s.deviceDescription[@"NSScreenNumber"] unsignedIntValue], &pw, &ph);
+        if (m) { CGDisplayModeRelease(m); double k = (double)ph / (s.frame.size.height * s.backingScaleFactor);
+                 return fit(pw, ph - band * s.backingScaleFactor * k, shape_for(wide, pw / (ph - band * s.backingScaleFactor * k))); }
+        res = @"retina";
+    }
+    if ([res isEqualToString:@"retina"] || [res isEqualToString:@"native"]) { w *= s.backingScaleFactor; h *= s.backingScaleFactor; }
     if (h < 480) return @"640x480";
     return fit(w, h, shape);
 }
@@ -533,9 +560,10 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *controls, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *controls, *look, *invert, *updates;
 @property NSString *home, *plistPath;
-@property (strong) NSMutableDictionary *fpsByGame; @property NSInteger fpsGame;   /* Frame Rate is kept for each game */
+@property (strong) NSMutableDictionary *perGame; @property NSInteger settingsGame;   /* every row but Display and Notch is kept for each game */
+@property (strong) NSArray<GCTile *> *gameTiles; @property (strong) NSArray<NSString *> *gameKeys;
 @end
 
 @implementation Launcher
@@ -588,6 +616,12 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                         @{@"value": @"retina", @"label": @"Retina", @"note": [NSString stringWithFormat:@"Every pixel (%@ full screen): the sharpest picture", mode_for(@"fullscreen", @"around", @"retina", @"on")]},
                         @{@"value": @"game", @"label": @"As Set in Game", @"note": @"Each game's own display menu decides (640 × 480 at first)"}];
     if (scr.backingScaleFactor <= 1) resTile.choices = @[resTile.choices[0], resTile.choices[2]];
+    {   size_t pw = 0, ph = 0; CGDisplayModeRef m = native_panel_mode([scr.deviceDescription[@"NSScreenNumber"] unsignedIntValue], &pw, &ph);
+        if (m) { CGDisplayModeRelease(m);   /* a scaled mode: the panel's own pixels, a mode switch while the game runs */
+            NSMutableArray *c = [resTile.choices mutableCopy];
+            [c insertObject:@{@"value": @"native", @"label": @"Native", @"short": @"Native",
+                              @"note": [NSString stringWithFormat:@"The panel's own %zu × %zu pixels, one to one (the display switches while you play)", pw, ph]} atIndex:2];
+            resTile.choices = c; } }
     resTile.index = index_of(resTile.choices, saved[@"resolution"], 0);
     NSInteger hz = scr.maximumFramesPerSecond; if (hz <= 0) hz = 60;
     vsync.title = @"VSync";
@@ -632,11 +666,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                       @"note": @"As fast as the display shows: smoothest (San Andreas' physics have quirks this high)"},
                     @{@"value": @"30", @"label": @"30 (Original)", @"short": @"30 fps", @"note": @"The games' own frame limiter, as released"}];
     if (hz <= 60) fps.choices = @[fps.choices[0], fps.choices[2]];
-    self.fpsByGame = [saved[@"fps_by_game"] isKindOfClass:NSDictionary.class] ? [saved[@"fps_by_game"] mutableCopy] : [NSMutableDictionary new];
-    self.fpsGame = v.game;   /* (San Andreas may want 60 while GTA III and Vice City run at the display's rate) */
     fps.index = index_of(fps.choices, saved[@"fps"], 0);
-    for (int i = 0; i < NGAMES; i++) if (!self.fpsByGame[@(GAMES[i].id)]) self.fpsByGame[@(GAMES[i].id)] = val(fps);   /* each game from the one setting before */
-    fps.index = index_of(fps.choices, self.fpsByGame[@(GAMES[v.game].id)], fps.index);
     GCTile *light = self.light = [GCTile new];
     light.title = @"Lighting";
     light.choices = @[@{@"value": @"ps2", @"label": @"PS2", @"short": @"PS2 light", @"note": @"As on the PS2: San Andreas' warm colour filter, cars and people lit without washing out"},
@@ -649,10 +679,38 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                          @{@"value": @"modern", @"label": @"Modern", @"short": @"Modern pad",
                            @"note": @"As the Definitive Edition: RT fire / accelerate, LT aim / brake, RB handbrake, LB/RB weapons"}];
     controls.index = index_of(controls.choices, saved[@"controls"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light, controls] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light, controls];
+    GCTile *look = self.look = [GCTile new];
+    look.title = @"Look Speed";
+    look.choices = @[@{@"value": @"900", @"label": @"Slow", @"short": @"Look slow", @"note": @"Modern: the right stick turns the camera slowly (fine aim)"},
+                     @{@"value": @"1400", @"label": @"Normal", @"short": @"Look normal", @"note": @"Modern: how fast the right stick turns the camera"},
+                     @{@"value": @"2000", @"label": @"Fast", @"short": @"Look fast", @"note": @"Modern: a quicker camera"},
+                     @{@"value": @"2800", @"label": @"Very Fast", @"short": @"Look very fast", @"note": @"Modern: the quickest camera"}];
+    look.index = index_of(look.choices, saved[@"look"], 1);
+    GCTile *invert = self.invert = [GCTile new];
+    invert.title = @"Invert Look";
+    invert.choices = @[@{@"value": @"0", @"label": @"Off", @"note": @"Up on the right stick looks up (Classic: as the games did: GTA III and Vice City look down)"},
+                       @{@"value": @"1", @"label": @"On", @"note": @"Up and down on the right stick the other way round, Classic and Modern"}];
+    invert.index = index_of(invert.choices, saved[@"invert"], 0);
+    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert];
+    /* Every row but Display and Notch is kept for each game (San Andreas may want 2x antialiasing or 60 while GTA III and
+     * Vice City run at 4x and the display's rate), each seeded from the one setting an older launcher kept */
+    self.gameTiles = @[resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert];
+    self.gameKeys = @[@"resolution", @"depth", @"wide", @"hud", @"aa", @"vsync", @"fps", @"light", @"controls", @"look", @"invert"];
+    {   NSDictionary *per = [saved[@"per_game"] isKindOfClass:NSDictionary.class] ? saved[@"per_game"] : @{};
+        NSDictionary *oldFps = [saved[@"fps_by_game"] isKindOfClass:NSDictionary.class] ? saved[@"fps_by_game"] : @{};
+        self.perGame = [NSMutableDictionary new];
+        for (int i = 0; i < NGAMES; i++) {
+            NSString *gid = @(GAMES[i].id);
+            NSMutableDictionary *d = [per[gid] isKindOfClass:NSDictionary.class] ? [per[gid] mutableCopy] : [NSMutableDictionary new];
+            for (NSUInteger k = 0; k < self.gameKeys.count; k++)
+                if (!d[self.gameKeys[k]]) d[self.gameKeys[k]] = [self.gameKeys[k] isEqual:@"fps"] && oldFps[gid] ? oldFps[gid] : val(self.gameTiles[k]);
+            self.perGame[gid] = d;
+        }
+        self.settingsGame = v.game; [self loadGameSettings];
+    }
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate, lighting and controls, for every game"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate, lighting and controls (kept for each game)"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
         for (GCTile *t in @[display, resTile, wide, fps]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
@@ -706,7 +764,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     v.onChange = ^{ [ws changed]; };
 
     const char *shot = getenv("GTAC_LAUNCHER_SHOT");
-    if (getenv("GTAC_LAUNCHER_GAME")) v.game = MAX(0, MIN(NGAMES - 1, atoi(getenv("GTAC_LAUNCHER_GAME"))));   /* development */
+    if (getenv("GTAC_LAUNCHER_GAME")) { v.game = MAX(0, MIN(NGAMES - 1, atoi(getenv("GTAC_LAUNCHER_GAME")))); self.settingsGame = v.game; [self loadGameSettings]; }   /* development */
     if (shot) {                                                          /* development: the window as an image */
         if (getenv("GTAC_LAUNCHER_HOVER")) v.hover = atoi(getenv("GTAC_LAUNCHER_HOVER"));
         if (getenv("GTAC_LAUNCHER_OPEN")) v.open = YES;
@@ -767,15 +825,17 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"fps_by_game": self.fpsByGame ?: @{}, @"light": val(self.light), @"controls": val(self.controls)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"per_game": self.perGame ?: @{}, @"light": val(self.light), @"controls": val(self.controls), @"look": val(self.look), @"invert": val(self.invert)};
 }
-- (void)changed   /* a tile or the game changed: the chosen game's Frame Rate */
+- (void)loadGameSettings   /* the chosen game's rows */
 {
-    if (self.view.game != self.fpsGame) {
-        self.fpsGame = self.view.game;
-        NSString *f = self.fpsByGame[@(GAMES[self.view.game].id)];
-        if (f) { self.fps.index = index_of(self.fps.choices, f, self.fps.index); self.view.needsDisplay = YES; }
-    } else self.fpsByGame[@(GAMES[self.view.game].id)] = val(self.fps);
+    NSDictionary *d = self.perGame[@(GAMES[self.view.game].id)];
+    for (NSUInteger k = 0; k < self.gameKeys.count; k++) { GCTile *t = self.gameTiles[k]; t.index = index_of(t.choices, d[self.gameKeys[k]], t.index); }
+}
+- (void)changed   /* a tile or the game changed: the game's own settings shown, or the change kept for it */
+{
+    if (self.view.game != self.settingsGame) { self.settingsGame = self.view.game; [self loadGameSettings]; self.view.needsDisplay = YES; }
+    else { NSMutableDictionary *d = self.perGame[@(GAMES[self.view.game].id)]; for (NSUInteger k = 0; k < self.gameKeys.count; k++) d[self.gameKeys[k]] = val(self.gameTiles[k]); }
     [self save];
 }
 - (void)save
@@ -810,7 +870,8 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                           @"GTA_MSAA": c[@"aa"],   /* d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' own setting) */
                           @"GTA_FPS": c[@"fps"],   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
                           @"GTA_LIGHTING": c[@"light"],
-                          @"GTA_CONTROLS": c[@"controls"]};   /* gta3_mode.c gta_pad_layout */   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
+                          @"DS_NATIVE_PANEL": [c[@"resolution"] isEqual:@"native"] && [c[@"display"] isEqual:@"fullscreen"] ? @"1" : @"0",   /* main.m */
+                          @"GTA_CONTROLS": c[@"controls"], @"GTA_STICK_LOOK": c[@"look"], @"GTA_STICK_INVERT": c[@"invert"]};   /* gta3_mode.c gta_pad_layout */   /* renderer.m (lighting), gta3_mode.c + d3d9.c (San Andreas' colour filter) */
     NSArray<NSString *> *args = @[g.binPath, @"--exe", g.exePath, @"--game", g.game, @"--data", g.data];
     if (getenv("GTAC_LAUNCHER_DRY")) {                                   /* development: what Play runs */
         for (NSString *k in [env.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [env[k] UTF8String]);

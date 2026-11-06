@@ -9,7 +9,7 @@ addresses are this project's builds' (Steam executables: GTA III 1.1 Mac, Vice C
 
 The games go by their own clocks, so the timings are generous; a scene's 'wait' is how long it settles before its shot.
 """
-import os, sys, time, subprocess, shutil, argparse, re
+import os, sys, time, subprocess, shutil, argparse, re, resource
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -27,6 +27,35 @@ INTRO = {
     'vc': [(25 + 5 * i, 'key:13') for i in range(5)] + [(62, 'key:70'), (72, None)],   # Tommy in the Admiral
     'gta3': [(25 + 5 * i, 'key:13') for i in range(5)] + [(70, None)],                  # after the bridge cutscene, in the car
 }
+
+def road_points(game, n=16):
+    """n street-level places spread over the map: road pieces from the game's own placement lists (data/maps/*.ipl, inst:
+    id, model, [VC: interior,] x, y, z, ...), the farthest from those picked so far each time (a soak's tour)."""
+    import glob
+    root = os.path.join(os.path.expanduser(GAMES[game]['game']), 'data', 'maps'); pts = []
+    for path in sorted(glob.glob(os.path.join(root, '**', '*.ipl'), recursive=True)):
+        sec = None
+        for line in open(path, errors='replace'):
+            l = line.strip()
+            if l in ('inst', 'cull', 'zone', 'pick', 'path', 'occl', 'enex', 'grge', 'jump', 'tcyc', 'auzo', 'mult', 'cars'): sec = l; continue
+            if l == 'end': sec = None; continue
+            f = [x.strip() for x in l.split(',')]
+            if sec != 'inst' or len(f) < 6 or 'road' not in f[1].lower() or 'lod' in f[1].lower(): continue
+            try: x, y, z = (float(v) for v in (f[3:6] if game == 'vc' else f[2:5]))
+            except ValueError: continue
+            if -3000 < x < 3000 and -3000 < y < 3000 and -20 < z < 200: pts.append((x, y, z))
+    if not pts: return []
+    pts.sort(); tour = [pts[len(pts) // 2]]
+    while len(tour) < n:
+        tour.append(max(pts, key=lambda p: min((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 for q in tour)))
+    return tour
+
+def soak(game, hour_addr, weathers, first=(), laps=1):
+    """the soak: each place in turn (in a car: it takes the drop better) with the weather and the hour changing, the
+    player and the car kept whole"""
+    return list(first) + [('place %d (%.0f, %.0f)' % (k, x, y), ['gta:phealth,100', 'gta:vhealth,1000', 'gta:weather,%d' % weathers[k % len(weathers)],
+             hold((hour_addr, (3 * k + 6) % 24)), 'tp:%.1f,%.1f,%.1f' % (x, y, z + 1.5)], 12, [])
+            for k, (x, y, z) in enumerate(road_points(game) * laps)]
 
 def hold(*pairs): return 'pin:' + ','.join('%x=%x' % p for p in pairs)
 def unhold(*addrs): return 'unpin:' + ','.join('%x' % a for a in addrs) + '\npoke:' + ','.join('%x=0' % a for a in addrs)   # and back to 0
@@ -160,6 +189,7 @@ PLANS = {
         ('right stick down (look down)', ['pad:0,0,0,0,1'], 1.2, ['pad:0,0,0,0,0'])],
     'gta3-vt': [('on foot', [], 2, ['peek:952628,0', 'peek:952628,0,20', 'peek:952628,0,2c'])],
     'vc-carlook': [('in the car', [], 2, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
+        ('right stick left (1.5 s)', ['pad:0,0,0,-1,0'], 1.5, ['pad:0,0,0,0,0']), ('driving, released (springs back)', ['gta:vspeed,0.3,120'], 2, []),
         ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
     'gta3-carlook': [('in the car', ['key:70'], 5, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
         ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
@@ -169,6 +199,17 @@ PLANS = {
     'sa-fail': [('in the first mission', ['peek:b64788,540'], 3, []), ('on the bike', ['key:70'], 4, []),
                 ('wasted (mission failed)', ['gta:phealth,0'], 4, []), ('after', [], 6, []), ('respawned', [], 8, []),
                 ('wasted again', ['gta:phealth,0'], 4, []), ('after again', [], 10, [])],
+    # the car camera's memory while driving (TheCamera, two dumps a second apart: finding CCam::Source and friends)
+    'vc-camdump': [('driving', ['gta:vspeed,0.35,240'], 2, []), ('dumped', ['dump:7e3690,800,{out}/cam1.bin'], 1, []), ('again', ['dump:7e3690,800,{out}/cam2.bin'], 1, [])],
+    'gta3-camdump': [('driving', ['gta:vspeed,0.35,240'], 2, []), ('dumped', ['dump:70be38,800,{out}/cam1.bin'], 1, []), ('again', ['dump:70be38,800,{out}/cam2.bin'], 1, [])],
+    # the start as a player has it (with --movies "a,b": the intro movies skipped that many seconds in), into play
+    'gta3-start': [('in play after the intro movies', [], 3, [])],
+    'sa-start': [('in play after the intro movies', [], 3, [])],
+    # GTA III's and Vice City's soaks: places from their own maps (road_points)
+    'gta3-soak': soak('gta3', 0x96e0df, [0, 1, 2, 3]),
+    'gta3-soak2': soak('gta3', 0x96e0df, [0, 1, 2, 3], laps=2),   # twice round: memory that keeps growing on the second lap is a leak
+    'vc-soak2': soak('vc', 0xa0fb75, [0, 1, 2, 3, 4, 5], laps=2),   # on foot (moving 8-Ball's car restarts the first mission); two drops are fatal
+    'vc-soak': soak('vc', 0xa0fb75, [0, 1, 2, 3, 4, 5]),
     # a soak: the whole map streamed in turn, weather and time changing (crashes, leaks, hitches)
     'sa-soak': [(name, ['gta:weather,%d' % w, hold((SA_HOUR, h)), 'tp:%s' % xyz], 12, []) for name, w, h, xyz in [
         ('Grove Street', 0, 9, '2495,-1670,14'), ('downtown LS', 1, 12, '1480,-1730,14'), ('Santa Maria', 2, 15, '370,-1900,8'),
@@ -213,17 +254,21 @@ def main():
     ap.add_argument('game', choices=sorted(GAMES)); ap.add_argument('plan', choices=sorted(PLANS))
     ap.add_argument('--out', default=None); ap.add_argument('--mode', default='1600x1000'); ap.add_argument('--msaa', default='2')
     ap.add_argument('--light', default='ps2'); ap.add_argument('--controls', default='modern'); ap.add_argument('--keep', action='store_true', help='keep the run\'s data folder')
+    ap.add_argument('--fps', default='60', help='the Frame Rate cap (GTA_FPS)')
+    ap.add_argument('--movies', default=None, help='play the intro movies, skipping the nth that many seconds in: "0.5,3" (DS_MOVIE_SKIP)')
     ap.add_argument('--no-shots', action='store_true', help='no screenshots (they stall the renderer: hitch measurements)')
     a = ap.parse_args()
     g = GAMES[a.game]; out = os.path.abspath(a.out or os.path.join(WORK, 'qa', a.game + '-' + a.plan))
     shutil.rmtree(out, ignore_errors=True); os.makedirs(out)
     data = os.path.join(out, 'data'); os.makedirs(data); cmd = os.path.join(out, 'cmd.txt'); open(cmd, 'w').close()
-    env = dict(os.environ, DS_TEST='1', DS_NO_LAUNCHER='1', W32_AUDIO_MUTE='1', GTA_NO_MOVIES='1', DS_SHOT_FINAL='1', DS_CMDFILE=cmd,
-               GTA_MODE=a.mode, GTA_MSAA=a.msaa, D3D9_FRAMELOG_FILE=os.path.join(out, 'framelog.go'), GTA_LIGHTING=a.light, GTA_CONTROLS=a.controls, GTA_WIDESCREEN='1', GTA_FPS='60')
+    env = dict(os.environ, DS_TEST='1', DS_NO_LAUNCHER='1', W32_AUDIO_MUTE='1', GTA_NO_MOVIES='1', DS_MOVIE_SKIP=a.movies or '', DS_SHOT_FINAL='1', DS_CMDFILE=cmd,
+               GTA_MODE=a.mode, GTA_MSAA=a.msaa, D3D9_FRAMELOG_FILE=os.path.join(out, 'framelog.go'), GTA_LIGHTING=a.light, GTA_CONTROLS=a.controls, GTA_WIDESCREEN='1', GTA_FPS=a.fps)
+    if a.movies: del env['GTA_NO_MOVIES']        # (any value turns them off)
+    late = sum(float(v) + 1.5 for v in a.movies.split(',')) if a.movies else 0   # the movies' time: the intro's steps after them
     log = open(os.path.join(out, 'game.log'), 'w')
     p = subprocess.Popen([os.path.join(WORK, g['bin']), '--exe', os.path.join(WORK, g['exe']), '--game', os.path.expanduser(g['game']),
                           '--data', data], env=env, stdout=log, stderr=subprocess.STDOUT)
-    t0 = time.time()
+    t0 = time.time(); ru = resource.getrusage(resource.RUSAGE_CHILDREN); cpu0 = ru.ru_utime + ru.ru_stime
     def at(t):
         d = t - (time.time() - t0)
         if d > 0: time.sleep(d)
@@ -238,7 +283,7 @@ def main():
             else:
                 with open(cmd, 'a') as f: f.write(l.replace('{out}', out) + '\n')
     for t, c in INTRO[a.game]:
-        at(t)
+        at(t + late)
         if c: send(c)
     shots = []; t = time.time() - t0
     for k, (name, before, wait, after) in enumerate(PLANS[a.plan]):
@@ -248,7 +293,16 @@ def main():
         t += 1.5; at(t)
         send(*after); shots.append((name, png, time.time() - t0))
     at(t + 2); p.kill(); p.wait(); log.close()
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN); cpu = ru.ru_utime + ru.ru_stime - cpu0; wall = time.time() - t0
     text = open(os.path.join(out, 'game.log'), errors='replace').read()
+    # memory in play (one stats line a second from the host; play starts when the intro's steps end): a steady climb is a leak
+    heap = [float(m.group(1)) for m in re.finditer(r'; heap ([\d.]+) MB', text)][int(INTRO[a.game][-1][0] + late):]
+    mem = ''
+    if len(heap) >= 30:
+        n = len(heap); mx = (n - 1) / 2; my = sum(heap) / n
+        slope = sum((i - mx) * (h - my) for i, h in enumerate(heap)) / sum((i - mx) ** 2 for i in range(n)) * 60
+        mem = 'heap in play: %.1f -> %.1f MB (max %.1f), %+.1f MB a minute%s' % (heap[0], heap[-1], max(heap), slope,
+              '  GROWING (a leak?)' if slope > 3 and heap[-1] - heap[0] > 15 else '')
     fps = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r'frame (\d+) .*? ([\d.]+) fps;', text)]
     crash = re.findall(r'unhandled exception.*|The native host crashed.*|crash report written to .*|snapshot report written.*', text)   # the game's and the host's
     reports = os.path.join(data, 'CrashReports')                 # kept (the data folder goes)
@@ -259,6 +313,8 @@ def main():
             f.write('%2d  %-34s %s%s\n' % (n, name, os.path.basename(png), '' if os.path.exists(png) else '  (no picture)'))
         f.write('crashes: %s\n' % (crash or 'none'))
         if fps: f.write('frame rate: min %.1f, last %.1f\n' % (min(r for _, r in fps[3:] or fps), fps[-1][1]))
+        if mem: f.write(mem + '\n')
+        f.write('cpu: %.0f s in %.0f s (%.0f%% of a core)\n' % (cpu, wall, 100 * cpu / wall))
     if not a.keep: shutil.rmtree(data, ignore_errors=True)
     print(open(os.path.join(out, 'index.txt')).read(), end='')
 

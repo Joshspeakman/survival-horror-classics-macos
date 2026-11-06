@@ -203,20 +203,26 @@ static int pad_context(void)
  * Counts a second at full tilt, after a dead zone and a curve (fine aim near the centre). */
 void w32_di_mouse_move(int dx, int dy);
 int gta_menu_frame(void);
+#if !defined(GTASA_EDITION)
+static volatile float orbit_rx;   /* Modern, in a vehicle: the right stick sideways (car_orbit) */
+#endif
 uint32_t gta_pad_axes(float ax[6])   /* dinput8.c w32_di_pad, 250 times a second: ax as the host reports (right stick 2/3,
                                        4/5); returns PS2 buttons to add (GTA III and Vice City in vehicles: the looks) */
 {
     static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
-    if (!modern) return 0;
+    static int invert = -1; if (invert < 0) { const char *e = getenv("GTA_STICK_INVERT"); invert = e && *e == '1'; }   /* the launcher's Invert Look */
+    if (!modern) { if (invert && !gta_menu_frame()) { ax[4] = -ax[4]; ax[5] = -ax[5]; } return 0; }   /* Classic: the games' own look, flipped */
     static double last, fx, fy; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); double now = ts.tv_sec + ts.tv_nsec * 1e-9;
     double dt = last > 0 ? now - last : 0; last = now; if (dt > 0.05) dt = 0.05;
     if (gta_menu_frame()) { fx = fy = 0; return 0; }   /* menus: the stick as the PS2's */
     int ctx = pad_context();
 #if !defined(GTASA_EDITION)
-    if (ctx != CTX_FOOT) {   /* no free camera in their vehicles: the stick looks left, right (L2, R2) or back (both) */
+    if (ctx != CTX_FOOT) {   /* their vehicles have no mouse camera: sideways swings the car camera round (car_orbit), down
+                                looks back (L2 + R2) */
         float rx = ax[2], ry = ax[4]; ax[2] = ax[3] = ax[4] = ax[5] = 0; fx = fy = 0;
-        if (ry > 0.6f) return 3u << 4;
-        return rx < -0.6f ? 1u << 4 : rx > 0.6f ? 1u << 5 : 0;
+        if (ry > 0.6f && fabsf(rx) < 0.45f) { orbit_rx = 0; return 3u << 4; }
+        orbit_rx = fabsf(rx) > 0.15f ? (rx - (rx > 0 ? 0.15f : -0.15f)) / 0.85f : 0;
+        return 0;
     }
 #else
     if (ctx == CTX_AIRCRAFT) { fx = fy = 0; return 0; }   /* the mouse would fly the plane: the stick's own controls */
@@ -230,6 +236,7 @@ uint32_t gta_pad_axes(float ax[6])   /* dinput8.c w32_di_pad, 250 times a second
     ry = -ry;   /* San Andreas' mouse cameras (on foot and in vehicles) pitch the other way to GTA III's and Vice City's, as
                    set by default */
 #endif
+    if (invert) ry = -ry;   /* up looks down */
     fx += rx * k * sx * dt; fy += ry * k * sy * dt;
     int dx = (int)fx, dy = (int)fy; fx -= dx; fy -= dy;
     if (dx || dy) w32_di_mouse_move(dx, dy);
@@ -329,6 +336,42 @@ static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, el
     return fps;
 }
 int gta_menu_cap(void) { int f = fps_env(); return f > 0 ? f : 0; }   /* ddraw.c: the menus' and loading screens' cap */
+/* A Frame Rate above 60 that the game can't come near: on a 120 Hz display frames that take, say, 13 ms stay up for one
+ * refresh, then two, unevenly, and an even 60 looks better. Each frame's work (from the limiter letting it run to the
+ * limiter's next test) is timed: when over 3 s it averages more than 1.2 intervals (under ~100 at a cap of 120), the cap
+ * halves (120 -> 60, presented evenly: gta_present_cap); when over 10 s it averages under 0.95 of the full rate's
+ * interval, it goes back up. Loading hitches (over 100 ms) don't count. GTA_FPS_AUTO=0: never. */
+static int auto_cap;
+static void auto_cap_frame(double work_ms)
+{
+    { static double lg = -1; if (lg < 0) { const char *e = getenv("GTA_SLOWLOG"); lg = e ? (atof(e) > 0 ? atof(e) : 25) : 0; }   /* development: frames whose work passed GTA_SLOWLOG ms (25), by the steady clock (W32_PROFILE_GAME's) */
+      if (lg > 0 && work_ms > lg) { double t = now_ms(); fprintf(stderr, "gta: slow frame %.1f ms, %.3f-%.3f\n", work_ms, (t - work_ms) / 1e3, t / 1e3); } }
+    static int on = -1; if (on < 0) { const char *e = getenv("GTA_FPS_AUTO"); on = !(e && *e == '0'); }
+    int fps = fps_env();
+    if (!on || fps < 90 || !G_MEM[PREF_LIMITER]) { auto_cap = 0; return; }
+    if (work_ms > 100) return;
+    static double win_t, sum; static int n, slow;
+    double per = 1000.0 / fps, now = now_ms(); if (!win_t) win_t = now;
+    n++; sum += work_ms; if (work_ms > per * 1.1) slow++;
+    if (now - win_t < (auto_cap ? 10000 : 3000)) return;
+    if (!auto_cap && n >= 30 && sum / n > per * 1.2) {
+        auto_cap = fps / 2;
+        fprintf(stderr, "gta: frame rate %d -> %d (frames take %.1f ms, %d of %d over %.1f; GTA_FPS_AUTO=0 keeps %d)\n", fps, auto_cap, sum / n, slow, n, per, fps);
+    } else if (auto_cap && n >= 100 && sum / n < per * 0.95) {
+        fprintf(stderr, "gta: frame rate back to %d (frames take %.1f ms)\n", fps, sum / n); auto_cap = 0;
+    }
+    win_t = now; n = slow = 0; sum = 0;
+}
+static double run_t;      /* when the limiter let the current frame run */
+/* host/main.m: the rate the game runs at now (0: unlimited), for presenting each frame at least 1/rate after the last.
+ * A frame is shown when the game finishes it, and San Andreas' frames take 2-8 ms and 12-16 ms in turn: at 60 on a 120 Hz
+ * display they stayed up for one refresh, then three. */
+int gta_present_cap(void)
+{
+    static int on = -1; if (on < 0) { const char *e = getenv("GTA_PRESENT_PACE"); on = !(e && *e == '0'); }
+    int f = fps_env(); if (!on || f <= 0 || !G_MEM || !G_MEM[PREF_LIMITER]) return 0;
+    return auto_cap ? auto_cap : f;
+}
 static int wide_state = -1;
 int gta_wide(void) { if (wide_state < 0) { const char *e = getenv("GTA_WIDESCREEN"); wide_state = !(e && *e == '0'); } return wide_state; }
 /* GTA III and San Andreas (the Mac releases) play their intro movies through TransGaming's TGPlayIntros (gta_imports.c),
@@ -365,21 +408,25 @@ static void release_held(void)
 #endif
 }
 /* development (test mode: the host's "tp:x,y,z"): the player, or the vehicle they're in, moved there by the game's own
- * CEntity::Teleport (San Andreas: virtual 14; thiscall (CVector, bool resetRotation)), on the game thread between frames */
+ * CEntity::Teleport (San Andreas: virtual 14, thiscall (CVector, bool resetRotation); GTA III and Vice City: virtual 11,
+ * (CVector)), on the game thread between frames */
 static volatile int tp_pending; static float tp_to[3];
 void gta_request_teleport(float x, float y, float z) { tp_to[0] = x; tp_to[1] = y; tp_to[2] = z; __atomic_store_n(&tp_pending, 1, __ATOMIC_RELEASE); }
 static void teleport_now(void)
 {
     if (!__atomic_exchange_n(&tp_pending, 0, __ATOMIC_ACQ_REL)) return;
-#if defined(GTASA_EDITION)
     extern __thread Ctx *w32_cur_ctx; Ctx *c = w32_cur_ctx; if (!c) return;
     uint32_t ped = rt_r32(G_MEM, PLAYERS); if (ped < 0x10000u) return;
-    uint32_t ent = (G_MEM[ped + PED_IN_VEHICLE] & 1) && rt_r32(G_MEM, ped + PED_VEHICLE) >= 0x10000u ? rt_r32(G_MEM, ped + PED_VEHICLE) : ped;
-    uint32_t fn = rt_r32(G_MEM, rt_r32(G_MEM, ent) + 14 * 4);
-    uint32_t a[4]; memcpy(&a[0], &tp_to[0], 4); memcpy(&a[1], &tp_to[1], 4); memcpy(&a[2], &tp_to[2], 4); a[3] = 0;
-    uint32_t ecx = c->ecx; c->ecx = ent; w32_callback(c, fn, 4, a); c->ecx = ecx;
-    fprintf(stderr, "gta: teleported %s to %.1f %.1f %.1f (%08x)\n", ent == ped ? "the player" : "the player's vehicle", tp_to[0], tp_to[1], tp_to[2], fn);
+#if defined(GTASA_EDITION)
+    int in = G_MEM[ped + PED_IN_VEHICLE] & 1; enum { SLOT = 14, NARGS = 4 };   /* (CVector, bool resetRotation) */
+#else
+    int in = G_MEM[ped + PED_IN_VEHICLE] != 0; enum { SLOT = 11, NARGS = 3 };   /* GTA III, Vice City: (CVector) (CPed::Teleport 0x4d4650 in III) */
 #endif
+    uint32_t ent = in && rt_r32(G_MEM, ped + PED_VEHICLE) >= 0x10000u ? rt_r32(G_MEM, ped + PED_VEHICLE) : ped;
+    uint32_t fn = rt_r32(G_MEM, rt_r32(G_MEM, ent) + SLOT * 4);
+    uint32_t a[4]; memcpy(&a[0], &tp_to[0], 4); memcpy(&a[1], &tp_to[1], 4); memcpy(&a[2], &tp_to[2], 4); a[3] = 0;
+    uint32_t ecx = c->ecx; c->ecx = ent; w32_callback(c, fn, NARGS, a); c->ecx = ecx;
+    fprintf(stderr, "gta: teleported %s to %.1f %.1f %.1f (%08x)\n", ent == ped ? "the player" : "the player's vehicle", tp_to[0], tp_to[1], tp_to[2], fn);
 }
 /* development (test mode: the host's "gta:verb,args"): the weather now (the game's forced, new and old weather types),
  * the player's vehicle's health (fire, explosions) and speed (held forward for some frames: the speed blur). On the game
@@ -424,20 +471,58 @@ static void dev_tick(void)
         for (int k = 0; k < 2; k++) { float f; memcpy(&f, G_MEM + fwd + 4 * k, 4); wrf(v + VEH_SPEED + 4 * k, f * dev_speed); }
     }
 }
+#if !defined(GTASA_EDITION)
+/* Modern, GTA III and Vice City: the right stick swings the car camera round the car, as in today's games (the PC games
+ * have no free camera in vehicles). Their car camera (CCam::Process_Cam_On_A_String) is a string: each frame it starts
+ * from where the camera was and is pulled along behind the car, so the camera's position turned about the car between
+ * frames stays turned while the stick is held and the string brings it back behind when it's let go. TheCamera:
+ * ActiveCam +0x76, Cams[3], each with Mode +0xc and Front, Source, Source before a look behind and Up in a row (found by
+ * the camera matrix's position in a dump while driving). The vehicle's position: +0x34. */
+#if defined(GTA3_EDITION)
+enum { CAM = 0x0070be38u, CAM_CAMS = 0x1a4, CAM_SIZE = 0x1a4, CAM_SRC = 0x14c, CAM_SRC2 = 0x158 };
+#else
+enum { CAM = 0x007e3690u, CAM_CAMS = 0x188, CAM_SIZE = 0x1cc, CAM_SRC = 0x174, CAM_SRC2 = 0x180 };
+#endif
+static void car_orbit(void)
+{
+    static double last; double now = now_ms(), dt = last ? (now - last) / 1000 : 0; last = now; if (dt > 0.05) dt = 0.05;
+    float rx = orbit_rx; if (!rx || !dt) return;
+    uint8_t a = G_MEM[CAM + 0x76]; if (a >= 3) return;
+    uint32_t cam = CAM + CAM_CAMS + a * CAM_SIZE; if (rt_r16(G_MEM, cam + 0xc) != 18) return;   /* MODE_CAM_ON_A_STRING */
+    uint32_t v = player_vehicle(); if (!v) return;
+    float cx, cy; memcpy(&cx, G_MEM + v + 0x34, 4); memcpy(&cy, G_MEM + v + 0x38, 4);
+    double t = -rx * (rx < 0 ? -rx : rx) * 3.0 * dt, c = cos(t), sn = sin(t);   /* up to 3 radians a second, squared: right turns the view right */
+    for (int k = 0; k < 2; k++) {
+        uint32_t at = cam + (k ? CAM_SRC2 : CAM_SRC); float x, y; memcpy(&x, G_MEM + at, 4); memcpy(&y, G_MEM + at + 4, 4);
+        double dx = x - cx, dy = y - cy; if (dx * dx + dy * dy > 40 * 40) continue;   /* not this car's camera */
+        wrf(at, (float)(cx + dx * c - dy * sn)); wrf(at + 4, (float)(cy + dx * sn + dy * c));
+    }
+}
+#endif
 void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */
 {
     dev_tick();
     teleport_now();
+#if !defined(GTASA_EDITION)
+    if (!menu) car_orbit();
+#endif
     static int first = 1, was_menu;
     release_held();
     { static int on = -1; static char spec[512];   /* development: GTA_POKE="addr=byte,..." written every frame (force an effect on) */
       if (on < 0) { const char *e = getenv("GTA_POKE"); on = e && *e; if (on) snprintf(spec, sizeof spec, "%s", e); }
       if (on) { char buf[512], *sv, *t; snprintf(buf, sizeof buf, "%s", spec);
                 for (t = strtok_r(buf, ",", &sv); t; t = strtok_r(0, ",", &sv)) { unsigned a, v; if (sscanf(t, "%x=%x", &a, &v) == 2 && a < 0x40000000u) G_MEM[a] = (uint8_t)v; } } }
+#ifdef GTASA_EDITION
+    /* Modern: the right stick reaches the game as the mouse (the camera); San Andreas' Steer with Mouse (Controller Setup,
+     * Mouse Settings; CVehicle::m_bEnableMouseSteering, next to Fly with Mouse) would make its sideways movement steer
+     * cars and bikes instead: held off (the left stick steers) */
+    { static int modern = -1; if (modern < 0) { const char *e = getenv("GTA_CONTROLS"); modern = e && !strcmp(e, "modern"); }
+      if (modern) G_MEM[0x00c0e3eau] = 0; }
+#endif
     int fps = fps_env();
     if (fps >= 0) {
         if (first) G_MEM[PREF_LIMITER] = fps > 0;
-        if (fps) rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)fps);
+        if (fps) rt_w32(G_MEM, RS_MAX_FPS, (uint32_t)(auto_cap ? auto_cap : fps));
     }
 #ifdef GTASA_EDITION
 #endif
@@ -690,6 +775,20 @@ int gta3_hook(Ctx *c, uint32_t addr)
 #endif
     if (addr == PICK_MODE) { pick_mode(c); return 1; }
 #ifdef GTASA_EDITION
+    /* San Andreas' Idle (0x542630) starts each frame by spinning on the timer until 14 ms have passed since the last one:
+     * a cap of ~71 fps (what looked like 13 ms of game code a frame), and, after a frame the limiter let run late, a
+     * frame that waits most of its interval, so frames took 2-8 ms and 12-16 ms in turn. With the launcher's Frame Rate
+     * the limiter above paces the frames: the wait ends at once (eax: the ms since the last frame, compared with 14). */
+    if (addr == 0x0054265au) { if (fps_env() >= 0 && c->eax < 14) c->eax = 14; return 1; }
+#endif
+    if (addr == LIMIT_TEST && run_t) { auto_cap_frame(now_ms() - run_t); run_t = 0; }       /* the frame's work is done */
+    if (addr == LIMIT_TEST) {   /* waiting for the next frame: the game spun in PeekMessage and QueryPerformanceCounter until it was
+                                   due (a core busy between frames); sleep to a millisecond before, the game's own test does the rest */
+        uint32_t mf = rt_r32(G_MEM, RS_MAX_FPS); double rem = lim_due + 1000.0 / (mf ? mf : 30) - now_ms();
+        static int spin = -1; if (spin < 0) { const char *e = getenv("GTA_LIMIT_SPIN"); spin = e && *e == '1'; }   /* as the game did */
+        if (!spin && rem > 1.5 && rem < 100) { struct timespec ts = {0, (long)((rem - 1.0) * 1e6)}; nanosleep(&ts, 0); }
+    }
+#ifdef GTASA_EDITION
     if (addr == LIMIT_TEST) { wrf(c->esp + 0x14, (float)(now_ms() - lim_due)); return 1; }   /* [esp+14]: the time since, ms */
 #else
     if (addr == LIMIT_TEST) { ST(0) = now_ms() - lim_due; return 1; }                         /* st(0): the time since, ms */
@@ -708,7 +807,7 @@ int gta3_hook(Ctx *c, uint32_t addr)
     if (addr == LIMIT_RUN) {
         double now = now_ms(), per = 1000.0 / (rt_r32(G_MEM, RS_MAX_FPS) ? rt_r32(G_MEM, RS_MAX_FPS) : 30);
         lim_due = now - lim_due > 2 * per ? now : lim_due + per;   /* behind by more than a frame: from now */
-        return 1;
+        run_t = now; return 1;
     }
 #ifdef GTASA_EDITION
     if (addr == SA_MODE_SHAPE) { rt_w32(G_MEM, c->esp + 4, rt_r32(G_MEM, SA_SHAPE_08)); return 1; }

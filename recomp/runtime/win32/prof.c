@@ -76,12 +76,65 @@ static void *maps_thread(void *arg)
     return 0;
 }
 #endif
+#ifdef __APPLE__
+/* W32_PROFILE_GAME=1 (with W32_PROFILE): the game's main thread sampled by a thread of our own every millisecond of
+ * wall time, whether it runs or waits. macOS hands SIGPROF to whichever thread it picks (often a sleeping one), so the
+ * signal profile above can't say where the game's frame goes; here the thread is suspended, its registers read and its
+ * frame chain walked, then resumed. Samples as above (tid 1 = the game's main thread); <file>.stacks holds each
+ * sample's host frames (u32 count, u64 addresses) for tools/profile.py's inclusive view. */
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+_Atomic mach_port_t w32_prof_game_thread;          /* crash.c: set when the game's main thread registers */
+static void *sampler(void *arg)
+{
+    char sp[1024]; snprintf(sp, sizeof sp, "%s.stacks", (const char *)arg);
+    int sfd = open(sp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    static uint8_t sbuf[1 << 16]; size_t sn = 0;
+    for (;;) {
+        usleep(1000);
+        mach_port_t th = w32_prof_game_thread; if (!th) continue;
+        if (thread_suspend(th) != KERN_SUCCESS) continue;
+        arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+        uint64_t fr[48]; uint32_t nf = 0;
+        if (thread_get_state(th, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
+            fr[nf++] = (uint64_t)arm_thread_state64_get_pc(st); fr[nf++] = (uint64_t)arm_thread_state64_get_lr(st);
+            uint64_t fp = (uint64_t)arm_thread_state64_get_fp(st);
+            for (int i = 0; i < 46 && fp && !(fp & 7); i++) {              /* [fp] caller's fp, [fp + 8] return address */
+                uint64_t pair[2]; mach_vm_size_t got = 0;
+                if (mach_vm_read_overwrite(mach_task_self(), fp, 16, (mach_vm_address_t)pair, &got) != KERN_SUCCESS || got != 16 || !pair[1]) break;
+                if (i) fr[nf++] = pair[1];
+                if (pair[0] <= fp) break; fp = pair[0];
+            }
+        }
+        thread_resume(th);
+        if (nf < 2) continue;
+        uint32_t k = nbuf++; if (k >= 4096) { nbuf = 4096; continue; }
+        struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+        buf[k].tid = 1; buf[k].ms = (uint32_t)((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000);
+        buf[k].rip = fr[0]; buf[k].lr = fr[1];
+        if (k == 4095) { ssize_t w = write(fd, buf, sizeof buf); (void)w; nbuf = 0; }
+        if (sfd >= 0) {
+            if (sn + 4 + 8 * nf > sizeof sbuf) { ssize_t w = write(sfd, sbuf, sn); (void)w; sn = 0; }
+            memcpy(sbuf + sn, &nf, 4); memcpy(sbuf + sn + 4, fr, 8 * nf); sn += 4 + 8 * nf;
+        }
+    }
+    return 0;
+}
+#endif
 __attribute__((constructor)) static void prof_init(void)
 {
     const char *path = getenv("W32_PROFILE"); if (!path || !*path) return;
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd < 0) return;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     Sample m = {0xffffffffu, 0, (uint64_t)(uintptr_t)&prof_init, 0}; ssize_t w = write(fd, &m, sizeof m); (void)w;
+    fprintf(stderr, "prof: clock %.3f at the start\n", t0.tv_sec + t0.tv_nsec / 1e9);   /* tools/profile.py PROFILE_WINDOWS */
+#ifdef __APPLE__
+    if (getenv("W32_PROFILE_GAME")) {
+        pthread_t th; pthread_create(&th, 0, sampler, (void *)path); pthread_detach(th);
+        pthread_create(&th, 0, maps_thread, (void *)path); pthread_detach(th);
+        return;
+    }
+#endif
     struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_sigaction = on_prof; sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigaction(SIGPROF, &sa, 0);
     struct itimerval it = {{0, 1000}, {0, 1000}}; setitimer(ITIMER_PROF, &it, 0);

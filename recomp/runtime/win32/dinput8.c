@@ -259,7 +259,7 @@ static void d_GetDeviceInfo(Ctx *c)                   /* DIDEVICEINSTANCEA: size
     RET(DI_OK, 2);
 }
 static void d_Poll(Ctx *c) { Dev *d = dev_of(c); JLOG("Poll\n"); RET(d->acquired ? DI_OK : DIERR_NOTACQUIRED, 1); }   /* as DirectInput: the game then acquires */
-#define UNSUP(name, n) static void name(Ctx *c) { RET(0x80004001u, n); }   /* E_NOTIMPL */
+#define UNSUP(name, n) static void name(Ctx *c) { static int once; if (!once++) fprintf(stderr, "dinput8: %s asked for (not supported)\n", #name); RET(0x80004001u, n); }   /* E_NOTIMPL; logged once (does a game want force feedback?) */
 UNSUP(d_RunControlPanel, 3) UNSUP(d_Initialize, 4) UNSUP(d_CreateEffect, 5) UNSUP(d_EnumEffects, 4) UNSUP(d_GetEffectInfo, 3)
 UNSUP(d_GetForceFeedbackState, 2) UNSUP(d_SendForceFeedbackCommand, 2) UNSUP(d_EnumCreatedEffectObjects, 4) UNSUP(d_Escape, 2)
 UNSUP(d_SendDeviceData, 5) UNSUP(d_EnumEffectsInFile, 5) UNSUP(d_WriteEffectToFile, 5) UNSUP(d_BuildActionMap, 4)

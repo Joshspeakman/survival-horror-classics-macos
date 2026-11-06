@@ -58,7 +58,12 @@ static void on_thread_exit(void *p) { ThreadInfo *t = p; if (t) t->used = 0; }
 
 void w32_crash_thread(const char *name)
 {
-    if (!strcmp(name, "game main thread")) is_game_main = 1;
+    if (!strcmp(name, "game main thread")) {
+        is_game_main = 1;
+#ifdef __APPLE__
+        extern _Atomic mach_port_t w32_prof_game_thread; w32_prof_game_thread = mach_thread_self();   /* prof.c's sampler */
+#endif
+    }
     if (w32_ti) { snprintf(w32_ti->name, sizeof w32_ti->name, "%s", name); return; }
     pthread_mutex_lock(&tlock);
     for (int k = 0; k < 256; k++) if (!threads[k].used) {
