@@ -277,6 +277,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame) { w32_keys[a->x & 0xff] = 0x80; di_key_vk(a->x, 1); post(0x100, (uint32_t)a->x, 1 | key_scan(a->x)); }
             if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; di_key_vk(a->x, 0); post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
+        else if (!strcmp(a->kind, "msg") && fno == a->frame) post((uint32_t)a->x, (uint32_t)a->y, 0);   /* msg:<message>,<wparam> to the game's window */
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
@@ -671,6 +672,11 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
     if (game_hwnd) return;                                            // the game has one top-level window
     game_hwnd = hwnd;
 #endif
+    if (test_mode && getenv("DS_EARLY_MSG")) {   /* development: "msg,wparam;..." posted as the window is made (before the intros) */
+        char *e = strdup(getenv("DS_EARLY_MSG")), *sv, *t = strtok_r(e, ";", &sv);
+        while (t) { unsigned m = 0, wp = 0; if (sscanf(t, "%i,%i", &m, &wp) >= 1) post(m, wp, 0); t = strtok_r(0, ";", &sv); }
+        free(e);
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
 #ifdef DF_EDITION
         pad_start();

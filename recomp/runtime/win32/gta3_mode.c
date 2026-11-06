@@ -287,9 +287,41 @@ static int fps_env(void)   /* GTA_FPS: -1 unset (as in the game), 0 uncapped, el
 int gta_menu_cap(void) { int f = fps_env(); return f > 0 ? f : 0; }   /* ddraw.c: the menus' and loading screens' cap */
 static int wide_state = -1;
 int gta_wide(void) { if (wide_state < 0) { const char *e = getenv("GTA_WIDESCREEN"); wide_state = !(e && *e == '0'); } return wide_state; }
+/* GTA III and San Andreas (the Mac releases) play their intro movies through TransGaming's TGPlayIntros (gta_imports.c),
+ * so their own DirectShow graph is never made; but their window procedure, on WM_ACTIVATE / WM_ACTIVATEAPP while the
+ * game state is still a movie's (GS_LOGO_MPEG 2, GS_INTRO_MPEG 4), calls that graph's IMediaControl (GetState, Run,
+ * Pause) without checking it: the app made active during the intros (skipped late) crashed reading address 0 as the
+ * movies ended. Such a message waits until the state has moved on (gta_frame_prefs posts it again). Vice City plays them
+ * through DirectShow (dshow.c): its IMediaControl exists. */
+#if defined(GTA3_EDITION)
+enum { GAME_STATE = 0x00906a6cu, MEDIA_CONTROL = 0x008920ecu };
+#elif defined(GTASA_EDITION)
+enum { GAME_STATE = 0x00c6e1f0u, MEDIA_CONTROL = 0x00c72e08u };
+#endif
+static struct { uint32_t hwnd, wp, lp; int on; } held[2];   /* [0] WM_ACTIVATE, [1] WM_ACTIVATEAPP: the latest of each */
+int gta_hold_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
+{
+#if defined(GTA3_EDITION) || defined(GTASA_EDITION)
+    uint32_t st = rt_r32(G_MEM, GAME_STATE);
+    if ((msg != 0x6 && msg != 0x1c) || (st != 2 && st != 4) || rt_r32(G_MEM, MEDIA_CONTROL)) return 0;
+    int k = msg == 0x1c; held[k].hwnd = hwnd; held[k].wp = wp; held[k].lp = lp; held[k].on = 1;
+    return 1;
+#else
+    (void)hwnd; (void)msg; (void)wp; (void)lp; return 0;
+#endif
+}
+static void release_held(void)
+{
+#if defined(GTA3_EDITION) || defined(GTASA_EDITION)
+    uint32_t st = rt_r32(G_MEM, GAME_STATE); if (st == 2 || st == 4) return;
+    void w32_post(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t); uint32_t w32_window_tid(uint32_t);
+    for (int k = 0; k < 2; k++) if (held[k].on) { held[k].on = 0; w32_post(w32_window_tid(held[k].hwnd), held[k].hwnd, k ? 0x1c : 0x6, held[k].wp, held[k].lp); }
+#endif
+}
 void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */
 {
     static int first = 1, was_menu;
+    release_held();
     int fps = fps_env();
     if (fps >= 0) {
         if (first) G_MEM[PREF_LIMITER] = fps > 0;
