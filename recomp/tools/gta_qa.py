@@ -169,6 +169,14 @@ PLANS = {
     'sa-fail': [('in the first mission', ['peek:b64788,540'], 3, []), ('on the bike', ['key:70'], 4, []),
                 ('wasted (mission failed)', ['gta:phealth,0'], 4, []), ('after', [], 6, []), ('respawned', [], 8, []),
                 ('wasted again', ['gta:phealth,0'], 4, []), ('after again', [], 10, [])],
+    # a soak: the whole map streamed in turn, weather and time changing (crashes, leaks, hitches)
+    'sa-soak': [(name, ['gta:weather,%d' % w, hold((SA_HOUR, h)), 'tp:%s' % xyz], 12, []) for name, w, h, xyz in [
+        ('Grove Street', 0, 9, '2495,-1670,14'), ('downtown LS', 1, 12, '1480,-1730,14'), ('Santa Maria', 2, 15, '370,-1900,8'),
+        ('Vinewood', 4, 18, '1380,-930,35'), ('Flint County', 13, 21, '-90,-1180,3'), ('Angel Pine', 15, 23, '-2140,-2400,31'),
+        ('Mount Chiliad', 16, 3, '-2330,-1630,484'), ('San Fierro downtown', 9, 6, '-1980,620,35'), ('Doherty', 7, 10, '-2050,190,28'),
+        ('Bayside', 5, 13, '-2500,2350,5'), ('Bone County', 17, 14, '-200,1200,20'), ('Las Venturas strip', 11, 20, '2040,1340,11'),
+        ('LV airport', 10, 0, '1477,1500,11'), ('Verdant Meadows', 18, 15, '410,2500,17'), ('Las Barrancas', 19, 12, '-780,1550,27'),
+        ('back to Grove Street', 0, 16, '2495,-1670,14')]],
     # finding the weather: memory around the clock before and after a weather cheat
     'vc-weather-find': [('before', ['dump:a0e000,3000,{out}/before.bin'], 2, []), ('rain', ['cheat:CATSANDDOGS'], 3, ['dump:a0e000,3000,{out}/after.bin'])],
     'gta3-weather-find': [('before', ['dump:96c000,4000,{out}/before.bin'], 2, []), ('rain', ['cheat:ILOVESCOTLAND'], 3, ['dump:96c000,4000,{out}/after.bin'])],
@@ -205,6 +213,7 @@ def main():
     ap.add_argument('game', choices=sorted(GAMES)); ap.add_argument('plan', choices=sorted(PLANS))
     ap.add_argument('--out', default=None); ap.add_argument('--mode', default='1600x1000'); ap.add_argument('--msaa', default='2')
     ap.add_argument('--light', default='ps2'); ap.add_argument('--controls', default='modern'); ap.add_argument('--keep', action='store_true', help='keep the run\'s data folder')
+    ap.add_argument('--no-shots', action='store_true', help='no screenshots (they stall the renderer: hitch measurements)')
     a = ap.parse_args()
     g = GAMES[a.game]; out = os.path.abspath(a.out or os.path.join(WORK, 'qa', a.game + '-' + a.plan))
     shutil.rmtree(out, ignore_errors=True); os.makedirs(out)
@@ -235,12 +244,15 @@ def main():
     for k, (name, before, wait, after) in enumerate(PLANS[a.plan]):
         send(*before); t += wait; at(t)
         png = os.path.join(out, '%02d_%s.png' % (k, re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')))
-        send('shot:' + png); t += 1.5; at(t)
+        if not a.no_shots: send('shot:' + png)
+        t += 1.5; at(t)
         send(*after); shots.append((name, png, time.time() - t0))
     at(t + 2); p.kill(); p.wait(); log.close()
     text = open(os.path.join(out, 'game.log'), errors='replace').read()
     fps = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r'frame (\d+) .*? ([\d.]+) fps;', text)]
-    crash = re.findall(r'unhandled exception.*', text)
+    crash = re.findall(r'unhandled exception.*|The native host crashed.*|crash report written to .*|snapshot report written.*', text)   # the game's and the host's
+    reports = os.path.join(data, 'CrashReports')                 # kept (the data folder goes)
+    if os.path.isdir(reports) and os.listdir(reports): shutil.copytree(reports, os.path.join(out, 'CrashReports'), dirs_exist_ok=True)
     with open(os.path.join(out, 'index.txt'), 'w') as f:
         f.write('%s %s, %s, MSAA %s, %s lighting\n' % (a.game, a.plan, a.mode, a.msaa, a.light))
         for n, (name, png, ts) in enumerate(shots):
