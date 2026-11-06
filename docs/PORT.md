@@ -31,7 +31,17 @@ hand-written x87 code in GTA III's `_rwcseg` (flagged as data): `tools/pe.py` tr
   targets kept in tile memory and resolved as each pass ends, depth only in the passes whose draws use it, new targets
   cleared to black, and San Andreas' own vertex shaders
   translated to Metal by MojoShader (`d3d9_shader.c`: peds and CJ skinned on the GPU).
+- **Texture filtering**: textures the game samples with a mip filter and linear minification (the world's, though they
+  have one level each: [GRAPHICS.md](GRAPHICS.md#texture-filtering)) are sampled anisotropically (`DSR_ANISO`, the
+  launcher's Texture Filtering; a game's own `D3DTEXF_ANISOTROPIC` keeps its `MAXANISOTROPY`, at least that), and a mip
+  LOD bias is honoured (none of the three sets one).
 - **Full screen**: the window takes the mode's size before the device is made (RenderWare checks the client rectangle).
+- **The x87's precision**: Windows' Direct3D 8 and 9 leave the thread that makes the device in single precision unless
+  the game passes `D3DCREATE_FPU_PRESERVE`. All three pass `0x50` (hardware vertex processing, a pure device), so on
+  Windows their floating-point code ran in single precision; here it ran in double until `CreateDevice` did the same
+  (`d3d9.c` `fpu_setup`; `W32_NO_FPUSETUP=1` leaves it as it was, `D3D9_CREATELOG=1` logs the flags and the control
+  word as each frame is presented). None of the games sets it back. The runtime rounds each x87 result to 24 bits
+  then, at no measurable cost (San Andreas at 120 used 81–85% of a core in single precision, 83% in double).
 
 ## Game-specific hooks
 
@@ -103,7 +113,11 @@ is flagged) and the CPU it used. A controller is connected from the start (`GTA_
 soaks tour each map (`sa-soak`; `gta3-soak` and `vc-soak` from road pieces in the games' own `data/maps/*.ipl`, with
 `tp:` through `Teleport`, virtual 11 in GTA III and Vice City; `…-soak2` twice round, to tell streaming from a leak);
 `…-aim` tries Modern aiming; `sa-effects3` San Andreas' screen effects by their switches. `DS_TEST_FAULT=audio` faults
-the sound mixer's thread (the crash report must name it).
+the sound mixer's thread (the crash report must name it). The summary also gives the longest frame in play, and any wait
+for the window: when the window is hidden (another Space or a full-screen app in front, the display asleep, the screen
+locked), its next picture waits a second for one to come free (Core Animation's limit), one 1-second frame that is the
+Mac's, not the game's (the host logs `the window is hidden` / `shown`, `the display went to sleep`, `the screen was
+locked` and `the window had no picture free`).
 
 For speed: `DS_BENCH=1` shows each frame in a texture instead of the (background, compositor-paced) window, so the
 frame rate is what the game and GPU manage; `DSR_PROFILE=1` counts each frame's GPU passes by kind and the waits for
@@ -118,7 +132,7 @@ longer are logged) `PROFILE_WINDOWS=<game.log>` only those frames. That is how S
 For rendering: `D3D9_FRAMELOG=<frame>` (or `D3D9_FRAMELOG_FILE=<path>`: the frame after the file appears) logs one
 frame's render targets, copies, clears and draws, reading small targets back; with `D3D9_PROBE=x,y` it names each
 draw that changes that pixel. `D3D8_COPYLOG=1` logs Direct3D 8 copies; `D3D9_SHADERLOG=2` prints the translated
-shaders.
+shaders; `DSR_SAMPLERLOG=1` each new sampler's filters.
 
 Checked this way at 1600×900, 2054×1290 and 4112×2658: all three games from the menus into the opening missions;
 widescreen on and off from each game's menu; resolution, colour depth and antialiasing from San Andreas' menu; 16-bit

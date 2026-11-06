@@ -18,6 +18,7 @@
  *   GTA_CONTROLS=classic|modern              gta3_mode.c (the controller's layout: the PS2's, or the Definitive Edition's)
  *   GTA_FPS=<n>                             gta3_mode.c (the frame limiter; above 30 the high-FPS fixes)
  *   GTA_LIGHTING=ps2|pc                     renderer.m, gta3_mode.c, d3d9.c (PS2 lighting and colour filter)
+ *   DSR_ANISO=16|4|1                        renderer.m (anisotropic filtering of mipmapped textures; 1 off)
  *   DS_LOG_FILE=<data>/<BIN>.log            the game's log (stderr goes there too; over 5 MB it moves to <BIN>.old.log)
  * install.sh writes Contents/Resources/games.plist: each installed game's binary, executable, game and data folders
  * and the commit it was built from. The choices and the last game are kept in ~/Games/GTAClassics/launcher.plist.
@@ -560,7 +561,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 
 @interface Launcher : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window; @property (strong) GCLaunchView *view;
-@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *depth, *fps, *light, *controls, *look, *invert, *updates;
+@property (strong) GCTile *display, *notch, *resolution, *vsync, *wide, *hud, *aa, *aniso, *depth, *fps, *light, *controls, *look, *invert, *updates;
 @property NSString *home, *plistPath;
 @property (strong) NSMutableDictionary *perGame; @property NSInteger settingsGame;   /* every row but Display and Notch is kept for each game */
 @property (strong) NSArray<GCTile *> *gameTiles; @property (strong) NSArray<NSString *> *gameKeys;
@@ -659,6 +660,12 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                                            : @"2 samples a pixel: smooth edges at little cost (San Andreas: also its own Display Setup)"}];
         aa.choices = c; }
     aa.index = index_of(aa.choices, saved[@"aa"], aa.choices.count > 1 ? 1 : 0);   /* 2x unless chosen */
+    GCTile *aniso = self.aniso = [GCTile new];
+    aniso.title = @"Texture Filtering";
+    aniso.choices = @[@{@"value": @"16", @"label": @"16x Anisotropic", @"short": @"16x filtering", @"note": @"Roads and walls seen at a slant: steady into the distance instead of shimmering"},
+                      @{@"value": @"4", @"label": @"4x Anisotropic", @"short": @"4x filtering", @"note": @"Less shimmer at a slant than as released, a little lighter on the GPU"},
+                      @{@"value": @"1", @"label": @"Off (As Released)", @"short": @"Trilinear", @"note": @"As released: distant ground shimmers as you move (San Andreas' own 16x on its main textures stays)"}];
+    aniso.index = index_of(aniso.choices, saved[@"aniso"], 0);
     GCTile *fps = self.fps = [GCTile new];
     fps.title = @"Frame Rate";
     fps.choices = @[@{@"value": @"60", @"label": @"60", @"short": @"60 fps", @"note": @"Twice the original rate, timers and effects at 30's pace (the game's Frame Limiter off: the display's rate)"},
@@ -691,11 +698,11 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     invert.choices = @[@{@"value": @"0", @"label": @"Off", @"note": @"Up on the right stick looks up (Classic: as the games did: GTA III and Vice City look down)"},
                        @{@"value": @"1", @"label": @"On", @"note": @"Up and down on the right stick the other way round, Classic and Modern"}];
     invert.index = index_of(invert.choices, saved[@"invert"], 0);
-    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert] : @[display, resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert];
+    v.rows = notchH > 0 ? @[display, notch, resTile, depth, wide, hud, aa, aniso, vsync, fps, light, controls, look, invert] : @[display, resTile, depth, wide, hud, aa, aniso, vsync, fps, light, controls, look, invert];
     /* Every row but Display and Notch is kept for each game (San Andreas may want 2x antialiasing or 60 while GTA III and
      * Vice City run at 4x and the display's rate), each seeded from the one setting an older launcher kept */
-    self.gameTiles = @[resTile, depth, wide, hud, aa, vsync, fps, light, controls, look, invert];
-    self.gameKeys = @[@"resolution", @"depth", @"wide", @"hud", @"aa", @"vsync", @"fps", @"light", @"controls", @"look", @"invert"];
+    self.gameTiles = @[resTile, depth, wide, hud, aa, aniso, vsync, fps, light, controls, look, invert];
+    self.gameKeys = @[@"resolution", @"depth", @"wide", @"hud", @"aa", @"aniso", @"vsync", @"fps", @"light", @"controls", @"look", @"invert"];
     {   NSDictionary *per = [saved[@"per_game"] isKindOfClass:NSDictionary.class] ? saved[@"per_game"] : @{};
         NSDictionary *oldFps = [saved[@"fps_by_game"] isKindOfClass:NSDictionary.class] ? saved[@"fps_by_game"] : @{};
         self.perGame = [NSMutableDictionary new];
@@ -710,7 +717,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
     }
 
     GCTile *gfx = [GCTile new]; gfx.title = @"Graphics Options"; gfx.wide = YES;
-    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, frame rate, lighting and controls (kept for each game)"}];
+    gfx.choices = @[@{@"value": @"", @"label": @"", @"note": @"Display, resolution, colour, widescreen, anti-aliasing, filtering, frame rate, lighting and controls (kept for each game)"}];
     gfx.summary = ^NSString * {
         NSMutableArray *a = [NSMutableArray array];
         for (GCTile *t in @[display, resTile, wide, fps]) [a addObject:t.choices[t.index][@"short"] ?: t.choices[t.index][@"label"]];
@@ -825,7 +832,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (NSDictionary *)choices
 {
-    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"depth": val(self.depth), @"fps": val(self.fps), @"per_game": self.perGame ?: @{}, @"light": val(self.light), @"controls": val(self.controls), @"look": val(self.look), @"invert": val(self.invert)};
+    return @{@"game": @(GAMES[self.view.game].id), @"display": val(self.display), @"notch": val(self.notch), @"resolution": val(self.resolution), @"vsync": val(self.vsync), @"wide": val(self.wide), @"hud": val(self.hud), @"aa": val(self.aa), @"aniso": val(self.aniso), @"depth": val(self.depth), @"fps": val(self.fps), @"per_game": self.perGame ?: @{}, @"light": val(self.light), @"controls": val(self.controls), @"look": val(self.look), @"invert": val(self.invert)};
 }
 - (void)loadGameSettings   /* the chosen game's rows */
 {
@@ -868,6 +875,7 @@ static NSAlert *alert(NSString *msg, NSString *info) { NSAlert *a = [NSAlert new
                           @"GTA_WIDESCREEN": [c[@"wide"] isEqual:@"off"] ? @"0" : @"1", @"GTA_WIDE_HUD": c[@"hud"],
                           @"GTA_MODES": modes_for_display(), @"GTA_DEPTH": c[@"depth"],   /* d3d9.c (the games' Resolution lists), gta3_mode.c */
                           @"GTA_MSAA": c[@"aa"],   /* d3d8.inc (GTA III, Vice City), gta3_mode.c (San Andreas' own setting) */
+                          @"DSR_ANISO": c[@"aniso"],   /* renderer.m: mipmapped textures' anisotropic filtering */
                           @"GTA_FPS": c[@"fps"],   /* gta3_mode.c: the games' limiter, and the high-FPS fixes above 30 */
                           @"GTA_LIGHTING": c[@"light"],
                           @"DS_NATIVE_PANEL": [c[@"resolution"] isEqual:@"native"] && [c[@"display"] isEqual:@"fullscreen"] ? @"1" : @"0",   /* main.m */

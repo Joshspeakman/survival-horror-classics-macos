@@ -1013,6 +1013,8 @@ static void dev_present(Ctx *c, Dev9 *d)
       if (frame_log) fprintf(stderr, "flog: frame %d\n", gta_frames); }
     { void gta_frame_prefs(int); gta_frame_prefs(!gta_last3d); }   /* gta3_mode.c: frame limiter, widescreen */
 #endif
+    { static int cl = -1; static uint32_t was = ~0u; if (cl < 0) cl = getenv("D3D9_CREATELOG") != 0;   /* the x87 control word as the game presents (does it change it after CreateDevice?) */
+      if (cl && c->fcw != was) { fprintf(stderr, "d3d9: x87 control %#x at present (precision %s)\n", c->fcw, (c->fcw & 0x300) == 0 ? "single" : (c->fcw & 0x300) == 0x200 ? "double" : "extended"); was = c->fcw; } }
     static int fps = -1; if (fps < 0) fps = getenv("D3D9_FPS") != 0;   /* D3D9_FPS=1: frames per second every 2 s */
     if (fps) {
         static double t0; static int n; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1614,6 +1616,16 @@ static void fill_caps(uint32_t out)                    /* D3DCAPS9: a Radeon 850
 M(d9_GetDeviceCaps, 4) fill_caps(ARG(3)); RET(D3D_OK, 4); END
 M(d9_GetAdapterMonitor, 2) RET(0x0001beef, 2); END
 static void init_vtables9(void);
+/* as Windows' Direct3D 8 and 9: CreateDevice leaves the calling thread's x87 in single precision, round to nearest,
+ * exceptions masked, unless the game asks to keep its own (D3DCREATE_FPU_PRESERVE, 2). Games of the time were tested
+ * that way (Ghost Recon's power-of-two test went wrong in double precision). W32_NO_FPUSETUP=1: left as it was (as
+ * ddraw.c); D3D9_CREATELOG: the behaviour flags */
+static void fpu_setup(Ctx *c, uint32_t behaviour, const char *api)
+{
+    uint32_t was = c->fcw;
+    if (!(behaviour & 2u) && !getenv("W32_NO_FPUSETUP")) rt_fcw_set(c, (c->fcw & ~0xf3fu) | 0x3fu);
+    if (getenv("D3D9_CREATELOG")) fprintf(stderr, "%s: CreateDevice behaviour %#x, x87 control %#x -> %#x\n", api, behaviour, was, c->fcw);
+}
 #ifdef GTA_EDITION
 /* full screen (Windowed = FALSE): the window takes the mode's size, as Windows does; RenderWare checks that its
  * client rectangle matches the back buffer before it makes its camera (the Direct3D 8 games: d3d8.inc) */
@@ -1628,6 +1640,7 @@ M(d9_CreateDevice, 7) ME(D3D9, O9_D3D)                 /* (adapter, type, focus 
 #ifdef GTA_EDITION
     fullscreen_window9(c, ARG(5), ARG(3));
 #endif
+    fpu_setup(c, ARG(4), "d3d9");
     if (the_dev) { fprintf(stderr, "d3d9: a second device: the first one is reused\n"); dev_reset(the_dev, ARG(5)); rt_w32(G_MEM, ARG(6), the_dev->g); the_dev->ref++; RET(D3D_OK, 7); }
     Dev9 *d = calloc(1, sizeof *d); d->ref = 1; d->g_d3d = me->g; d->hwnd = ARG(3); d->behavior = ARG(4);
     d->g = make_iface(O9_DEV, d); d->g_swap = make_iface(O9_SWAP, d); the_dev = d;

@@ -25,6 +25,7 @@ struct Uniforms {
     float4 md, ma, ms, me;   // the material: diffuse, ambient, specular, emissive (after D3DRS_*MATERIALSOURCE)
     int4 lit;            // lighting on, lights, material sources (diffuse | ambient << 4 | emissive << 8: 0 material, 1 colour 1, 2 colour 2), normalize normals
     int4 tg;             // local viewer, specular on (D3DRS_SPECULARENABLE), PS2 lighting (the GTA games), unused
+    float4 lod;          // stage 0/1 D3DTSS_MIPMAPLODBIAS (0 unless the game sets one), unused x2
     float4 lt[8 * 7];    // each light (camera space): diffuse, ambient, position (w type), direction, attenuation 0-2 + range, spot (cos theta/2, cos phi/2, falloff), specular
 };
 
@@ -189,7 +190,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
     float4 diffuse = in.diffuse, current = diffuse, tf = u.tfactor;
     float2 uv0 = in.uv;
     if (kFl & 0x20) uv0 = (kFl & 0x40) ? in.tcproj.xy / in.tcproj.z : in.tcproj.xy;   // TCI_CAMERASPACEPOSITION
-    float4 texel = (kFl & 1) ? t0.sample(s0, uv0) : float4(1);
+    float4 texel = (kFl & 1) ? t0.sample(s0, uv0, bias(u.lod.x)) : float4(1);
     if (kFl & 4) texel.a = 1;
     const int c0 = kC0 & 0xff, c0a = (kC0 >> 8) & 0xff, c0b = (kC0 >> 16) & 0xff, a0 = kA0 & 0xff, a0a = (kA0 >> 8) & 0xff, a0b = (kA0 >> 16) & 0xff;
     const int c1 = kC1 & 0xff, c1a = (kC1 >> 8) & 0xff, c1b = (kC1 >> 16) & 0xff, a1 = kA1 & 0xff, a1a = (kA1 >> 8) & 0xff, a1b = (kA1 >> 16) & 0xff;
@@ -198,7 +199,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]
         float4 a = a0 == 1 ? current : op(a0, arg(a0a, diffuse, current, texel, tf), arg(a0b, diffuse, current, texel, tf), diffuse, texel, tf, current);
         current = float4(c.rgb, a.a);
         if (c1 != 1) {
-            float4 texel1 = (kFl & 2) ? t1.sample(s1, in.uv1) : float4(1);
+            float4 texel1 = (kFl & 2) ? t1.sample(s1, in.uv1, bias(u.lod.y)) : float4(1);
             if (kFl & 8) texel1.a = 1;
             float4 cc = op(c1, arg(c1a, diffuse, current, texel1, tf), arg(c1b, diffuse, current, texel1, tf), diffuse, texel1, tf, current);
             float4 aa = a1 == 1 ? current : op(a1, arg(a1a, diffuse, current, texel1, tf), arg(a1b, diffuse, current, texel1, tf), diffuse, texel1, tf, current);

@@ -13,6 +13,7 @@ variables, listed below); what is changed in the game lasts for that session.
 | Screen resolution | Display Setup | Display Setup (start menu only, as released) | Advanced | Any size up to the display's Retina pixels, 32-bit or 16-bit; changing it in the game applies at once |
 | Wide Screen | Display Setup | Display Setup | Advanced | Switches this port's widescreen (below) on and off |
 | Anti-aliasing | — | — | Advanced | 2 or 4 samples (the game shows them as 1–3); GTA III and Vice City take the launcher's |
+| Texture filtering | — | — | — | The launcher's (16x anisotropic by default); San Andreas asks for 16x itself on its main textures |
 | Draw distance | Display Setup | Display Setup | Advanced | The game's own |
 | Frame limiter | Display Setup | Display Setup | Advanced | On: the launcher's frame rate; off: as fast as the display shows |
 | Trails | Display Setup | — | — | GTA III's motion blur, at any resolution |
@@ -75,18 +76,31 @@ and alpha test (Metal function constants), not by one shader that chooses them f
 choosing was most of the GPU's time. Metal compiles each new combination the first time it is drawn and keeps it, so
 the first minutes after an update can hitch now and then.
 
-What an M1 Pro holds at 4112×2658 with 4x antialiasing and PS2 lighting, capped at 120, driving:
+What an M1 Pro holds at 4112×2658 with 4x antialiasing, 16x texture filtering and PS2 lighting, capped at 120, driving:
 
 | | GTA III | Vice City | San Andreas | San Andreas, *Native* (3456 × 2234) |
 |---|---|---|---|---|
 | Before | held at 60 by the runtime's cap | 60 (43 without it) | held at 60 by the runtime's cap; then about 71 | |
-| Now, average | 120 | 119 | 116 | 117 |
-| Now, slowest second | 120 | 105 | 92 | 91 |
-| GPU time a frame | 4.3 ms | 6.9 ms | 9.9 ms | 6.8 ms |
+| Now, average | 120 | 120 | 115 | 116 |
+| Now, slowest second | 120 | 116 | 89 | 88 |
+| GPU time a frame | 4.6 ms | 5.8 ms | 9.9 ms | 6.8 ms |
 
-(Measured with the picture drawn off screen, as fast as it goes up to the cap, the automatic cap off.) San Andreas' ~71
-was its own wait for 14 ms a frame (see Frame rate), not its game code; its slowest moments are now the game's own work,
-which *Native* doesn't change, though it takes a third off the GPU's time.
+(Measured with the picture drawn off screen, as fast as it goes up to the cap, the automatic cap off; Vice City's
+slowest second varies most from run to run, 78–116.) San Andreas' ~71 was its own wait for 14 ms a frame (see Frame
+rate), not its game code; its slowest moments are now the game's own work, which *Native* doesn't change, though it
+takes a third off the GPU's time. Texture filtering off, or the games' arithmetic in double precision (see
+[PORT.md](PORT.md)), changed none of these beyond that run-to-run spread.
+
+## Texture filtering
+
+The games ask for trilinear filtering, but their textures have one level each, no smaller copies (every texture GTA III
+and Vice City make, and all but a few of San Andreas'). So on the PC each pixel of distant ground was one sample of the
+full-size image: it shimmers as the camera moves, and thin lines such as a road's centre line break into bright dashes.
+*Texture Filtering* (16x, 4x, or Off as released) samples them anisotropically, up to 16 samples along the slant: distant
+roads and walls hold steady, and thin lines fade with distance as they should. San Andreas asks for 16x anisotropic
+filtering itself on its main textures (now that the device says it can), which Off keeps. Point-filtered images and the
+frame's own copies (trails, glow, heat haze) are left as they are. A mip LOD bias is honoured; none of the three sets
+one. On an M1 Pro it costs no measurable time (above).
 
 ## Frame rate
 
@@ -157,4 +171,5 @@ What the launcher sets (useful when starting a game binary by hand):
 | `GTA_WIDESCREEN=1\|0`, `GTA_WIDE_HUD=anchor\|center` | widescreen and the HUD |
 | `GTA_FPS=<n>` | the frame cap (0 uncapped); above 30 the high frame rate fixes |
 | `GTA_LIGHTING=ps2\|pc` | PS2 lighting |
+| `DSR_ANISO=16\|4\|1` | texture filtering: anisotropic samples (1 off) |
 | `DS_DISPLAY=window\|fullscreen`, `DS_NOTCH=around\|below`, `DSR_VSYNC=1\|0` | the window |

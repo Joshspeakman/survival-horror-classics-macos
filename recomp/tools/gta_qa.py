@@ -135,6 +135,8 @@ PLANS = {
     'gta3-veh-find': [('in the car', ['key:70'], 5, ['peek:952628,310', 'dump:3b0b0e0,400,{out}/veh.bin'])],
     'gta3-fire': [('in the car', ['key:70'], 5, []), ('sunny noon', ['gta:weather,0', hold((0x96e0df, 12))], 4, []),
                   ('engine fire (parked)', ['gta:vhealth,200'], 3, []), ('engine fire later', [], 3, []), ('explosion', ['gta:vhealth,0'], 2, [])],
+    # texture filtering (DSR_ANISO): the alley's far road at noon, its frame's draws logged (D3D9_PROBE=x,y: one pixel's)
+    'vc-road': [('start', [], 2, []), ('sunny noon', ['gta:weather,0', hold((0xa0fb75, 12))], 4, ['framelog'])],
     'vc-fire': [('start', [], 2, []), ('sunny noon', ['gta:weather,0', hold((0xa0fb75, 12))], 4, []),
                 ('engine fire (parked)', ['gta:vhealth,200'], 3, []), ('engine fire later', [], 3, []), ('explosion', ['gta:vhealth,0'], 2, [])],
     'sa-speed': [('Las Venturas airport', ['gta:weather,0', hold((SA_HOUR, 13)), 'tp:1477,1500,11'], 8, []),
@@ -312,10 +314,12 @@ def main():
     heap = [float(m.group(1)) for m in re.finditer(r'; heap ([\d.]+) MB', text)][int(INTRO[a.game][-1][0] + late):]
     mem = ''
     if len(heap) >= 30:
-        n = len(heap); mx = (n - 1) / 2; my = sum(heap) / n
-        slope = sum((i - mx) * (h - my) for i, h in enumerate(heap)) / sum((i - mx) ** 2 for i in range(n)) * 60
-        mem = 'heap in play: %.1f -> %.1f MB (max %.1f), %+.1f MB a minute%s' % (heap[0], heap[-1], max(heap), slope,
-              '  GROWING (a leak?)' if slope > 3 and heap[-1] - heap[0] > 15 else '')
+        def slope_of(hs):   # MB a minute, least squares
+            n = len(hs); mx = (n - 1) / 2; my = sum(hs) / n
+            return sum((i - mx) * (h - my) for i, h in enumerate(hs)) / sum((i - mx) ** 2 for i in range(n)) * 60
+        slope, late_slope = slope_of(heap), slope_of(heap[len(heap) // 2:])   # streaming fills up first, then levels off:
+        mem = 'heap in play: %.1f -> %.1f MB (max %.1f), %+.1f MB a minute (%+.1f in the second half)%s' % (   # a leak keeps climbing
+              heap[0], heap[-1], max(heap), slope, late_slope, '  GROWING (a leak?)' if late_slope > 3 and heap[-1] - heap[0] > 15 else '')
     fps = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r'frame (\d+) .*? ([\d.]+) fps;', text)]
     crash = re.findall(r'unhandled exception.*|The native host crashed.*|crash report written to .*|snapshot report written.*', text)   # the game's and the host's
     reports = os.path.join(data, 'CrashReports')                 # kept (the data folder goes)
@@ -326,6 +330,14 @@ def main():
             f.write('%2d  %-34s %s%s\n' % (n, name, os.path.basename(png), '' if os.path.exists(png) else '  (no picture)'))
         f.write('crashes: %s\n' % (crash or 'none'))
         if fps: f.write('frame rate: min %.1f, last %.1f\n' % (min(r for _, r in fps[3:] or fps), fps[-1][1]))
+        # the longest frame in play; the window hidden (another Space in front, the display asleep, the screen locked)
+        # stalls its next picture for a second (none comes free): the Mac's, not the game's (#17)
+        worst = [float(m.group(1)) for m in re.finditer(r'longest frame ([\d.]+) ms', text)][int(INTRO[a.game][-1][0] + late):]
+        if worst: f.write('longest frame in play: %.0f ms (second %d)\n' % (max(worst), worst.index(max(worst))))
+        waits = re.findall(r'host: the window had no picture free for (\d+) ms', text)
+        dark = re.findall(r'host: (the display went to sleep|the screen was locked)', text)
+        if waits: f.write('waits for the window: %s ms (%s): the window was hidden, a stall then is the Mac\'s, not the game\'s\n'
+                          % (', '.join(waits), dark[0] if dark else 'not the display or the lock: another Space in front?'))
         if mem: f.write(mem + '\n')
         f.write('cpu: %.0f s in %.0f s (%.0f%% of a core)\n' % (cpu, wall, 100 * cpu / wall))
     if not a.keep: shutil.rmtree(data, ignore_errors=True)

@@ -84,6 +84,9 @@ kept off (`GTA_CAR_ROLL=1` brings it back).
 Rumble: the PC games never ask DirectInput for force feedback (those calls are logged once if one ever does), so the
 controllers don't rumble.
 
+The display stays on while a game is in front: a controller gives macOS no keyboard or mouse activity, so with a pad
+alone the display could otherwise go dark mid-game. It sleeps as usual while another app is in front.
+
 How it works: the host reads the controller with Apple's GameController framework (`recomp/host/main.m`) and the
 runtime's DirectInput 8 (`recomp/runtime/win32/dinput8.c`) reports it as a gamepad that is always attached; its axes
 are −32768..32767 until the game sets a range. The games ask DirectInput about each axis (GetObjectInfo) and then set

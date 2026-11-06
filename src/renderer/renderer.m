@@ -36,6 +36,7 @@ typedef struct {   // must match shaders.metal Uniforms
     float amb[4], md[4], ma[4], ms[4], me[4];   // D3DRS_AMBIENT; material diffuse, ambient, specular, emissive
     int32_t lit[4];      // lighting on, lights, material sources, normalize normals
     int32_t tg[4];       // local viewer, specular on, PS2 lighting (GTA_LIGHTING=ps2)
+    float lod[4];        // stage 0/1 mip LOD bias
     float lt[8 * 7][4];  // lights in camera space (see shaders.metal)
 } Uniforms;
 
@@ -736,7 +737,16 @@ static id<MTLDepthStencilState> depth_for(DSRRenderer *r)
 static id<MTLSamplerState> sampler_for(DSRRenderer *r, int st)
 {
     uint32_t au = r->tss[st][13], av = r->tss[st][14], mag = r->tss[st][16], min = r->tss[st][17], mip = r->tss[st][18];
-    uint32_t key = ((au << 16) | (av << 12) | (mag << 8) | (min << 4) | mip) << 1 | 1, h = (key * 2654435761u) >> 22;
+    /* anisotropic filtering: textures sampled with a mip filter and a linear minification filter take up to DSR_ANISO
+     * samples along a slant (the launcher's Texture Filtering; 16 by default, 1 off); a game's own D3DTEXF_ANISOTROPIC
+     * takes its MAXANISOTROPY, at least that. With mip levels the ground keeps its detail instead of the mips' blur;
+     * the GTA games' textures have none (one level each), so far ground was one sample of the full-size image a pixel
+     * and shimmered, and the samples along the slant steady it. Point-filtered images and samplers without a mip
+     * filter (the HUD, fonts, the frame's copies for trails and glow) are left as they are */
+    static int force = -1; if (force < 0) { const char *e = getenv("DSR_ANISO"); force = e ? atoi(e) : 16; if (force < 1) force = 1; if (force > 16) force = 16; }
+    uint32_t an = (min == 3 || mag == 3) ? (r->tss[st][21] < 1 ? 1 : r->tss[st][21] > 16 ? 16 : r->tss[st][21]) : 1;
+    if (mip >= 2 && min >= 2 && an < (uint32_t)force) an = (uint32_t)force;
+    uint32_t key = ((an << 20) | (au << 16) | (av << 12) | (mag << 8) | (min << 4) | mip) << 1 | 1, h = (key * 2654435761u) >> 22;
     while (r->smp_k[h] && r->smp_k[h] != key) h = (h + 1) & 1023;
     if (r->smp_k[h]) return r->smp_v[h];
     id<MTLSamplerState> s;
@@ -745,6 +755,9 @@ static id<MTLSamplerState> sampler_for(DSRRenderer *r, int st)
     d.sAddressMode = am(au); d.tAddressMode = am(av);
     d.magFilter = mag >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest; d.minFilter = min >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
     d.mipFilter = mip == 3 ? MTLSamplerMipFilterLinear : mip == 2 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterNotMipmapped;
+    d.maxAnisotropy = an;
+    { static int sl = -1; if (sl < 0) sl = getenv("DSR_SAMPLERLOG") != 0;   /* development: each new sampler's filters */
+      if (sl) fprintf(stderr, "dsr: sampler mag %u min %u mip %u anisotropy %u (stage %d, address %u/%u)\n", mag, min, mip, an, st, au, av); }
     s = [r->dev newSamplerStateWithDescriptor:d]; if (r->smp_n < 768) { r->smp_k[h] = key; r->smp_v[h] = s; r->smp_n++; } return s;
 }
 /* the normal matrix: the inverse transpose of world*view's 3x3 (row-vector order, as the other matrices) */
@@ -848,6 +861,9 @@ static void draw(DSRRenderer *r, const uint32_t *p, uint32_t size)
     u.at[0] = (r->rs[24] & 255) / 255.0f; u.at[1] = r->rs[25]; u.at[2] = r->rs[15] ? 1 : 0;
     Surf *t0 = surf(r, r->tex[0]), *t1 = surf(r, r->tex[1]);
     u.misc[0] = (fvf & 0xe) == 4; u.misc[1] = (fvf & 0x40) != 0; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
+    memcpy(&u.lod[0], &r->tss[0][19], 4); memcpy(&u.lod[1], &r->tss[1][19], 4);   // D3DTSS_MIPMAPLODBIAS (a float); nonsense as 0
+    for (int k = 0; k < 2; k++) if (!(u.lod[k] >= -16 && u.lod[k] <= 16)) u.lod[k] = 0;
+    { static int said; if (!said && (u.lod[0] != 0 || u.lod[1] != 0)) { said = 1; fprintf(stderr, "dsr: the game sets a mip LOD bias (%g, %g)\n", u.lod[0], u.lod[1]); } }
     normal_matrix(u.nrm, wv); u.tg[0] = r->rs[142] != 0; u.tg[1] = r->rs[29] != 0;
     { static int ps2 = -1; if (ps2 < 0) { const char *e = getenv("GTA_LIGHTING"); ps2 = e && !strcmp(e, "ps2"); }   /* the GTA games' PS2 lighting */
       u.tg[2] = ps2; }
@@ -1056,6 +1072,8 @@ static void draw_mprog(DSRRenderer *r, const uint32_t *p, uint32_t size)
         u.c1[0] = r->tss[1][1]; u.c1[1] = r->tss[1][2]; u.c1[2] = r->tss[1][3]; u.c1[3] = r->tss[1][4]; u.a1[0] = r->tss[1][5]; u.a1[1] = r->tss[1][6];
         u.at[0] = (r->rs[24] & 255) / 255.0f; u.at[1] = r->rs[25]; u.at[2] = r->rs[15] ? 1 : 0;
         u.misc[1] = 1; u.misc[2] = t0 != NULL; u.misc[3] = t1 != NULL;
+        memcpy(&u.lod[0], &r->tss[0][19], 4); memcpy(&u.lod[1], &r->tss[1][19], 4);   // D3DTSS_MIPMAPLODBIAS (a float); nonsense as 0
+        for (int k = 0; k < 2; k++) if (!(u.lod[k] >= -16 && u.lod[k] <= 16)) u.lod[k] = 0;
         u.xrgb[0] = t0 && t0->fmt == 2; u.xrgb[1] = t1 && t1->fmt == 2;
         memcpy(ring_alloc(r, sizeof u, &uoff), &u, sizeof u);
     }
