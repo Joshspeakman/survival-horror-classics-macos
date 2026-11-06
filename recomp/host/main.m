@@ -174,7 +174,8 @@ static void *render_thread(void *arg)
 // DS_SCRIPT="1900:click:400,150;2100:shot:/tmp/a.png;2200:key:13" : at a presented frame, act through the same message
 // path as real input. Coordinates are in the game's current display mode.
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[512]; } Act;   // at > 0: seconds from start
-static Act acts[256]; static int nacts;
+static struct { uint32_t addr; uint8_t v; } holds[64]; static int nholds;   /* "pin:" (DS_CMDFILE): bytes kept in game memory */
+static Act acts[2048]; static int nacts;
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
 static int captured;
@@ -192,7 +193,7 @@ static void parse_script(void)
 {
     const char *e = getenv("DS_SCRIPT"); if (!e) return;
     char *s = strdup(e), *save, *tok = strtok_r(s, ";", &save);
-    while (tok && nacts < 256) {
+    while (tok && nacts < 2048) {
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         int ok = tok[0] == '@' ? sscanf(tok + 1, "%lf:%7[a-z]:%599[^\n]", &a->at, kind, rest) : sscanf(tok, "%u:%7[a-z]:%599[^\n]", &a->frame, kind, rest);
         if (tok[0] == '@') a->frame = 0xffffffffu;
@@ -234,13 +235,14 @@ static void cmdfile_poll(uint32_t fno)
     if (!path || fno % 15) return;
     FILE *f = fopen(path, "r"); if (!f) return;
     fseeko(f, pos, SEEK_SET); char line[700];
-    while (nacts < 256 && fgets(line, sizeof line, f)) {
+    while (nacts < 2048 && fgets(line, sizeof line, f)) {
         size_t l = strlen(line); if (!l || line[l - 1] != '\n') break;       /* a line still being written */
         pos += (off_t)l; line[l - 1] = 0;
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
-        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp"))
+            snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
         nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
     }
     fclose(f);
@@ -252,6 +254,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
     static double t0; double now = CACurrentMediaTime(); if (!t0) t0 = now;
     for (int k = 0; k < nacts; k++) if (acts[k].at > 0 && acts[k].frame == 0xffffffffu && now - t0 >= acts[k].at) acts[k].frame = fno;   /* timed steps start now */
     motion_tick();
+    { extern uint8_t *G_MEM; for (int k = 0; k < nholds; k++) G_MEM[holds[k].addr] = holds[k].v; }   /* pin: */
     for (int k = 0; k < nacts; k++) {
         Act *a = &acts[k];
         if (!strcmp(a->kind, "click") || !strcmp(a->kind, "rclick")) {
@@ -278,6 +281,22 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             if (fno == a->frame + (uint32_t)a->y) { w32_keys[a->x & 0xff] = 0; di_key_vk(a->x, 0); post(0x101, (uint32_t)a->x, 0xc0000001u | key_scan(a->x)); }
         } else if (!strcmp(a->kind, "shot") && fno == a->frame) shot = a->path;
         else if (!strcmp(a->kind, "msg") && fno == a->frame) post((uint32_t)a->x, (uint32_t)a->y, 0);   /* msg:<message>,<wparam> to the game's window */
+        else if ((!strcmp(a->kind, "poke") || !strcmp(a->kind, "pin") || !strcmp(a->kind, "unpin")) && fno == a->frame) {
+            /* poke:addr=byte,... writes game memory once; pin: every frame until unpin:addr,... (effect flags the game clears) */
+            char buf[512], *sv, *t; snprintf(buf, sizeof buf, "%s", a->path);
+            for (t = strtok_r(buf, ",", &sv); t; t = strtok_r(0, ",", &sv)) {
+                unsigned ad = 0, v = 0; int n = sscanf(t, "%x=%x", &ad, &v); if (n < 1 || ad < 0x10000u || ad >= 0x40000000u) continue;
+                if (!strcmp(a->kind, "poke")) { extern uint8_t *G_MEM; G_MEM[ad] = (uint8_t)v; }
+                else if (!strcmp(a->kind, "pin")) { int k = 0; while (k < nholds && holds[k].addr != ad) k++; if (k < 64) { holds[k].addr = ad; holds[k].v = (uint8_t)v; if (k == nholds) nholds++; } }
+                else for (int k = 0; k < nholds; k++) if (holds[k].addr == ad) holds[k] = holds[--nholds];
+            }
+            fprintf(stderr, "DungeonSiegeNative: %s %s\n", a->kind, a->path);
+        }
+#ifdef GTA_EDITION
+        else if (!strcmp(a->kind, "tp") && fno == a->frame) {   /* tp:x,y,z (the GTA games): the player there (gta3_mode.c) */
+            float x, y, z; if (sscanf(a->path, "%f,%f,%f", &x, &y, &z) == 3) { extern void gta_request_teleport(float, float, float); gta_request_teleport(x, y, z); }
+        }
+#endif
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }

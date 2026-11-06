@@ -651,6 +651,8 @@ static float gta_wide2d(Dev9 *d, uint32_t prim, uint8_t *v, uint32_t st, uint32_
     int mode = wide_hud_mode(); float W = (float)d->pp[0], H = (float)d->pp[1], side = 0;
     if (!mode || !nv || H <= 0 || W / H < 4.0f / 3 + 0.01f) return 0;
     if (d->rt != d->back) return 0;   /* drawing into a texture (San Andreas' shadows and effects), not the screen */
+    if (d->tex[0] && (d->tex[0]->usage & 1)) return 0;   /* from a copy of the picture (D3DUSAGE_RENDERTARGET: the post effects, San
+                                                            Andreas' heat haze, the trails): its pieces belong where the picture is */
     float s = H * (4.0f / 3) / W;
     #define VX(i) (*(float *)(v + (size_t)(i) * st))
     #define VY(i) (*(float *)(v + (size_t)(i) * st + 4))
@@ -699,6 +701,7 @@ static void emit(Dev9 *d, uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_
     uint32_t st = fvf_stride(fvf);
     if ((uint64_t)st * nv + (uint64_t)ni * 2 > (16u << 20)) { static int w; if (!w++) fprintf(stderr, "d3d9: a draw too large for the command ring (skipped)\n"); return; }
     uint32_t vb = st * nv, ib = (ni * 2 + 3) & ~3u;
+    const uint8_t *v_raw = v;   /* (the frame log: the game's own positions) */
 #ifdef GTA_EDITION
     uint8_t *wv = 0;
     if ((fvf & 0xe) == 4 && wide_hud_mode()) {   /* 2D: narrowed to 4:3 (a copy); a menu's picture gets black at its sides */
@@ -716,6 +719,9 @@ static void emit(Dev9 *d, uint32_t prim, uint32_t fvf, const uint8_t *v, uint32_
         fprintf(stderr, "flog: 2D prim %u nv %u x %.0f..%.0f y %.0f..%.0f into %u tex %u | blend %u src %u dst %u op %u atest %u | st0 %u(%u,%u) a%u(%u,%u) st1 %u | ps %d vs %d | colour %08x",
                 prim, nv, x0, x1, y0, y1, d->rt ? d->rt->id : 0, d->tex[0] && d->tex[0]->lv[0][0] ? d->tex[0]->lv[0][0]->id : 0, d->rs[27], d->rs[19], d->rs[20], d->rs[171], d->rs[15],
                 d->tss[0][1], d->tss[0][2], d->tss[0][3], d->tss[0][4], d->tss[0][5], d->tss[0][6], d->tss[1][1], d->ps != 0, d->vs != 0, col);
+        if (v_raw != v) { float a0 = 1e9f, a1 = -1e9f, b0 = 1e9f, b1 = -1e9f;
+            for (uint32_t i = 0; i < nv; i++) { float x = *(const float *)(v_raw + (size_t)i * st), y = *(const float *)(v_raw + (size_t)i * st + 4); if (x < a0) a0 = x; if (x > a1) a1 = x; if (y < b0) b0 = y; if (y > b1) b1 = y; }
+            fprintf(stderr, " (game's: x %.1f..%.1f y %.1f..%.1f)", a0, a1, b0, b1); }
         if ((fvf & 0x40) && (fvf & 0xf00)) { uint32_t co = 16 + ((fvf & 0x10) ? 12 : 0); for (uint32_t i = 0; i < nv && i < 6; i++) fprintf(stderr, " [%08x %.3f,%.3f]", *(const uint32_t *)(v + (size_t)i * st + co),
             *(const float *)(v + (size_t)i * st + co + 4 + ((fvf & 0x80) ? 4 : 0)), *(const float *)(v + (size_t)i * st + co + 8 + ((fvf & 0x80) ? 4 : 0))); }
         fprintf(stderr, "\n");

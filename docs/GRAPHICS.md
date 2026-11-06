@@ -110,6 +110,8 @@ scripts rotate and slide (gates, lifts) go by the time step.
   game still has radiosity code, but it is off and its defaults only darken the picture, so the renderer draws it.
   `GTA_GLOW=<limit>,<strength>` (0–255, default 140,96) changes it.
 - **Vice City's trails**, the PS2's motion blur in the time cycle's colour, which the PC release switches off.
+- **San Andreas' heat haze** (hot, clear afternoons; strongest in the desert) and speed blur draw pieces of a copy of
+  the frame; the widescreen HUD placement leaves anything drawn from such a copy where the game put it.
 - **Light clamping** on lit models (cars, people) in all three: the lights are summed and clamped before the
   material's colour multiplies them, so bright sunlight no longer washes them to white.
 

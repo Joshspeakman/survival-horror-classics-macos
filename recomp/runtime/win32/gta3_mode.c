@@ -318,10 +318,32 @@ static void release_held(void)
     for (int k = 0; k < 2; k++) if (held[k].on) { held[k].on = 0; w32_post(w32_window_tid(held[k].hwnd), held[k].hwnd, k ? 0x1c : 0x6, held[k].wp, held[k].lp); }
 #endif
 }
+/* development (test mode: the host's "tp:x,y,z"): the player, or the vehicle they're in, moved there by the game's own
+ * CEntity::Teleport (San Andreas: virtual 14; thiscall (CVector, bool resetRotation)), on the game thread between frames */
+static volatile int tp_pending; static float tp_to[3];
+void gta_request_teleport(float x, float y, float z) { tp_to[0] = x; tp_to[1] = y; tp_to[2] = z; __atomic_store_n(&tp_pending, 1, __ATOMIC_RELEASE); }
+static void teleport_now(void)
+{
+    if (!__atomic_exchange_n(&tp_pending, 0, __ATOMIC_ACQ_REL)) return;
+#if defined(GTASA_EDITION)
+    extern __thread Ctx *w32_cur_ctx; Ctx *c = w32_cur_ctx; if (!c) return;
+    uint32_t ped = rt_r32(G_MEM, PLAYERS); if (ped < 0x10000u) return;
+    uint32_t ent = (G_MEM[ped + PED_IN_VEHICLE] & 1) && rt_r32(G_MEM, ped + PED_VEHICLE) >= 0x10000u ? rt_r32(G_MEM, ped + PED_VEHICLE) : ped;
+    uint32_t fn = rt_r32(G_MEM, rt_r32(G_MEM, ent) + 14 * 4);
+    uint32_t a[4]; memcpy(&a[0], &tp_to[0], 4); memcpy(&a[1], &tp_to[1], 4); memcpy(&a[2], &tp_to[2], 4); a[3] = 0;
+    uint32_t ecx = c->ecx; c->ecx = ent; w32_callback(c, fn, 4, a); c->ecx = ecx;
+    fprintf(stderr, "gta: teleported %s to %.1f %.1f %.1f (%08x)\n", ent == ped ? "the player" : "the player's vehicle", tp_to[0], tp_to[1], tp_to[2], fn);
+#endif
+}
 void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */
 {
+    teleport_now();
     static int first = 1, was_menu;
     release_held();
+    { static int on = -1; static char spec[512];   /* development: GTA_POKE="addr=byte,..." written every frame (force an effect on) */
+      if (on < 0) { const char *e = getenv("GTA_POKE"); on = e && *e; if (on) snprintf(spec, sizeof spec, "%s", e); }
+      if (on) { char buf[512], *sv, *t; snprintf(buf, sizeof buf, "%s", spec);
+                for (t = strtok_r(buf, ",", &sv); t; t = strtok_r(0, ",", &sv)) { unsigned a, v; if (sscanf(t, "%x=%x", &a, &v) == 2 && a < 0x40000000u) G_MEM[a] = (uint8_t)v; } } }
     int fps = fps_env();
     if (fps >= 0) {
         if (first) G_MEM[PREF_LIMITER] = fps > 0;

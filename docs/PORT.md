@@ -85,6 +85,12 @@ saves screenshots as shown (after gamma and the 16-bit look); `W32_AUDIO_MUTE=1`
 `W32_AUDIOLOG=1` reports the output level each second; `GTA_FAKE_PAD="frame:buttons:lx:ly[:rx:ry];..."` is a
 controller (`@seconds` in place of a frame number: by time).
 
+Effects QA: `recomp/tools/gta_qa.py <gta3|vc|sa> <plan>` plays a game into its first scene and goes through a plan of
+scenes (weather and time by the games' own cheats, typed key by key, and the clock held; night and infrared vision by
+their flags; San Andreas teleports), a screenshot of each in `recomp/work/qa`. The command file also takes `poke:addr=byte`,
+`pin:` / `unpin:` (a byte held every frame) and `tp:x,y,z` (San Andreas: the game's own CEntity::Teleport);
+`GTA_POKE=addr=byte,...` holds bytes from the start; `DS_EARLY_MSG` posts window messages as the window is made.
+
 For speed: `DS_BENCH=1` shows each frame in a texture instead of the (background, compositor-paced) window, so the
 frame rate is what the game and GPU manage; `DSR_PROFILE=1` counts each frame's GPU passes by kind and the waits for
 the GPU (each pass in a command buffer of its own: their times are only relative); `DSR_PASSLOG=<frame>` lists that
