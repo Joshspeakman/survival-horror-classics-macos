@@ -23,7 +23,9 @@ macOS; this port takes the Windows executables from inside them.
   off.
 - **60 fps or the display's rate.** Timers, flashing, particles, spin damping and scripted gates and lifts are kept at
   the 30 fps pace the games were made for (FusionFix's HighFPS fixes, ported). The games' frame limiters, which
-  turned San Andreas' 30 into 25 (and 60 into 43) and GTA III's and Vice City's 120 into 60, keep the rate exactly.
+  turned San Andreas' 30 into 25 (and 60 into 43) and GTA III's and Vice City's 120 into 60, keep the rate exactly,
+  San Andreas' own 14 ms wait a frame is gone, frames below the display's rate are shown evenly, and a game that can't
+  come near the display's rate is held at an even 60.
 - **PS2 lighting.** San Andreas' PS2 colour filter (the warm Los Santos look) and its radiosity glow, Vice City's PS2
   trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
 - **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
@@ -77,11 +79,13 @@ GTA Vice City | GTA San Andreas> User Files`.
 
 ←/→ choose a game, ↑/↓ the tiles, Return plays, Esc quits. The tiles:
 
-- **Graphics Options**, for every game: Display (Full Screen / Window), Notch (Below It / Around It), Resolution
-  (Standard / Retina / As Set in Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD
-  (Corners / Centred 4:3), Anti-Aliasing (Off / 2x / 4x MSAA; 4x costs frame rate at Retina sizes), VSync, Frame Rate (60 / the display's rate / 30
-  Original; kept for each game), Lighting (PS2 / PC as released) and Controls (Classic PS2 / Modern, as the Definitive Edition). The choices are given to the game each time it starts; what you
-  change in a game's own Display Setup lasts for that session (choose *As Set in Game* to keep the game's resolution).
+- **Graphics Options**, kept for each game (Display and Notch for all): Display (Full Screen / Window), Notch (Below It /
+  Around It), Resolution (Standard / Retina / Native, the panel's own pixels when the display is scaled / As Set in
+  Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD (Corners / Centred 4:3),
+  Anti-Aliasing (Off / 2x / 4x MSAA), VSync, Frame Rate (60 / the display's rate / 30 Original), Lighting (PS2 / PC as
+  released), Controls (Classic PS2 / Modern, as the Definitive Edition), Look Speed and Invert Look. The choices are
+  given to the game each time it starts; what you change in a game's own Display Setup lasts for that session (choose
+  *As Set in Game* to keep the game's resolution).
 - **Mods** opens the Mods window. **Saves** and **Game Files** open the chosen game's folders.
 - **Updates** rebuilds every installed game from the newest commit of the app's branch; saves and settings are kept.
 
@@ -99,7 +103,7 @@ and the options above; they were checked with the games' own screenshots at 2054
 | Graphics | Direct3D 8 (GTA III, Vice City) and 9 (San Andreas) on Metal; the games' own vertex shaders translated to Metal (MojoShader) |
 | Sound | Miles Sound System and DirectSound on Core Audio |
 | Input | keyboard, mouse (DirectInput 8) and game controllers |
-| Frame rate | at 4112×2658 with 4x antialiasing on an M1 Pro: GTA III and Vice City 120 fps, San Andreas about 75 (its game code's limit; 60 evenly at *Frame Rate: 60*) |
+| Frame rate | at 4112×2658 with 4x antialiasing on an M1 Pro: GTA III 120 fps, Vice City 119, San Andreas 116 (it waited 14 ms a frame of its own: about 71 before); below the display's rate, frames are shown evenly |
 | Movies | the intro movies play (macOS's own MPEG-1 decoder); a key, click or pad button skips them |
 | Mods | file mods; models and textures meant for the `.img` archives, and ASI/CLEO code mods, are not supported yet |
 

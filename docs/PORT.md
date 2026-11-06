@@ -52,6 +52,8 @@ the code in `recomp/runtime/win32/gta3_mode.c`); overrides replace a whole funct
 | The streaming read's lost release (`CdStreamSync`) | 0x40604a | 0x40840a | 0x407a9e |
 | The frame limiter paced by a steady clock | 0x583be3, 0x583bff | 0x6000e0, 0x6000fc | 0x75072d, 0x750744 |
 | The car camera's lean with the steering kept off (`TheCamera`, each frame) | | 0x7e3690 | |
+| `Idle`'s own wait for 14 ms since the last frame, ended when the launcher sets the frame rate | | | 0x54265a |
+| Modern: the car camera swung round the car by the right stick (`TheCamera`'s active camera, each frame) | 0x70be38 | 0x7e3690 | |
 
 Their addresses were found with FusionFix's (MIT) search patterns, and checked by disassembling each build.
 
@@ -93,13 +95,26 @@ CEntity::Teleport) and `gta:weather,N` (the forced, new and old weather at once)
 vehicle's health: fire below 250, an explosion at 0) and `gta:vspeed,F,frames` (driven forward: trails, speed blur);
 `GTA_POKE=addr=byte,...` holds bytes from the start; `DS_EARLY_MSG` posts window messages as the window is made.
 
+Its options: `--msaa`, `--mode`, `--light`, `--controls`, `--fps` (the cap), `--no-shots` (each screenshot stalls the
+renderer, about 140 ms at 2056×1290: for timing runs), `--movies "0.5,3"` (the intro movies played and each skipped that
+many seconds in, `DS_MOVIE_SKIP`; `gta3-start`, `sa-start`), `--keep`. Each run's summary lists crashes (the game's and
+the host's; their reports are copied out of the data folder), the frame rate, the game's heap in play (a steady climb
+is flagged) and the CPU it used. A controller is connected from the start (`GTA_FAKE_PAD`), driven by `pad:` lines. The
+soaks tour each map (`sa-soak`; `gta3-soak` and `vc-soak` from road pieces in the games' own `data/maps/*.ipl`, with
+`tp:` through `Teleport`, virtual 11 in GTA III and Vice City; `…-soak2` twice round, to tell streaming from a leak);
+`…-aim` tries Modern aiming; `sa-effects3` San Andreas' screen effects by their switches. `DS_TEST_FAULT=audio` faults
+the sound mixer's thread (the crash report must name it).
+
 For speed: `DS_BENCH=1` shows each frame in a texture instead of the (background, compositor-paced) window, so the
 frame rate is what the game and GPU manage; `DSR_PROFILE=1` counts each frame's GPU passes by kind and the waits for
 the GPU (each pass in a command buffer of its own: their times are only relative); `DSR_PASSLOG=<frame>` lists that
 frame's passes and copies; `DSR_RINGLOG=1` the upload ring's use; `DSR_STATS=1` the commands a second and the time the
 game waited for the GPU; `W32_SLEEPLOG=1` who calls `Sleep`; `kill -INFO <pid>` writes every guest thread's stack to the
-data folder's CrashReports (the reliable way to see what the game's thread is doing: `W32_PROFILE`'s CPU-time signal
-lands on whichever thread macOS picks, often a sleeping one).
+data folder's CrashReports. `W32_PROFILE=<file> W32_PROFILE_GAME=1` samples the game's main thread every millisecond
+from a thread of its own (suspended, its registers read and its frame chain walked; the plain `W32_PROFILE` signal lands
+on whichever thread macOS picks, often a sleeping one): `tools/profile.py <binary> <file>` lists where the time went,
+inclusive, `PROFILE_CALLERS=f_<address>` who called a function, and with `GTA_SLOWLOG=<ms>` (frames whose work took
+longer are logged) `PROFILE_WINDOWS=<game.log>` only those frames. That is how San Andreas' `Idle` wait was found.
 For rendering: `D3D9_FRAMELOG=<frame>` (or `D3D9_FRAMELOG_FILE=<path>`: the frame after the file appears) logs one
 frame's render targets, copies, clears and draws, reading small targets back; with `D3D9_PROBE=x,y` it names each
 draw that changes that pixel. `D3D8_COPYLOG=1` logs Direct3D 8 copies; `D3D9_SHADERLOG=2` prints the translated

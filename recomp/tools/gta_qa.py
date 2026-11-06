@@ -202,6 +202,18 @@ PLANS = {
     # the car camera's memory while driving (TheCamera, two dumps a second apart: finding CCam::Source and friends)
     'vc-camdump': [('driving', ['gta:vspeed,0.35,240'], 2, []), ('dumped', ['dump:7e3690,800,{out}/cam1.bin'], 1, []), ('again', ['dump:7e3690,800,{out}/cam2.bin'], 1, [])],
     'gta3-camdump': [('driving', ['gta:vspeed,0.35,240'], 2, []), ('dumped', ['dump:70be38,800,{out}/cam1.bin'], 1, []), ('again', ['dump:70be38,800,{out}/cam2.bin'], 1, [])],
+    # Modern aiming (the host pad's bits: LT 0x10, RT 0x20, LB 0x40): a gun from the weapons cheat, aim, look, fire
+    **{'%s-aim' % g: {'sa': [], 'vc': [('out of the car (Y, a tap: held, it gets back in)', ['pad:8,0,0,0,0'], 0.15, ['pad:0,0,0,0,0']), ('on foot', [], 3, [])],
+                      'gta3': [('wasted: the first mission starts again, on foot beside the car (he cannot get out of it at first)', ['gta:phealth,0'], 14, [])]}[g] + [('weapons', ['cheat:' + cheat], 3, [])] +
+                     [('next weapon (LB) %d' % k, ['pad:40,0,0,0,0'], 0.5, ['pad:0,0,0,0,0']) for k in range(1, presses + 1)] + [
+                      ('aiming (LT)', ['pad:10,0,0,0,0'], 1.5, []), ('aiming, right stick right', ['pad:10,0,0,1,0'], 1, []),
+                      ('aiming, right stick up', ['pad:10,0,0,0,-1'], 1, []), ('firing (LT + RT)', ['pad:30,0,0,0,0'], 1, ['pad:0,0,0,0,0']),
+                      ('let go', [], 1, [])]
+       for g, cheat, presses in (('gta3', 'GUNSGUNSGUNS', 3), ('vc', 'THUGSTOOLS', 4), ('sa', 'LXGIWYL', 6))},   # (to a gun)
+    # San Andreas' screen effects by their CPostEffects switches (0xc30310 on: night and infrared vision, the grain,
+    # the darkness filter, CCTV)
+    'sa-effects3': [(name, [hold((addr, 1))], 3, [unhold(addr)]) for name, addr in
+                    (('night vision', 0xc30310), ('infrared', 0xc30311), ('grain', 0xc3030c), ('darkness filter', 0xc3031c), ('CCTV', 0xc3031d))],
     # the start as a player has it (with --movies "a,b": the intro movies skipped that many seconds in), into play
     'gta3-start': [('in play after the intro movies', [], 3, [])],
     'sa-start': [('in play after the intro movies', [], 3, [])],
@@ -262,6 +274,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True); os.makedirs(out)
     data = os.path.join(out, 'data'); os.makedirs(data); cmd = os.path.join(out, 'cmd.txt'); open(cmd, 'w').close()
     env = dict(os.environ, DS_TEST='1', DS_NO_LAUNCHER='1', W32_AUDIO_MUTE='1', GTA_NO_MOVIES='1', DS_MOVIE_SKIP=a.movies or '', DS_SHOT_FINAL='1', DS_CMDFILE=cmd,
+               GTA_FAKE_PAD='0:0:0:0',   # a controller connected from the start (GTA III looks for one only then); "pad:" drives it
                GTA_MODE=a.mode, GTA_MSAA=a.msaa, D3D9_FRAMELOG_FILE=os.path.join(out, 'framelog.go'), GTA_LIGHTING=a.light, GTA_CONTROLS=a.controls, GTA_WIDESCREEN='1', GTA_FPS=a.fps)
     if a.movies: del env['GTA_NO_MOVIES']        # (any value turns them off)
     late = sum(float(v) + 1.5 for v in a.movies.split(',')) if a.movies else 0   # the movies' time: the intro's steps after them
