@@ -62,6 +62,59 @@ PLANS = {
         ('Grove Street rain at night', ['cheat:AUIFRVQS', 'tp:2495,-1670,14'], 12, []),
     ],
     'sa-tp': [('before', [], 2, []), ('downtown Los Santos', ['tp:1480,-1730,14'], 10, []), ('Santa Maria beach', ['tp:370,-1900,8'], 10, [])],
+    # round 2: weather set directly (gta:weather), the player's vehicle driven fast (gta:vspeed), set on fire and blown up
+    # (gta:vhealth); peek checks the vehicle's health offset (1000.0 = 0x447a0000)
+    'vc-round2': [
+        ('start (in the Admiral)', ['peek:949d30,3a8,204'], 3, []),
+        ('hurricane', ['gta:weather,5'], 8, []),
+        ('rain', ['gta:weather,2'], 6, []),
+        ('fog', ['gta:weather,3'], 6, []),
+        ('extra sunny noon', ['gta:weather,4', hold((0xa0fb75, 12))], 6, []),
+        ('driving fast (trails)', ['gta:vspeed,0.7,240'], 2, []),
+        ('engine on fire', ['gta:vhealth,200'], 4, []),
+        ('explosion', ['gta:vhealth,0'], 3, []),
+        ('after the explosion', [], 4, []),
+        ('night', [hold((0xa0fb75, 23))], 6, []),
+    ],
+    'gta3-round2': [
+        ('start', [], 2, []),
+        ('in the car', ['key:70'], 4, ['peek:952628,310,200']),
+        ('rain', ['gta:weather,2'], 6, []),
+        ('fog', ['gta:weather,3'], 6, []),
+        ('sunny noon', ['gta:weather,0', hold((0x96e0df, 12))], 6, []),
+        ('driving fast', ['gta:vspeed,0.7,240'], 2, []),
+        ('engine on fire', ['gta:vhealth,200'], 4, []),
+        ('explosion', ['gta:vhealth,0'], 3, []),
+        ('after the explosion', [], 4, []),
+        ('night', [hold((0x96e0df, 23))], 6, []),
+    ],
+    'sa-round2': [
+        ('start', [], 2, []),
+        ('a car (cheat)', ['cheat:CQZIJMB'], 3, []),
+        ('in the car', ['key:70'], 4, ['peek:b64788,58c,4c0']),
+        ('rain', ['gta:weather,8'], 8, []),
+        ('fog', ['gta:weather,9'], 8, []),
+        ('sandstorm', ['gta:weather,19'], 8, []),
+        ('extra sunny noon', ['gta:weather,0', hold((SA_HOUR, 13))], 8, []),
+        ('driving fast (speed blur)', ['gta:vspeed,0.8,300'], 2, []),
+        ('engine on fire', ['gta:vhealth,200'], 4, []),
+        ('explosion', ['gta:vhealth,0'], 3, []),
+        ('after the explosion', [], 4, []),
+        ('beach and sea', ['tp:330,-1960,4'], 10, []),
+        ('night by the sea', [hold((SA_HOUR, 23))], 6, []),
+    ],
+    'gta3-veh-find': [('in the car', ['key:70'], 5, ['peek:952628,310', 'dump:3b0b0e0,400,{out}/veh.bin'])],
+    'gta3-fire': [('in the car', ['key:70'], 5, []), ('sunny noon', ['gta:weather,0', hold((0x96e0df, 12))], 4, []),
+                  ('engine fire (parked)', ['gta:vhealth,200'], 3, []), ('engine fire later', [], 3, []), ('explosion', ['gta:vhealth,0'], 2, [])],
+    'vc-fire': [('start', [], 2, []), ('sunny noon', ['gta:weather,0', hold((0xa0fb75, 12))], 4, []),
+                ('engine fire (parked)', ['gta:vhealth,200'], 3, []), ('engine fire later', [], 3, []), ('explosion', ['gta:vhealth,0'], 2, [])],
+    'sa-speed': [('Las Venturas airport', ['gta:weather,0', hold((SA_HOUR, 13)), 'tp:1477,1500,11'], 8, []),
+                 ('a car (cheat)', ['cheat:CQZIJMB'], 3, []), ('in the car', ['key:70'], 4, ['peek:b64788,58c,4c0']),
+                 ('driving fast (speed blur)', ['gta:vspeed,0.8,400'], 2, ['framelog']), ('still fast', [], 1, []),
+                 ('engine on fire', ['gta:vhealth,200'], 3, []), ('explosion', ['gta:vhealth,0'], 2, []), ('after', [], 3, [])],
+    # finding the weather: memory around the clock before and after a weather cheat
+    'vc-weather-find': [('before', ['dump:a0e000,3000,{out}/before.bin'], 2, []), ('rain', ['cheat:CATSANDDOGS'], 3, ['dump:a0e000,3000,{out}/after.bin'])],
+    'gta3-weather-find': [('before', ['dump:96c000,4000,{out}/before.bin'], 2, []), ('rain', ['cheat:ILOVESCOTLAND'], 3, ['dump:96c000,4000,{out}/after.bin'])],
     'sa-haze': [('noon very sunny', ['cheat:ICIKPYH', hold((SA_HOUR, 13))], 12, ['framelog']), ('after', [], 3, [])],
     # Vice City: CClock hours 0xa0fb75; weather cheats
     'vc-effects': [
@@ -117,7 +170,7 @@ def main():
                     with open(cmd, 'a') as f: f.write('key:%d\n' % ord(ch))
                     time.sleep(0.3)
             else:
-                with open(cmd, 'a') as f: f.write(l + '\n')
+                with open(cmd, 'a') as f: f.write(l.replace('{out}', out) + '\n')
     for t, c in INTRO[a.game]:
         at(t)
         if c: send(c)
