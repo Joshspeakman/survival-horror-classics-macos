@@ -304,6 +304,7 @@ static void resolve(DSRRenderer *r, Surf *s)   /* a multisampled surface's pictu
 {
     if (!s || !s->ms || !s->ms_dirty) return;
     end_enc(r);                                        /* its open pass resolves it as it ends */
+    if (s->ms_tile) { s->ms_dirty = 0; return; }       /* memoryless samples can't be loaded: only a pass of its own resolves them */
     if (!s->ms_dirty) return;
     prof_cut(r, "resolve");
     MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -409,7 +410,7 @@ static void surface_create(DSRRenderer *r, const uint32_t *p, uint32_t size)
     uint32_t id = p[0], w = p[1], h = p[2], kind = p[3], fmt = p[4], parent = p[5], level = p[6];
     uint32_t face = size >= 40 ? p[8] : 0, cube = size >= 40 && (p[9] & 1);
     if (id >= MAXSURF) return;
-    Surf *s = &r->s[id]; s->tex = s->view2d = s->ms = s->auxz = s->tex_alt = nil; s->samples = 0; s->ms_tile = 0; s->used = 1; s->fxrt = 0; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id; s->slice = face;
+    Surf *s = &r->s[id]; s->tex = s->view2d = s->ms = s->auxz = s->tex_alt = nil; s->samples = 0; s->ms_tile = 0; s->ms_dirty = 0; s->used = 1; s->fxrt = 0; s->w = w; s->h = h; s->kind = kind; s->fmt = fmt; s->level = level; s->root = id; s->slice = face;
     memset(s->gen, 0, sizeof s->gen); memset(s->ok, 0, sizeof s->ok); memset(s->dropped, 0, sizeof s->dropped); memset(s->never, 0, sizeof s->never);
     if (parent && surf(r, parent)) {                       // a mip level (or another cube face): shares the root's texture
         Surf *root = surf(r, parent); s->tex = root->tex; s->root = parent;
@@ -1315,7 +1316,12 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
           Surf *t = surf(r, p[0]); if (n > 0 && r->rs[28]) { n--; fprintf(stderr, "dsr: frame %d: render target %u (%ux%u) depth %u, after %ld draws\n", dsr_frame, p[0], t ? t->w : 0, t ? t->h : 0, p[1], dsr_stat[0]); } }
         break;
     case DSR_SURFACE_CREATE: surface_create(r, p, size); break;
-    case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) { r->s[p[0]].used = 0; r->s[p[0]].tex = r->s[p[0]].ms = r->s[p[0]].auxz = r->s[p[0]].tex_alt = nil; } break;
+    case DSR_SURFACE_DESTROY: if (p[0] < MAXSURF) {   /* a pass drawing with it ends first: its store actions are set and its
+                                                         "drawn since resolved" flag can't outlive it (a new surface in the
+                                                         slot inherited it, and a resolve then loaded memoryless samples: the
+                                                         Metal driver crashed, San Andreas after a failed mission) */
+            if (r->enc && (r->enc_cid == p[0] || r->enc_rt == p[0] || r->enc_ds == p[0] || r->enc_zid == p[0])) end_enc(r);
+            r->s[p[0]].used = 0; r->s[p[0]].ms_dirty = 0; r->s[p[0]].tex = r->s[p[0]].ms = r->s[p[0]].auxz = r->s[p[0]].tex_alt = nil; } break;
     case DSR_MODE: r->dither16 = size >= 12 && p[2] == 16; break;
     case DSR_GLOW: if (size >= 8) glow(r, p[0], p[1]); break;   /* a 16-bit screen (the present dithers to 5/6/5) */
     case DSR_SURFACE_UPLOAD: surface_upload(r, p, size); break;

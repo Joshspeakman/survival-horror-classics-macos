@@ -166,6 +166,9 @@ PLANS = {
     'sa-carlook': [('airport', ['gta:weather,0', hold((SA_HOUR, 13)), 'tp:1477,1500,11'], 8, []), ('a car', ['cheat:CQZIJMB'], 3, []),
                    ('in the car', ['key:70'], 4, []), ('right stick right (1 s)', ['pad:0,0,0,1,0'], 1, ['pad:0,0,0,0,0']), ('released', [], 1, []),
         ('right stick up (1 s)', ['pad:0,0,0,0,-1'], 1, ['pad:0,0,0,0,0']), ('right stick down (1 s)', ['pad:0,0,0,0,1'], 1, ['pad:0,0,0,0,0'])],
+    'sa-fail': [('in the first mission', ['peek:b64788,540'], 3, []), ('on the bike', ['key:70'], 4, []),
+                ('wasted (mission failed)', ['gta:phealth,0'], 4, []), ('after', [], 6, []), ('respawned', [], 8, []),
+                ('wasted again', ['gta:phealth,0'], 4, []), ('after again', [], 10, [])],
     # finding the weather: memory around the clock before and after a weather cheat
     'vc-weather-find': [('before', ['dump:a0e000,3000,{out}/before.bin'], 2, []), ('rain', ['cheat:CATSANDDOGS'], 3, ['dump:a0e000,3000,{out}/after.bin'])],
     'gta3-weather-find': [('before', ['dump:96c000,4000,{out}/before.bin'], 2, []), ('rain', ['cheat:ILOVESCOTLAND'], 3, ['dump:96c000,4000,{out}/after.bin'])],
