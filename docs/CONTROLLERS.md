@@ -66,4 +66,7 @@ kept off (`GTA_CAR_ROLL=1` brings it back).
 
 How it works: the host reads the controller with Apple's GameController framework (`recomp/host/main.m`) and the
 runtime's DirectInput 8 (`recomp/runtime/win32/dinput8.c`) reports it as a gamepad that is always attached; its axes
-are signed (−32768..32767), as the games read them without setting a range. `W32_NO_PAD=1` hides it.
+are −32768..32767 until the game sets a range. The games ask DirectInput about each axis (GetObjectInfo) and then set
+it to −2000..2000, which their stick code assumes (× 0.0005, then a 0.3 dead zone); before GetObjectInfo answered, the
+sticks came in 16 times too strong, so the slightest push up or down while steering counted as a full one.
+`W32_NO_PAD=1` hides it.

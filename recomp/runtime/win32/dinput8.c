@@ -126,6 +126,18 @@ static void d_GetCapabilities(Ctx *c)                 /* DIDEVCAPS: size, flags,
     if (d->joy) rt_w32(G_MEM, p + 20, 1);                  /* one point-of-view hat */
     RET(DI_OK, 2);
 }
+/* the controller's objects: 0-5 the axes, 6-21 the buttons, 22 the hat; a DIDEVICEOBJECTINSTANCEA of each */
+static uint32_t obj_type(int k) { return k < 6 ? 2u | (uint32_t)k << 8 : k < 22 ? 4u | (uint32_t)(k - 6) << 8 : 0x10u; }   /* ABSAXIS / PSHBUTTON / POV, instance */
+static uint32_t obj_offset(int k) { return k < 6 ? 4u * (uint32_t)k : k < 22 ? 48u + (uint32_t)(k - 6) : 32u; }          /* DIJOYSTATE offsets */
+static void obj_fill(uint32_t o, uint32_t size, int k)
+{
+    int axis = k < 6, button = k >= 6 && k < 22;
+    if (size < 32 || size > 316) size = 316;
+    memset(GP(o + 4), 0, size - 4); rt_w32(G_MEM, o, size);
+    put_guid(o + 4, axis ? AXIS_GUID[k] : button ? 0xa36d02f0u : 0xa36d02f2u, 0xc9f3, 0x11cf, "\xbf\xc7\x44\x45\x53\x54\x00\x00");
+    rt_w32(G_MEM, o + 20, obj_offset(k)); rt_w32(G_MEM, o + 24, obj_type(k));
+    if (size >= 32 + 260) { if (axis) snprintf((char *)GP(o + 32), 260, "%s", AXIS_NAME[k]); else if (button) snprintf((char *)GP(o + 32), 260, "Button %d", k - 5); else snprintf((char *)GP(o + 32), 260, "Hat Switch"); }
+}
 static void d_EnumObjects(Ctx *c)                     /* (callback, ref, flags): the controller's axes, buttons and hat */
 {
     Dev *d = dev_of(c); uint32_t cb = ARG(1), ref = ARG(2), fl = ARG(3);
@@ -133,13 +145,8 @@ static void d_EnumObjects(Ctx *c)                     /* (callback, ref, flags):
     uint32_t o = heap_alloc(w32_process_heap, 8, 320);
     for (int k = 0; k < 6 + 16 + 1; k++) {
         int axis = k < 6, button = k >= 6 && k < 22;
-        uint32_t type = axis ? 2u | (uint32_t)k << 8 : button ? 4u | (uint32_t)(k - 6) << 8 : 0x10u;   /* ABSAXIS / PSHBUTTON / POV, instance */
         if (fl && !(fl & (axis ? 3u : button ? 0x0cu : 0x10u))) continue;
-        memset(GP(o), 0, 316); rt_w32(G_MEM, o, 316);
-        put_guid(o + 4, axis ? AXIS_GUID[k] : button ? 0xa36d02f0u : 0xa36d02f2u, 0xc9f3, 0x11cf, "\xbf\xc7\x44\x45\x53\x54\x00\x00");
-        rt_w32(G_MEM, o + 20, axis ? 4u * (uint32_t)k : button ? 48u + (uint32_t)(k - 6) : 32u);   /* DIJOYSTATE offsets */
-        rt_w32(G_MEM, o + 24, type);
-        if (axis) snprintf((char *)GP(o + 32), 260, "%s", AXIS_NAME[k]); else if (button) snprintf((char *)GP(o + 32), 260, "Button %d", k - 5); else snprintf((char *)GP(o + 32), 260, "Hat Switch");
+        obj_fill(o, 316, k);
         uint32_t a[2] = {o, ref};
         if (!w32_callback(c, cb, 2, a)) break;            /* DIENUM_STOP */
     }
@@ -227,7 +234,19 @@ static void d_GetDeviceData(Ctx *c)                   /* (object data size, DIDE
 static void d_SetDataFormat(Ctx *c) { Dev *d = dev_of(c); JLOG("SetDataFormat size %u data %u objects %u\n", rt_r32(G_MEM, ARG(1)), rt_r32(G_MEM, ARG(1) + 12), rt_r32(G_MEM, ARG(1) + 16)); RET(DI_OK, 2); }
 static void d_SetEventNotification(Ctx *c) { RET(DI_OK, 2); }
 static void d_SetCooperativeLevel(Ctx *c) { RET(DI_OK, 3); }
-static void d_GetObjectInfo(Ctx *c) { RET(DIERR_INVALIDPARAM, 4); }
+/* (instance, object, how): DIPH_BYOFFSET 1 or DIPH_BYID 2. The GTA games ask it of each axis and only then set its
+ * range (DIPROP_RANGE -2000..2000, which their stick code assumes: x 0.0005, then a 0.3 dead zone); without it the axes
+ * came in at -32768..32767, 16 times too strong, so the slightest push up or down while steering read as a full one. */
+static void d_GetObjectInfo(Ctx *c)
+{
+    Dev *d = dev_of(c); uint32_t o = ARG(1), obj = ARG(2), how = ARG(3);
+    if (!d->joy || !o) RET(0x80070057u, 4);                                       /* DIERR_INVALIDPARAM */
+    for (int k = 0; k < 23; k++)
+        if ((how == 1 && obj == obj_offset(k)) || (how == 2 && (obj & 0xffff1fu) == obj_type(k))) {
+            obj_fill(o, rt_r32(G_MEM, o), k); JLOG("GetObjectInfo %u how %u: object %d\n", obj, how, k); RET(DI_OK, 4);
+        }
+    RET(0x80070002u, 4);                                                               /* DIERR_OBJECTNOTFOUND */
+}
 static void d_GetDeviceInfo(Ctx *c)                   /* DIDEVICEINSTANCEA: size, instance and product GUIDs, type, names */
 {
     Dev *d = dev_of(c); uint32_t p = ARG(1), n = rt_r32(G_MEM, p);
