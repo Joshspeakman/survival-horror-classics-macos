@@ -72,7 +72,9 @@ The intro movies (`movies/Logo.mpg`, `GTAtitles.mpg`: MPEG-1 with MP2 sound) are
 in a layer over the game's picture (`host/main.m` `gta_movie_play`). The Mac releases of GTA III and San Andreas ask
 TransGaming's wrapper for `TGPlayIntros` (user32) before they make their window; the runtime provides it
 (`gta_imports.c`) and the host shows the movies in a window of their own, where a key, a click or a pad button skips
-one. Vice City, the Windows release, plays them through DirectShow (`dshow.c`), which completes the graph when the movie
+one. Those games still look for their own DirectShow graph when they are made active while their state is a movie's
+(their window procedures call its IMediaControl unchecked), so activation that arrives then waits until the state moves
+on (`gta3_mode.c` `gta_hold_message`): skipping the intros a few seconds in crashed San Andreas. Vice City, the Windows release, plays them through DirectShow (`dshow.c`), which completes the graph when the movie
 ends or is stopped (it skips them itself when the app isn't in front). `GTA_NO_MOVIES=1` skips them.
 
 ## Checking

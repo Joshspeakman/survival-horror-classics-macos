@@ -2,6 +2,7 @@
  * game relies on. A host backend (macOS window, input) attaches through the w32_host_* hooks; without one (the
  * harness) everything stays headless and deterministic. */
 #include "w32.h"
+#include "edition.h"
 #include <unistd.h>
 #include <time.h>
 #include "../platform.h"
@@ -413,12 +414,17 @@ IMPL(user32, PostMessageA) { Win *w = W(ARG(0)); (void)w; w32_post(w32_tid(c), A
 IMPL(user32, SendMessageA) { RET(send(c, ARG(0), ARG(1), ARG(2), ARG(3)), 4); }
 IMPL(user32, PostQuitMessage) { pthread_mutex_lock(&qlock); Queue *q = Q(w32_tid(c)); q->quit = 1; q->quit_code = ARG(0); pthread_mutex_unlock(&qlock); RET(0, 1); }
 IMPL(user32, TranslateMessage) { RET(0, 1); }
+static int log_all(void) { static int v = -1; if (v < 0) { const char *e = getenv("W32_MSGLOG"); v = e && atoi(e) >= 2; } return v; }   /* W32_MSGLOG=2: every message */
 IMPL(user32, DispatchMessageA)
 {
     uint32_t m = ARG(0), hwnd = rt_r32(G_MEM, m), msg = rt_r32(G_MEM, m + 4);
     Win *w = W(hwnd);
     { static int log = -1; if (log < 0) log = getenv("W32_MSGLOG") != 0;    /* input messages the game dispatches */
-      if (log && ((msg >= 0x100 && msg <= 0x109) || (msg >= 0x201 && msg <= 0x20e))) fprintf(stderr, "w32: dispatch %08x msg %04x wp %x lp %x to %08x\n", hwnd, msg, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 12), w ? w->wndproc : 0); }
+      if (log && (log_all() || (msg >= 0x100 && msg <= 0x109) || (msg >= 0x201 && msg <= 0x20e))) fprintf(stderr, "w32: dispatch %08x msg %04x wp %x lp %x to %08x\n", hwnd, msg, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 12), w ? w->wndproc : 0); }
+#ifdef GTA_EDITION
+    { int gta_hold_message(uint32_t, uint32_t, uint32_t, uint32_t);   /* gta3_mode.c: activation during the intro movies, later */
+      if (gta_hold_message(hwnd, msg, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 12))) RET(0, 1); }
+#endif
     if (msg == WM_TIMER_ && rt_r32(G_MEM, m + 12)) {         /* a TIMERPROC(hwnd, WM_TIMER, id, time) */
         uint32_t a[4] = {hwnd, WM_TIMER_, rt_r32(G_MEM, m + 8), rt_r32(G_MEM, m + 16)};
         w32_callback(c, rt_r32(G_MEM, m + 12), 4, a); RET(0, 1);
@@ -703,6 +709,7 @@ uint32_t w32_top_window(void) { return active_hwnd; }
 IMPL(user32, SetTimer)                                  /* (hwnd, id, ms, proc): window timers keep their id; thread timers get one */
 {
     uint32_t hwnd = ARG(0), id = ARG(1), ms = ARG(2) < 10 ? 10 : ARG(2), proc = ARG(3), r = 0;
+    if (getenv("W32_MSGLOG")) fprintf(stderr, "w32: SetTimer(%08x, %u, %u ms, proc %08x) from %08x\n", hwnd, id, ARG(2), proc, rt_r32(G_MEM, c->esp));
     pthread_mutex_lock(&tlock);
     int k = -1;
     if (hwnd) for (int j = 0; j < 64; j++) if (timers[j].ms && timers[j].hwnd == hwnd && timers[j].id == id) k = j;
