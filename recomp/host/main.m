@@ -1,7 +1,7 @@
-// DungeonSiegeNative: the recompiled game as a native macOS app. The game runs on its own thread (recompiled code +
+// The host: the recompiled game as a native macOS app. The game runs on its own thread (recompiled code +
 // Win32 layer); this file provides the window, the Metal renderer consuming the game's D3D7 command stream in-process
 // (src/renderer), and input (mouse/keyboard -> Windows messages and key state, relative mouse like the original).
-//   DungeonSiegeNative --exe <DungeonSiege.exe> --game <game folder> --data <folder for C: and saved files>
+//   <app binary> --exe <game exe> --game <game folder> --data <folder for C: and saved files>
 #include <pwd.h>
 #include <sandbox.h>
 #include <spawn.h>
@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <mach/mach_time.h>
+#include <mach/mach.h>
 #import "../../src/renderer/renderer.h"
 #include "../../src/dsr/dsr_proto.h"
 #include "../../src/dsr/dsr_shm.h"
@@ -63,7 +64,7 @@ static void note_display(NSScreen *s)
     double hz = (double)s.maximumFramesPerSecond;
     CGDisplayModeRef m = CGDisplayCopyDisplayMode([s.deviceDescription[@"NSScreenNumber"] unsignedIntValue]);
     if (m) { double r = CGDisplayModeGetRefreshRate(m); if (r > 0 && fabs(r - hz) < 1) hz = r; CGDisplayModeRelease(m); }
-    if (hz > 0 && hz != dsr_display_hz) { dsr_display_hz = hz; fprintf(stderr, "DungeonSiegeNative: display %.2f Hz\n", hz); }
+    if (hz > 0 && hz != dsr_display_hz) { dsr_display_hz = hz; fprintf(stderr, "host: display %.2f Hz\n", hz); }
 }
 void w32_crash_init(const char *data_dir, const char *build); void w32_crash_thread(const char *name);
 void w32_crash_heartbeat(int which); const char *w32_crash_last_path(void);
@@ -104,10 +105,12 @@ static void *render_thread(void *arg)
                             double gsum = 0, gmax = 0; int gn = 0;   // frames whose command buffers have completed (two behind)
                             for (int k = (int)f0 - 2; k < dsr_frame - 2; k++) if (k >= 0 && k < 100000) { gsum += dsr_gpu_ms[k]; if (dsr_gpu_ms[k] > gmax) gmax = dsr_gpu_ms[k]; gn++; }
                             pthread_mutex_lock(&shown_lock); int sn = shown_n; double sg = shown_gap; shown_n = 0; shown_gap = 0; pthread_mutex_unlock(&shown_lock);
-                            fprintf(stderr, "DungeonSiegeNative: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms; "
-                                    "on screen %.1f fps, longest %.1f ms\n",
+                            extern _Atomic int64_t w32_heap_bytes; struct mach_task_basic_info ti; mach_msg_type_number_t tn = MACH_TASK_BASIC_INFO_COUNT;
+                            double rss = task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&ti, &tn) == KERN_SUCCESS ? ti.resident_size / 1048576.0 : 0;
+                            fprintf(stderr, "host: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms; "
+                                    "on screen %.1f fps, longest %.1f ms; heap %.1f MB, rss %.0f MB\n",
                                     fno, w, h, (fno - f0) / (now - t0), dsr_stat[0], dsr_stat[1], dsr_stat[2], dsr_stat[3], dsr_stat[4],
-                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes, sn / (now - t0), sg * 1000);
+                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes, sn / (now - t0), sg * 1000, w32_heap_bytes / 1048576.0, rss);
                             t0 = now; f0 = fno; worst = 0; spikes = 0; }
                     }
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
@@ -138,8 +141,8 @@ static void *render_thread(void *arg)
                                 NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
                                 [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[NSString stringWithUTF8String:shot_path] atomically:YES];
                                 CGImageRelease(img); CGContextRelease(cg); CGColorSpaceRelease(cs); free(px);
-                                fprintf(stderr, "DungeonSiegeNative: frame %u saved to %s\n", fno, shot_path);
-                            } else if (tex) fprintf(stderr, "DungeonSiegeNative: screenshot: unexpected pixel format %lu\n", (unsigned long)tex.pixelFormat);
+                                fprintf(stderr, "host: frame %u saved to %s\n", fno, shot_path);
+                            } else if (tex) fprintf(stderr, "host: screenshot: unexpected pixel format %lu\n", (unsigned long)tex.pixelFormat);
                         }
                     }
                     static int bench = -1; if (bench < 0) bench = test_mode && getenv("DS_BENCH") && atoi(getenv("DS_BENCH")) > 0;
@@ -244,7 +247,7 @@ static void cmdfile_poll(uint32_t fno)
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
         if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp") || !strcmp(kind, "dump") || !strcmp(kind, "gta") || !strcmp(kind, "pad"))
             snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
-        nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
+        nacts++; fprintf(stderr, "host: command %s\n", line);
     }
     fclose(f);
 }
@@ -291,7 +294,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
                 else if (!strcmp(a->kind, "pin")) { int k = 0; while (k < nholds && holds[k].addr != ad) k++; if (k < 64) { holds[k].addr = ad; holds[k].v = (uint8_t)v; if (k == nholds) nholds++; } }
                 else for (int k = 0; k < nholds; k++) if (holds[k].addr == ad) holds[k] = holds[--nholds];
             }
-            fprintf(stderr, "DungeonSiegeNative: %s %s\n", a->kind, a->path);
+            fprintf(stderr, "host: %s %s\n", a->kind, a->path);
         }
         else if (!strcmp(a->kind, "pad") && fno == a->frame) {   /* pad:buttons(hex),lx,ly,rx,ry: the test controller from now on */
             unsigned bb = 0; float v[4] = {0, 0, 0, 0}; sscanf(a->path, "%x,%f,%f,%f,%f", &bb, &v[0], &v[1], &v[2], &v[3]);
@@ -311,7 +314,7 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
-            fprintf(stderr, "DungeonSiegeNative: peek %s = 0x%08x (byte 0x%02x)\n", a->path, v, v & 0xff);
+            fprintf(stderr, "host: peek %s = 0x%08x (byte 0x%02x)\n", a->path, v, v & 0xff);
         }
         else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) w32_di_mouse_wheel(a->x > 0 ? 120 : -120), post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
         else if (!strcmp(a->kind, "type") && fno == a->frame) {   /* real NSEvents through the window (keyboard path) */
@@ -607,7 +610,7 @@ __attribute__((visibility("default"), used)) int gta_movie_play(const char *path
         movie_end_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemDidPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
         movie_fail_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
         [movie_player play];
-        fprintf(stderr, "DungeonSiegeNative: movie %s\n", p.UTF8String);
+        fprintf(stderr, "host: movie %s\n", p.UTF8String);
     });
     return 1;
 }
@@ -798,7 +801,7 @@ static void ensure_resolution(const char *drive_c)
     [lines insertObjects:add atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, add.count)]];
     [[NSFileManager defaultManager] createDirectoryAtPath:@(dir) withIntermediateDirectories:YES attributes:nil error:nil];
     [[[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"] writeToFile:@(path) atomically:YES encoding:NSISOLatin1StringEncoding error:nil];
-    fprintf(stderr, "DungeonSiegeNative: resolution %dx%d (%s)\n", w, h, path);
+    fprintf(stderr, "host: resolution %dx%d (%s)\n", w, h, path);
 }
 
 static void type_text(NSString *text)
@@ -848,7 +851,7 @@ static void *game_thread(void *arg)
 {
     (void)arg; char msg[256];
     uint32_t code = w32_run(msg, sizeof msg);
-    fprintf(stderr, "DungeonSiegeNative: game ended: %s\n", msg);
+    fprintf(stderr, "host: game ended: %s\n", msg);
     game_running = 0;
     const char *rp = !strncmp(msg, "fault", 5) ? w32_crash_last_path() : 0;
     NSString *path = rp ? @(rp) : nil;
@@ -897,7 +900,7 @@ static void sbx_quote(char *out, size_t cap, const char *path)       /* a resolv
 }
 static void enter_sandbox(const char *exe, const char *game, const char *data, const char *bin)
 {
-    if (getenv("DF_NO_SANDBOX") && atoi(getenv("DF_NO_SANDBOX"))) { fprintf(stderr, "DungeonSiegeNative: no sandbox (DF_NO_SANDBOX)\n"); return; }
+    if (getenv("DF_NO_SANDBOX") && atoi(getenv("DF_NO_SANDBOX"))) { fprintf(stderr, "host: no sandbox (DF_NO_SANDBOX)\n"); return; }
     char exedir[PATH_MAX]; snprintf(exedir, sizeof exedir, "%s", exe); char *sl = strrchr(exedir, '/'); if (sl) *sl = 0; else snprintf(exedir, sizeof exedir, ".");
     char appdir[PATH_MAX]; snprintf(appdir, sizeof appdir, "%s/..", bin);   /* the .app's Contents (or the build's app folder's parent) */
     const char *home = getenv("HOME"); struct passwd *pw = getpwuid(getuid()); if (pw && pw->pw_dir) home = pw->pw_dir;
@@ -918,9 +921,9 @@ static void enter_sandbox(const char *exe, const char *game, const char *data, c
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"          /* the documented call; still what the system uses */
     int bad = sandbox_init(prof, 0, &err);
 #pragma clang diagnostic pop
-    if (bad) { fprintf(stderr, "DungeonSiegeNative: sandbox not applied: %s\n", err ? err : "?"); return; }
+    if (bad) { fprintf(stderr, "host: sandbox not applied: %s\n", err ? err : "?"); return; }
     sandboxed = 1;
-    fprintf(stderr, "DungeonSiegeNative: sandboxed (reads the game, program and data folders; writes the data folder)\n");
+    fprintf(stderr, "host: sandboxed (reads the game, program and data folders; writes the data folder)\n");
 }
 #endif
 
@@ -968,7 +971,7 @@ int main(int argc, char **argv)
 #if defined(DF_EDITION) || defined(GTA_EDITION)
         if (!exe && !game && !data) bundle_launch(argv[0], &exe, &game, &data);
 #endif
-        if (!exe || !game || !data) { fprintf(stderr, "usage: DungeonSiegeNative --exe <DungeonSiege2.exe> --game <game folder> --data <data folder>\n"); return 1; }
+        if (!exe || !game || !data) { fprintf(stderr, "usage: %s --exe <game exe> --game <game folder> --data <data folder>\n", argv[0]); return 1; }
         NSString *bin = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
         snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s/dsr_snapshot.bin", bin.UTF8String);
         char drive_c[1024], overlay[1024];
@@ -1023,7 +1026,7 @@ int main(int argc, char **argv)
         H = m; ring = (uint8_t *)m + DSR_HEADER_SIZE; H->magic = DSR_SHM_MAGIC; H->version = 1;
         dsr_attach_consumer(H);
         w32_host_window_created = window_created; w32_host_window_changed = window_changed;
-        if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "DungeonSiegeNative: cannot load %s\n", exe); return 1; }
+        if (w32_prepare(exe, game, drive_c, overlay)) { fprintf(stderr, "host: cannot load %s\n", exe); return 1; }
         if (!test_mode) report_from_last_session(data);
 #ifdef DF_EDITION
         enter_sandbox(exe, game, data, bin.UTF8String);

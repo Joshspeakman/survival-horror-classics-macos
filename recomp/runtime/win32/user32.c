@@ -472,7 +472,7 @@ uint32_t w32_window_tid(uint32_t hwnd);
 IMPL(user32, SetCursorPos)
 {
     pthread_mutex_lock(&cursor_lock);
-    int dx=0,dy=0, was_x=cursor_x, was_y=cursor_y;
+    int dx=0,dy=0;
     if(cursor_relative && cursor_read.valid && cursor_read.epoch==cursor_epoch) { dx=cursor_x-cursor_read.x; dy=cursor_y-cursor_read.y; }
     cursor_x=(int)ARG(0)+dx; cursor_y=(int)ARG(1)+dy; cursor_read.valid=0; cursor_epoch++;
     { static int lg = -1; if (lg < 0) lg = getenv("DF_MOUSELOG") != 0; if (lg) fprintf(stderr, "mouse: SetCursorPos %d,%d\n", (int)ARG(0), (int)ARG(1)); }

@@ -65,7 +65,7 @@ IMPL(kernel32, ExitThread)
 {
     thread_exit_code = ARG(0);
     if (thread_exit_jmp) longjmp(*thread_exit_jmp, 1);
-    w32_exit(c, ARG(0));                                         /* the main thread: the process ends */
+    w32_exit_how = "ExitThread on the main thread"; w32_exit(c, ARG(0));   /* the process ends */
 }
 IMPL(kernel32, ResumeThread)
 {

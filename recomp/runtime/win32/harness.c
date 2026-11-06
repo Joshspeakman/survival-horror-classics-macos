@@ -1,5 +1,6 @@
 /* Entry points for the start-up differential harness (tests/startup.py) and for running the game. */
 #include "w32.h"
+#include "edition.h"
 #include <setjmp.h>
 
 extern __thread jmp_buf *fault_jmp; extern __thread uint32_t fault_pc; extern __thread const char *fault_what;
@@ -15,7 +16,8 @@ int w32_harness_prepare(const char *exe, const char *game_dir, const char *drive
 {
     snprintf(w32_game_dir, sizeof w32_game_dir, "%s", game_dir);
     snprintf(w32_drive_c, sizeof w32_drive_c, "%s", drive_c);
-    snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s/GOG Games/Dungeon Siege", drive_c);   /* game folder stays pristine */
+    snprintf(w32_game_overlay, sizeof w32_game_overlay, "%s/%s", drive_c, &GAME_DIR_WIN[3]);   /* game folder stays pristine */
+    for (char *q = w32_game_overlay + strlen(drive_c); *q; q++) if (*q == '\\') *q = '/';
     w32_deterministic = deterministic;
     { extern char dsr_snapshot_path[1024]; const char *e = getenv("DSR_SNAPSHOT");
       snprintf(dsr_snapshot_path, sizeof dsr_snapshot_path, "%s", e ? e : ""); }

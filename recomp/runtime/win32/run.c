@@ -34,7 +34,17 @@ uint32_t w32_run(char *msg, size_t cap)
     { void w32_lab_thread(void); w32_lab_thread(); }
     jmp_buf ej, fj; w32_exit_jmp = &ej; fault_jmp = &fj;
     extern __thread Ctx *w32_cur_ctx; w32_cur_ctx = &game_ctx;
-    if (setjmp(ej)) { snprintf(msg, cap, "exit %u", w32_exit_code); return w32_exit_code; }
+    if (setjmp(ej)) {
+        const char *how = w32_exit_how ? w32_exit_how : "exit";
+        if (w32_unhandled_code && w32_exit_code == w32_unhandled_code)
+            snprintf(msg, cap, "crashed: unhandled exception %08x (%s %u)", w32_exit_code, how, w32_exit_code);
+#ifdef GTA_EDITION   /* their WinMain returns the last window message's wParam: a quit confirmed with Return is 13, with Esc 27 */
+        else snprintf(msg, cap, "the game quit (%s %u: the last key's code, not an error)", how, w32_exit_code);
+#else
+        else snprintf(msg, cap, "the game quit (%s %u)", how, w32_exit_code);
+#endif
+        return w32_exit_code;
+    }
     if (setjmp(fj)) { snprintf(msg, cap, "fault: %s at %08x", fault_what, fault_pc); return 0xc0000005u; }
     { void w32_crash_thread(const char *); w32_crash_thread("game main thread"); }
     { void w32_dbg_on_siginfo(void); w32_dbg_on_siginfo(); }          /* Ctrl-T / kill -INFO: every guest thread's stack */

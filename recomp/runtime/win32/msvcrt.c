@@ -25,7 +25,7 @@ IMPL(msvcrt, op_new) { RETC(heap_alloc(w32_process_heap, 0, ARG(0))); }         
 IMPL(msvcrt, op_delete) { if (ARG(0)) heap_free(w32_process_heap, ARG(0)); RETC(0); }      /* ??3@YAXPAX@Z */
 IMPL(msvcrt, strchr) { const char *s = GS(ARG(0)), *p = strchr(s, (int)(ARG(1) & 0xff)); RETC(p ? ARG(0) + (uint32_t)(p - s) : 0); }
 IMPL(msvcrt, strrchr) { const char *s = GS(ARG(0)), *p = strrchr(s, (int)(ARG(1) & 0xff)); RETC(p ? ARG(0) + (uint32_t)(p - s) : 0); }
-IMPL(msvcrt, exit) { w32_exit(c, ARG(0)); }
+IMPL(msvcrt, exit) { w32_exit_how = "exit"; w32_exit(c, ARG(0)); }
 
 /* _initterm(begin, end): each non-null function pointer in [begin, end), in order */
 IMPL(msvcrt, _initterm)

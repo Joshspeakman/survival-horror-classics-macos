@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""symbolize-report.py <report.txt> [DungeonSiegeNative binary]: map a crash/hang report's host addresses onto exact x86
+"""symbolize-report.py <report.txt> [binary]: map a crash/hang report's host addresses onto exact x86
 instructions (the recompiled code carries `#line <x86 address>` debug info; atos reads it from the build's object
 files, so run this on the machine that built the app)."""
 import re, subprocess, sys, os
 rep = open(sys.argv[1]).read()
-binary = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser('~/Applications/Dungeon Siege Native.app/Contents/MacOS/DungeonSiegeNative')
-m = re.search(r'HOST ADDRESSES \(load address (0x[0-9a-f]+)', rep)
+m = re.search(r'HOST ADDRESSES \(load address (0x[0-9a-f]+)(?:, slide [^,]*, binary ([^)]*))?', rep)   # the report names the binary
+binary = sys.argv[2] if len(sys.argv) > 2 else (m.group(2) if m and m.group(2) else None)
+if not binary: sys.exit('which binary? (the report does not name it): symbolize-report.py <report> <binary>')
 if not m: sys.exit('no HOST ADDRESSES section')
 load = m.group(1)
 sec = rep[m.end():].split('\n\n')[0]

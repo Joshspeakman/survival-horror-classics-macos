@@ -1,6 +1,7 @@
 /* KERNEL32 core: version, modules, environment, TLS, heaps, virtual memory, critical sections, interlocked, time,
  * synchronisation objects, handles, process control. */
 #include "w32.h"
+#include "edition.h"
 #include "thread_state.h"
 
 #include <unistd.h>
@@ -112,7 +113,7 @@ IMPL(kernel32, GetModuleFileNameA)
 {
     uint32_t h = ARG(0), buf = ARG(1), cap = ARG(2);
     char path[512]; const char *img = w32_image_name(h);
-    if (img) { snprintf(path, sizeof path, "C:\\GOG Games\\Dungeon Siege\\%s", img); for (char *p = path; *p; p++) if (*p == '/') *p = '\\'; }
+    if (img) { snprintf(path, sizeof path, GAME_DIR_WIN "\\%s", img); for (char *p = path; *p; p++) if (*p == '/') *p = '\\'; }
     const char *s = (!h || h == w32_image_base) ? GS(w32_modname_a) : img ? path : "C:\\Windows\\system32\\unknown.dll";
     uint32_t n = (uint32_t)strlen(s);
     if (!cap) RET(0, 3);
@@ -500,12 +501,13 @@ IMPL(kernel32, ExitProcess)
 {
     if (getenv("W32_EXITLOG")) {                       /* who ended the game: the stack's code addresses */
         fprintf(stderr, "w32: ExitProcess(%u) from", ARG(0));
-        for (uint32_t k = 0; k < 64; k++) { uint32_t v = rt_r32(G_MEM, c->esp + 4 * k); if (v >= 0x401000u && v < 0x5f5000u) fprintf(stderr, " %08x", v); }
+        int w32_code_address(uint32_t);                  /* crash.c: in a loaded image's recompiled code (the exe's or a DLL's) */
+        for (uint32_t k = 0; k < 64; k++) { uint32_t v = rt_r32(G_MEM, c->esp + 4 * k); if (w32_code_address(v)) fprintf(stderr, " %08x", v); }
         fprintf(stderr, "\n");
     }
-    w32_exit(c, ARG(0));
+    w32_exit_how = "ExitProcess"; w32_exit(c, ARG(0));
 }
-IMPL(kernel32, TerminateProcess) { if (ARG(0) == 0xffffffffu) w32_exit(c, ARG(1)); RET(0, 2); }
+IMPL(kernel32, TerminateProcess) { if (ARG(0) == 0xffffffffu) { w32_exit_how = "TerminateProcess"; w32_exit(c, ARG(1)); } RET(0, 2); }
 static uint32_t unhandled_filter;
 IMPL(kernel32, SetUnhandledExceptionFilter) { uint32_t o = unhandled_filter; unhandled_filter = ARG(0); RET(o, 1); }
 uint32_t w32_unhandled_filter(void) { return unhandled_filter; }
@@ -513,7 +515,7 @@ IMPL(kernel32, UnhandledExceptionFilter)
 {
     /* called from the C runtime's outermost __except filter: run the game's top-level filter */
     if (unhandled_filter) { uint32_t a = ARG(0), r = w32_callback(c, unhandled_filter, 1, &a); if (r == 0xffffffffu) RET(r, 1); }
-    uint32_t rec = rt_r32(G_MEM, ARG(0));
+    uint32_t rec = rt_r32(G_MEM, ARG(0)); w32_unhandled_code = rt_r32(G_MEM, rec);
     fprintf(stderr, "recomp: unhandled exception %08x at %08x (info %08x %08x), thread %x\n", rt_r32(G_MEM, rec), rt_r32(G_MEM, rec + 12),
             rt_r32(G_MEM, rec + 20), rt_r32(G_MEM, rec + 24), w32_tid(c));
     {   /* the game is about to stop: leave a crash report with every thread's stack */

@@ -34,10 +34,12 @@ mkdir -p "$OUT/obj/rt/mojo"
 for f in "$HERE"/third_party/mojoshader/mojoshader.c "$HERE"/third_party/mojoshader/mojoshader_common.c "$HERE"/third_party/mojoshader/profiles/*.c; do
     "$CC" "${COMPAT_FLAGS[@]}" -c -O2 -fPIC -w "${MOJO[@]}" -o "$OUT/obj/rt/mojo/$(basename "$f" .c).o" "$f"
 done
+# warnings that were real bugs fail the build (clang's names; GCC's equivalents)
+if "$CC" --version 2>/dev/null | grep -qi clang; then WERR=(-Werror=extra-tokens -Werror=unsequenced -Werror=unused-variable); else WERR=(-Werror=endif-labels -Werror=sequence-point -Werror=unused-variable); fi
 for f in "$HERE/runtime/rt.c" "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
     o="$OUT/obj/rt/$(basename "$f" .c).o"
     OPT=-O1; [[ $(basename "$f") == native.c ]] && OPT=-O3
-    "$CC" "${COMPAT_FLAGS[@]}" "${EDITION_FLAGS[@]}" -c "$OPT" -g -fPIC -D_GNU_SOURCE -ffp-contract=off -fno-strict-aliasing -Wall -Wno-unused-function \
+    "$CC" "${COMPAT_FLAGS[@]}" "${EDITION_FLAGS[@]}" -c "$OPT" -g -fPIC -D_GNU_SOURCE -ffp-contract=off -fno-strict-aliasing -Wall -Wno-unused-function "${WERR[@]}" \
         -I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" -I "$HERE/third_party/vulkan/include" "${CFLAGS[@]}" -o "$o" "$f"
 done
 "$CC" -shared -o "$OUT/libgame.so" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o "${LIBS[@]}" -pthread -ldl -lm -lz
