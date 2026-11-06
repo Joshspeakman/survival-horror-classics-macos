@@ -335,8 +335,51 @@ static void teleport_now(void)
     fprintf(stderr, "gta: teleported %s to %.1f %.1f %.1f (%08x)\n", ent == ped ? "the player" : "the player's vehicle", tp_to[0], tp_to[1], tp_to[2], fn);
 #endif
 }
+/* development (test mode: the host's "gta:verb,args"): the weather now (the game's forced, new and old weather types),
+ * the player's vehicle's health (fire, explosions) and speed (held forward for some frames: the speed blur). On the game
+ * thread between frames. */
+#if defined(GTA3_EDITION)
+static const uint32_t WEATHER[3] = {0x0096dfa8u, 0x0096dfb8u, 0x0096e024u}; enum { VEH_HEALTH = 0x200, VEH_SPEED = 0x78 };
+#elif defined(GTAVC_EDITION)
+static const uint32_t WEATHER[3] = {0x00a0f974u, 0x00a0fa36u, 0x00a0fab2u}; enum { VEH_HEALTH = 0x204, VEH_SPEED = 0x70 };
+#else
+static const uint32_t WEATHER[3] = {0x00c62180u, 0x00c62184u, 0x00c62188u}; enum { VEH_HEALTH = 0x4c0, VEH_SPEED = 0x44 };
+#endif
+static char dev_cmd[128]; static volatile int dev_pending; static float dev_speed; static int dev_speed_frames;
+void gta_dev_command(const char *cmd) { snprintf(dev_cmd, sizeof dev_cmd, "%s", cmd); __atomic_store_n(&dev_pending, 1, __ATOMIC_RELEASE); }
+static uint32_t player_vehicle(void)
+{
+    uint32_t ped = rt_r32(G_MEM, PLAYERS); if (ped < 0x10000u) return 0;
+#if defined(GTASA_EDITION)
+    if (!(G_MEM[ped + PED_IN_VEHICLE] & 1)) return 0;
+#else
+    if (!G_MEM[ped + PED_IN_VEHICLE]) return 0;
+#endif
+    uint32_t v = rt_r32(G_MEM, ped + PED_VEHICLE); return v >= 0x10000u ? v : 0;
+}
+static void dev_tick(void)
+{
+    if (__atomic_exchange_n(&dev_pending, 0, __ATOMIC_ACQ_REL)) {
+        char verb[16] = ""; float a = 0, b = 0; sscanf(dev_cmd, "%15[a-z],%f,%f", verb, &a, &b);
+        uint32_t v = player_vehicle();
+        if (!strcmp(verb, "weather")) { for (int k = 0; k < 3; k++) { uint16_t w = (uint16_t)(int16_t)a; memcpy(G_MEM + WEATHER[k], &w, 2); } }
+        else if (!strcmp(verb, "vhealth") && v) wrf(v + VEH_HEALTH, a);
+        else if (!strcmp(verb, "vspeed") && v) { dev_speed = a; dev_speed_frames = b > 0 ? (int)b : 120; }
+        fprintf(stderr, "gta: dev %s%s\n", dev_cmd, (!strcmp(verb, "vhealth") || !strcmp(verb, "vspeed")) && !v ? " (not in a vehicle)" : "");
+    }
+    if (dev_speed_frames > 0) {   /* along the vehicle's forward vector */
+        uint32_t v = player_vehicle(); dev_speed_frames--; if (!v) { dev_speed_frames = 0; return; }
+#if defined(GTASA_EDITION)
+        uint32_t m = rt_r32(G_MEM, v + 0x14); if (m < 0x10000u) return; uint32_t fwd = m + 0x10;
+#else
+        uint32_t fwd = v + 0x14;
+#endif
+        for (int k = 0; k < 2; k++) { float f; memcpy(&f, G_MEM + fwd + 4 * k, 4); wrf(v + VEH_SPEED + 4 * k, f * dev_speed); }
+    }
+}
 void gta_frame_prefs(int menu)   /* each Present (d3d9.c); menu: no 3D drawn in the frame */
 {
+    dev_tick();
     teleport_now();
     static int first = 1, was_menu;
     release_held();

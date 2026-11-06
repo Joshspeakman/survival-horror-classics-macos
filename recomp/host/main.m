@@ -241,7 +241,7 @@ static void cmdfile_poll(uint32_t fno)
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
-        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp"))
+        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp") || !strcmp(kind, "dump") || !strcmp(kind, "gta"))
             snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
         nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
     }
@@ -293,10 +293,16 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
             fprintf(stderr, "DungeonSiegeNative: %s %s\n", a->kind, a->path);
         }
 #ifdef GTA_EDITION
+        else if (!strcmp(a->kind, "gta") && fno == a->frame) { extern void gta_dev_command(const char *); gta_dev_command(a->path); }   /* gta:verb,args (gta3_mode.c) */
         else if (!strcmp(a->kind, "tp") && fno == a->frame) {   /* tp:x,y,z (the GTA games): the player there (gta3_mode.c) */
             float x, y, z; if (sscanf(a->path, "%f,%f,%f", &x, &y, &z) == 3) { extern void gta_request_teleport(float, float, float); gta_request_teleport(x, y, z); }
         }
 #endif
+        else if (!strcmp(a->kind, "dump") && fno == a->frame) {   /* dump:addr,len,file: game memory into a file (finding variables) */
+            unsigned ad = 0, n = 0; char fp[400] = ""; extern uint8_t *G_MEM;
+            if (sscanf(a->path, "%x,%x,%399s", &ad, &n, fp) == 3 && ad >= 0x10000u && n <= 0x1000000u && ad + n < 0x40000000u) {
+                FILE *o = fopen(fp, "wb"); if (o) { fwrite(G_MEM + ad, 1, n, o); fclose(o); } }
+        }
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
             for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }

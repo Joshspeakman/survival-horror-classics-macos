@@ -88,7 +88,9 @@ controller (`@seconds` in place of a frame number: by time).
 Effects QA: `recomp/tools/gta_qa.py <gta3|vc|sa> <plan>` plays a game into its first scene and goes through a plan of
 scenes (weather and time by the games' own cheats, typed key by key, and the clock held; night and infrared vision by
 their flags; San Andreas teleports), a screenshot of each in `recomp/work/qa`. The command file also takes `poke:addr=byte`,
-`pin:` / `unpin:` (a byte held every frame) and `tp:x,y,z` (San Andreas: the game's own CEntity::Teleport);
+`pin:` / `unpin:` (a byte held every frame), `dump:addr,len,file`, `tp:x,y,z` (San Andreas: the game's own
+CEntity::Teleport) and `gta:weather,N` (the forced, new and old weather at once), `gta:vhealth,F` (the player's
+vehicle's health: fire below 250, an explosion at 0) and `gta:vspeed,F,frames` (driven forward: trails, speed blur);
 `GTA_POKE=addr=byte,...` holds bytes from the start; `DS_EARLY_MSG` posts window messages as the window is made.
 
 For speed: `DS_BENCH=1` shows each frame in a texture instead of the (background, compositor-paced) window, so the
