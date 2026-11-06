@@ -59,6 +59,7 @@ static void fill_caps8(uint32_t out)                   /* D3DCAPS8: the first 53
 M(d8_GetDeviceCaps, 4) fill_caps8(ARG(3)); RET(D3D_OK, 4); END
 M(d8_CreateDevice, 7) ME(D3D9, O9_D3D)                 /* (adapter, type, focus window, behaviour, present parameters, device *) */
     uint32_t pp = pp9_from8(ARG(5)); fullscreen_window(c, ARG(5), ARG(3));
+    fpu_setup(c, ARG(4), "d3d8");
     if (the_dev) { dev_reset(the_dev, pp); rt_w32(G_MEM, ARG(6), the_dev->g); the_dev->ref++; RET(D3D_OK, 7); }
     Dev9 *d = calloc(1, sizeof *d); d->ref = 1; d->g_d3d = me->g; d->hwnd = ARG(3); d->behavior = ARG(4);
     d->g = make_iface(O9_DEV, d); d->g_swap = make_iface(O9_SWAP, d); the_dev = d;

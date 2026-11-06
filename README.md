@@ -29,7 +29,8 @@ macOS; this port takes the Windows executables from inside them.
 - **PS2 lighting.** San Andreas' PS2 colour filter (the warm Los Santos look) and its radiosity glow, Vice City's PS2
   trails, and the PS2's light clamping on cars and people in all three. GTA III's own Trails work at any resolution.
 - **Every graphics option works**, in the launcher and in each game's Display Setup: resolution (any size up to the
-  display's Retina pixels), 16-bit or 32-bit colour, antialiasing (2x or 4x MSAA), draw distance, frame limiter.
+  display's Retina pixels), 16-bit or 32-bit colour, antialiasing (2x or 4x MSAA), draw distance, frame limiter; and
+  anisotropic filtering (16x), so roads and walls seen at a slant stay steady instead of shimmering.
 - **Modern controllers** out of the box (Xbox, PlayStation, Switch Pro, any MFi pad), laid out as on the PS2
   (Classic) or as the Definitive Edition's Modern scheme (triggers to drive, aim and shoot; A to pedal a bicycle, tap
   for speed).
@@ -82,7 +83,7 @@ GTA Vice City | GTA San Andreas> User Files`.
 - **Graphics Options**, kept for each game (Display and Notch for all): Display (Full Screen / Window), Notch (Below It /
   Around It), Resolution (Standard / Retina / Native, the panel's own pixels when the display is scaled / As Set in
   Game), Colour (32-Bit / 16-Bit), Widescreen (Display shape / 16:9 / Off 4:3), HUD (Corners / Centred 4:3),
-  Anti-Aliasing (Off / 2x / 4x MSAA), VSync, Frame Rate (60 / the display's rate / 30 Original), Lighting (PS2 / PC as
+  Anti-Aliasing (Off / 2x / 4x MSAA), Texture Filtering (16x / 4x anisotropic / Off as released), VSync, Frame Rate (60 / the display's rate / 30 Original), Lighting (PS2 / PC as
   released), Controls (Classic PS2 / Modern, as the Definitive Edition), Look Speed and Invert Look. The choices are
   given to the game each time it starts; what you change in a game's own Display Setup lasts for that session (choose
   *As Set in Game* to keep the game's resolution).
@@ -103,7 +104,7 @@ and the options above; they were checked with the games' own screenshots at 2054
 | Graphics | Direct3D 8 (GTA III, Vice City) and 9 (San Andreas) on Metal; the games' own vertex shaders translated to Metal (MojoShader) |
 | Sound | Miles Sound System and DirectSound on Core Audio |
 | Input | keyboard, mouse (DirectInput 8) and game controllers |
-| Frame rate | at 4112×2658 with 4x antialiasing on an M1 Pro: GTA III 120 fps, Vice City 119, San Andreas 116 (it waited 14 ms a frame of its own: about 71 before); below the display's rate, frames are shown evenly |
+| Frame rate | at 4112×2658 with 4x antialiasing on an M1 Pro: GTA III 120 fps, Vice City 120, San Andreas 115 (it waited 14 ms a frame of its own: about 71 before); below the display's rate, frames are shown evenly |
 | Movies | the intro movies play (macOS's own MPEG-1 decoder); a key, click or pad button skips them |
 | Mods | file mods; models and textures meant for the `.img` archives, and ASI/CLEO code mods, are not supported yet |
 

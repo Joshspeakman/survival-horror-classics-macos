@@ -159,7 +159,11 @@ static void *render_thread(void *arg)
                         dsr_renderer_flush(r, 0); if (!bcb) __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE);
                         continue;
                     }
-                    id<CAMetalDrawable> d = [layer nextDrawable];
+                    double nd0 = CACurrentMediaTime(); id<CAMetalDrawable> d = [layer nextDrawable];
+                    {   /* none free for long: the compositor isn't taking pictures (the window hidden: another Space in front, the
+                           display asleep, the screen locked) */
+                        double nd = CACurrentMediaTime() - nd0; static double said;
+                        if (nd > 0.25 && nd0 - said > 5) { said = nd0; fprintf(stderr, "host: the window had no picture free for %.0f ms%s\n", nd * 1000, d ? "" : " (none came: the window hidden?)"); } }
                     id<MTLCommandBuffer> cb = d ? dsr_renderer_present_to(r, d.texture) : nil;
                     if (cb) {
                         if (test_mode) [d addPresentedHandler:^(id<MTLDrawable> dr) { shown(dr.presentedTime); }];
@@ -800,6 +804,10 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeScreenNotification object:w0 queue:nil usingBlock:^(NSNotification *n) { (void)n; note_display(w0.screen); }];
         [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; note_display(w0.screen); }];
         note_display(w0.screen);
+        /* hidden (another Space or a full-screen app in front, the display asleep, the screen locked): the compositor
+         * stops taking its pictures, and the next one waits a second for one to come free (a 1-second frame, #17) */
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification object:w0 queue:nil usingBlock:^(NSNotification *n) { (void)n;
+            fprintf(stderr, "host: the window is %s\n", (w0.occlusionState & NSWindowOcclusionStateVisible) ? "shown" : "hidden"); }];
     });
 }
 static void window_changed(uint32_t hwnd, int x, int y, int w, int h, int visible)
@@ -1009,6 +1017,31 @@ static int bundle_launch(const char *argv0, const char **exe, const char **game,
 }
 #endif
 
+/* The display's idle sleep. A game played with a controller alone gives macOS no keyboard or mouse activity, so the
+ * display could go dark mid-game: while the game is the active app it is kept on (let go while another app is in
+ * front). Test runs, in the background, don't hold it (DS_KEEP_AWAKE=1 does, to check it). The display going to sleep
+ * and the screen locking are logged: then, as when the window goes to another Space, the window's next picture waits
+ * a second for one to come free (Core Animation's limit), which the game sees as one 1-second frame. */
+static void display_awake(void)
+{
+    static id act; static int force = -1;
+    if (force < 0) force = getenv("DS_KEEP_AWAKE") && atoi(getenv("DS_KEEP_AWAKE")) > 0;
+    void (^update)(void) = ^{
+        BOOL want = (NSApp.isActive && !test_mode) || force;
+        if (want && !act) { act = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityIdleDisplaySleepDisabled | NSActivityUserInitiated reason:@"playing"];
+                            fprintf(stderr, "host: the display is kept on while the game is in front\n"); }
+        else if (!want && act) { [[NSProcessInfo processInfo] endActivity:act]; act = nil; }
+    };
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter], *ws = [[NSWorkspace sharedWorkspace] notificationCenter];
+    [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; update(); }];
+    [nc addObserverForName:NSApplicationDidResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; update(); }];
+    [ws addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; fprintf(stderr, "host: the display went to sleep\n"); }];
+    [ws addObserverForName:NSWorkspaceScreensDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; fprintf(stderr, "host: the display woke\n"); }];
+    [[NSDistributedNotificationCenter defaultCenter] addObserverForName:@"com.apple.screenIsLocked" object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; fprintf(stderr, "host: the screen was locked\n"); }];
+    [[NSDistributedNotificationCenter defaultCenter] addObserverForName:@"com.apple.screenIsUnlocked" object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; fprintf(stderr, "host: the screen was unlocked\n"); }];
+    update();
+}
+
 int main(int argc, char **argv)
 {
     if (getenv("DS_LOG_FILE")) setvbuf(stderr, NULL, _IOLBF, 0);   /* a launcher sent stderr to the log: keep lines on a kill */
@@ -1067,6 +1100,7 @@ int main(int argc, char **argv)
         AppDelegate *del = [AppDelegate new]; NSApp.delegate = del;
         NSMenu *bar = [NSMenu new], *appm = [NSMenu new]; NSMenuItem *it = [NSMenuItem new]; it.submenu = appm; [bar addItem:it];
         [appm addItemWithTitle:@"Quit " DS2_TITLE action:@selector(terminate:) keyEquivalent:@"q"]; NSApp.mainMenu = bar;
+        display_awake();
 
         layer = [CAMetalLayer layer]; layer.device = MTLCreateSystemDefaultDevice(); layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         layer.framebufferOnly = YES; layer.opaque = YES; layer.contentsGravity = kCAGravityResizeAspect; layer.maximumDrawableCount = 3;
