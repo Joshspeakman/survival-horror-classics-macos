@@ -46,12 +46,13 @@ static int test_mode;                  // DS_TEST=1: ordinary background window,
 
 // ---------------------------------------------------------------- rendering
 /* test mode: frames the display actually showed (a drawable's presentedTime; 0 when it was never shown) */
-static pthread_mutex_t shown_lock = PTHREAD_MUTEX_INITIALIZER; static int shown_n; static double shown_last, shown_gap;
+static pthread_mutex_t shown_lock = PTHREAD_MUTEX_INITIALIZER; static int shown_n, shown_over; static double shown_last, shown_gap;
 static void shown(double t)
 {
     if (t <= 0) return;
     pthread_mutex_lock(&shown_lock);
     if (shown_last && t - shown_last > shown_gap) shown_gap = t - shown_last;
+    if (shown_last && t - shown_last > 0.025) shown_over++;
     shown_last = t; shown_n++;
     pthread_mutex_unlock(&shown_lock);
 }
@@ -104,13 +105,13 @@ static void *render_thread(void *arg)
                             extern long dsr_stat[8]; extern double dsr_gpu_ms[100000]; extern int dsr_frame;
                             double gsum = 0, gmax = 0; int gn = 0;   // frames whose command buffers have completed (two behind)
                             for (int k = (int)f0 - 2; k < dsr_frame - 2; k++) if (k >= 0 && k < 100000) { gsum += dsr_gpu_ms[k]; if (dsr_gpu_ms[k] > gmax) gmax = dsr_gpu_ms[k]; gn++; }
-                            pthread_mutex_lock(&shown_lock); int sn = shown_n; double sg = shown_gap; shown_n = 0; shown_gap = 0; pthread_mutex_unlock(&shown_lock);
+                            pthread_mutex_lock(&shown_lock); int sn = shown_n, so = shown_over; double sg = shown_gap; shown_n = 0; shown_gap = 0; shown_over = 0; pthread_mutex_unlock(&shown_lock);
                             extern _Atomic int64_t w32_heap_bytes; struct mach_task_basic_info ti; mach_msg_type_number_t tn = MACH_TASK_BASIC_INFO_COUNT;
                             double rss = task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&ti, &tn) == KERN_SUCCESS ? ti.resident_size / 1048576.0 : 0;
                             fprintf(stderr, "host: frame %u (%ux%u) %.1f fps; draws %ld, dropped %ld/%ld/%ld/%ld; gpu %.2f ms (max %.2f); longest frame %.1f ms, %d over 25 ms; "
-                                    "on screen %.1f fps, longest %.1f ms; heap %.1f MB, rss %.0f MB\n",
+                                    "on screen %.1f fps, longest %.1f ms, %d over 25 ms; heap %.1f MB, rss %.0f MB\n",
                                     fno, w, h, (fno - f0) / (now - t0), dsr_stat[0], dsr_stat[1], dsr_stat[2], dsr_stat[3], dsr_stat[4],
-                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes, sn / (now - t0), sg * 1000, w32_heap_bytes / 1048576.0, rss);
+                                    gn ? gsum / gn : 0, gmax, worst * 1000, spikes, sn / (now - t0), sg * 1000, so, w32_heap_bytes / 1048576.0, rss);
                             t0 = now; f0 = fno; worst = 0; spikes = 0; }
                     }
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
@@ -162,7 +163,16 @@ static void *render_thread(void *arg)
                     id<MTLCommandBuffer> cb = d ? dsr_renderer_present_to(r, d.texture) : nil;
                     if (cb) {
                         if (test_mode) [d addPresentedHandler:^(id<MTLDrawable> dr) { shown(dr.presentedTime); }];
-                        [cb presentDrawable:d]; w32_crash_heartbeat(3);
+#ifdef GTA_EDITION
+                        /* a game capped below the display's rate: each frame shown at least 1/cap after the last (whole refreshes:
+                           half a refresh less), so frames finished early or late in their interval don't show unevenly */
+                        { int gta_present_cap(void); int cap = gta_present_cap();
+                          if (cap > 0 && dsr_display_hz > cap * 1.2 && layer.displaySyncEnabled) [cb presentDrawable:d afterMinimumDuration:1.0 / cap - 0.5 / dsr_display_hz];
+                          else [cb presentDrawable:d]; }
+#else
+                        [cb presentDrawable:d];
+#endif
+                        w32_crash_heartbeat(3);
                         [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { (void)c; __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE); }];
                         dsr_renderer_flush(r, 0);
                     } else { dsr_renderer_flush(r, 0); __atomic_store_n(&H->frames_done, fno, __ATOMIC_RELEASE); }
@@ -385,6 +395,41 @@ static void key_event(uint16_t code, int down, int repeat)
 /* The launch window's display choices (host/gta3_launcher.m): DS_DISPLAY=window, DS_NOTCH=around (else below it). */
 static NSView *game_view;   /* the picture: the window's content, or under the notch's band */
 static int windowed(void) { const char *e = getenv("DS_DISPLAY"); return e && !strcmp(e, "window"); }
+/* The panel's own pixels: a scaled display mode (a MacBook Pro's "More Space", 2056 x 1329 points = 4112 x 2658 pixels)
+ * draws more pixels than the panel has (3456 x 2234) and macOS scales them down. The mode that shows the panel's pixels
+ * one to one at twice its points (macOS's default for the display), if it isn't the current one; *pw, *ph its pixels. */
+static CGDisplayModeRef native_panel_mode(CGDirectDisplayID d, size_t *pw, size_t *ph)
+{
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(d, (__bridge CFDictionaryRef)@{(__bridge id)kCGDisplayShowDuplicateLowResolutionModes: @YES});
+    if (!modes) return NULL;
+    size_t nw = 0, nh = 0; CFIndex n = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < n; i++) { CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if ((CGDisplayModeGetIOFlags(m) & 0x02000000) && CGDisplayModeGetPixelWidth(m) > nw) { nw = CGDisplayModeGetPixelWidth(m); nh = CGDisplayModeGetPixelHeight(m); } }   /* kDisplayModeNativeFlag */
+    CGDisplayModeRef cur = CGDisplayCopyDisplayMode(d), best = NULL; double cr = cur ? CGDisplayModeGetRefreshRate(cur) : 0;
+    for (CFIndex i = 0; nw && i < n; i++) { CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (CGDisplayModeGetPixelWidth(m) != nw || CGDisplayModeGetPixelHeight(m) != nh || CGDisplayModeGetWidth(m) * 2 != nw || !CGDisplayModeIsUsableForDesktopGUI(m)) continue;
+        if (!best || fabs(CGDisplayModeGetRefreshRate(m) - cr) < fabs(CGDisplayModeGetRefreshRate(best) - cr)) best = m; }
+    if (best && cur && CGDisplayModeGetPixelWidth(cur) == nw && CGDisplayModeGetPixelHeight(cur) == nh) best = NULL;   /* already one to one */
+    if (best) { CGDisplayModeRetain(best); if (pw) *pw = nw; if (ph) *ph = nh; }
+    if (cur) CGDisplayModeRelease(cur); CFRelease(modes);
+    return best;
+}
+/* The launcher's Resolution: Native: the main display in that mode while the game runs. For this app only
+ * (kCGConfigureForAppOnly): macOS puts the desktop's mode back when the game quits, however it ends. */
+static void native_panel(void)
+{
+    CGDirectDisplayID d = CGMainDisplayID(); size_t pw = 0, ph = 0; CGDisplayModeRef m = native_panel_mode(d, &pw, &ph);
+    if (!m) { fprintf(stderr, "host: Native: the display already shows its own pixels\n"); return; }
+    CGDisplayConfigRef cfg;
+    if (CGBeginDisplayConfiguration(&cfg) == kCGErrorSuccess) {
+        CGConfigureDisplayWithDisplayMode(cfg, d, m, NULL);
+        CGError e = CGCompleteDisplayConfiguration(cfg, kCGConfigureForAppOnly);
+        fprintf(stderr, "host: Native: the display in its %zux%zu mode for the game%s\n", pw, ph, e ? " (refused)" : "");
+        if (!e) for (int k = 0; k < 40 && (size_t)lround(NSScreen.mainScreen.frame.size.width * NSScreen.mainScreen.backingScaleFactor) != pw; k++)
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];   /* NSScreen catches up */
+    }
+    CGDisplayModeRelease(m);
+}
 static int notch_around(void) { const char *e = getenv("DS_NOTCH"); return e && !strcmp(e, "around"); }
 @interface GameWindow : NSWindow @end
 @implementation GameWindow
@@ -611,6 +656,12 @@ __attribute__((visibility("default"), used)) int gta_movie_play(const char *path
         movie_fail_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
         [movie_player play];
         fprintf(stderr, "host: movie %s\n", p.UTF8String);
+        if (test_mode) {   /* DS_MOVIE_SKIP="s1,s2,...": skip the nth movie that many seconds in, as a key press would (QA) */
+            static int nth; const char *e = getenv("DS_MOVIE_SKIP"); int idx = nth++; double at = -1;
+            for (int k = 0; e && *e; k++) { char *end; double v = strtod(e, &end); if (end == e) break; if (k == idx) { at = v; break; } e = *end == ',' ? end + 1 : end; if (*end != ',') break; }
+            if (at >= 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(at * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (gen == movie_gen && movie_player) { fprintf(stderr, "host: movie skipped %.1f s in (DS_MOVIE_SKIP)\n", at); movie_skip(); } });
+        }
     });
     return 1;
 }
@@ -1010,6 +1061,7 @@ int main(int argc, char **argv)
 #endif
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));
         if (test_mode) parse_script();
+        if (!test_mode && !windowed() && getenv("DS_NATIVE_PANEL") && atoi(getenv("DS_NATIVE_PANEL")) > 0) native_panel();
 
         [NSApplication sharedApplication]; [NSApp setActivationPolicy:test_mode ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
         AppDelegate *del = [AppDelegate new]; NSApp.delegate = del;
