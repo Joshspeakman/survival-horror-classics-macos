@@ -1,7 +1,7 @@
 # Graphics options
 
-Every graphics setting can be chosen in the launch window's **Graphics Options** (for every game) and changed in each
-game's own **Display Setup**. The launcher's choices are given to the game each time it starts (as environment
+Every graphics setting can be chosen in the launch window's **Graphics Options** and changed in each game's own
+**Display Setup**. The launcher keeps each row for each game (all but Display and Notch, which are about the Mac). The launcher's choices are given to the game each time it starts (as environment
 variables, listed below); what is changed in the game lasts for that session.
 
 ![San Andreas' Advanced display options](screenshots/san-andreas-display.jpg)
@@ -46,6 +46,13 @@ pixels, and every shape of the display (full height and below the notch; its sha
 picks one: *Standard* is the display's height in points (macOS scales it up), *Retina* every pixel, *As Set in Game*
 the game's saved choice.
 
+*Native* is offered when the display is in a scaled mode that draws more pixels than its panel has: a 16-inch MacBook
+Pro set to "More Space" (2056 × 1329 points) draws 4112 × 2658 pixels and macOS shrinks them to the panel's 3456 × 2234,
+42% more pixels than can be shown. With Native, while the game runs full screen the display is in the mode that shows
+the panel's own pixels one to one (1728 × 1117 points), and the game renders 3456 × 2234 (less the notch's band below
+it). The switch is made for the game alone (`kCGConfigureForAppOnly`): macOS puts the desktop's mode back when it quits,
+however it ends (`DS_NATIVE_PANEL=1`).
+
 **16-bit** modes ("x 16" in the lists, the launcher's *Colour: 16-Bit*) are drawn in 32 bits and shown as a 16-bit
 screen of the time showed them: each colour to 5, 6 and 5 bits with a 4×4 ordered dither.
 
@@ -70,14 +77,16 @@ the first minutes after an update can hitch now and then.
 
 What an M1 Pro holds at 4112×2658 with 4x antialiasing and PS2 lighting, capped at 120, driving:
 
-| | GTA III | Vice City | San Andreas |
-|---|---|---|---|
-| Before | held at 60 by the runtime's cap | 60 (43 without it) | held at 60 by the runtime's cap |
-| Now | 120 | 120 (2x: 120) | 75 |
+| | GTA III | Vice City | San Andreas | San Andreas, *Native* (3456 × 2234) |
+|---|---|---|---|---|
+| Before | held at 60 by the runtime's cap | 60 (43 without it) | held at 60 by the runtime's cap; then about 71 | |
+| Now, average | 120 | 119 | 116 | 117 |
+| Now, slowest second | 120 | 105 | 92 | 91 |
+| GPU time a frame | 4.3 ms | 6.9 ms | 9.9 ms | 6.8 ms |
 
-(Measured with the picture drawn off screen, as fast as it goes up to the cap.) San Andreas' own game code takes about
-13 ms a frame on this Mac, the same at any resolution or antialiasing, so it runs at about 75; at a 120 cap with VSync
-those frames show for one or two refreshes in turn, so *Frame Rate: 60* (kept for each game) may look steadier.
+(Measured with the picture drawn off screen, as fast as it goes up to the cap, the automatic cap off.) San Andreas' ~71
+was its own wait for 14 ms a frame (see Frame rate), not its game code; its slowest moments are now the game's own work,
+which *Native* doesn't change, though it takes a third off the GPU's time.
 
 ## Frame rate
 
@@ -92,6 +101,22 @@ fps's pace, as FusionFix's HighFPS does: millisecond timers carry their fraction
 fades), things done every 16th or 32nd frame and the HUD's flashing count 30 fps frames, particles update 30 times a
 second, and the radio station's name, the clouds' turn, the spin damping of cars and people and the objects mission
 scripts rotate and slide (gates, lifts) go by the time step.
+
+San Andreas also waited at the start of every frame (`Idle`) until 14 ms had passed since the last one, spinning on the
+timer: at most about 71 fps, and after a frame the limiter let run late, a frame that waited most of its interval, so
+its frames took 2–8 ms and 12–16 ms in turn. With the launcher's Frame Rate the limiter paces the frames and that wait
+ends at once.
+
+**Even frames.** A frame is shown when the game finishes it, and the games' frames vary; capped below the display's
+rate (60 on a 120 Hz display) each one is presented at least 1/cap after the last (whole refreshes), so none shows for
+one refresh and the next for three (`GTA_PRESENT_PACE=0` turns it off). Measured on San Andreas at 60: refresh gaps over
+25 ms fell from 1,130 to 31 in 87 s of play.
+
+**Automatic cap.** At the display's rate, a game that averages under about 100 fps at a cap of 120 for a few seconds is
+capped at 60 (shown evenly, as above), and goes back up when it would hold the full rate (`GTA_FPS_AUTO=0` never).
+
+**Waiting, not spinning.** Between frames the games spun in PeekMessage and QueryPerformanceCounter until the next one
+was due; the limiter now sleeps to a millisecond before (San Andreas at 60: 91% of a core to 62%).
 
 ## PS2 lighting
 

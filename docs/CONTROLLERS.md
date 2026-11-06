@@ -39,9 +39,15 @@ The sticks work as in today's games: the left stick moves (toward where it point
 stick turns the camera (up looks up).
 
 - **Right stick: the camera.** It drives each game's own mouse camera, a free orbit camera that also aims freely: on
-  foot in all three, and in San Andreas' vehicles (not aircraft, where the mouse would fly). GTA III and Vice City have
-  no free camera in vehicles: there the right stick looks left, right or (down) behind. Its speed:
-  `GTA_STICK_LOOK=<counts a second>` (default 1400; the games' own mouse sensitivity setting also applies).
+  foot in all three, and in San Andreas' vehicles (not aircraft, where the mouse would fly). San Andreas' own *Steer
+  with Mouse* setting is held off under Modern, since the stick reaches the game as the mouse and would steer.
+- **GTA III's and Vice City's car camera.** The PC games have no free camera in vehicles. With Modern, the right stick
+  sideways swings the camera round the car, and once it's let go the camera drifts back behind as the car moves (their
+  car camera is a "string" that is pulled along behind the car); down looks behind.
+- **Look Speed and Invert Look** (launcher rows, kept for each game): the camera's speed (Slow, Normal, Fast, Very
+  Fast: `GTA_STICK_LOOK` 900, 1400, 2000, 2800 counts a second; the games' own mouse sensitivity also applies) and up
+  and down the other way round (`GTA_STICK_INVERT=1`). Invert also applies to Classic, where GTA III's and Vice City's
+  own stick look has up looking down.
 - **Left stick: moving.** GTA III's PC controls turn the player with left and right when the mouse camera is on; with
   Modern it moves him as on the PS2, toward the stick's direction from the camera (while aiming with LT, the PC
   control keeps him facing where the camera looks). Vice City and San Andreas already move that way.
@@ -74,6 +80,9 @@ put the pause menu on a pad button.
 Vice City's car camera leans into turns by the steering times the speed. With a keyboard, which turns the wheel a little
 at a time, the lean stays slight; a stick is at full lock at once, so the camera banked hard in every turn. The lean is
 kept off (`GTA_CAR_ROLL=1` brings it back).
+
+Rumble: the PC games never ask DirectInput for force feedback (those calls are logged once if one ever does), so the
+controllers don't rumble.
 
 How it works: the host reads the controller with Apple's GameController framework (`recomp/host/main.m`) and the
 runtime's DirectInput 8 (`recomp/runtime/win32/dinput8.c`) reports it as a gamepad that is always attached; its axes
