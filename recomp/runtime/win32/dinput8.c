@@ -82,11 +82,13 @@ uint32_t gta_pad_layout(uint32_t buttons);   /* gta3_mode.c: the launcher's Cont
 #endif
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov)
 {
+    float axes[6]; memcpy(axes, ax, sizeof axes);
 #ifdef GTA_EDITION
     buttons = gta_pad_layout(buttons);
+    { uint32_t gta_pad_axes(float a[6]); buttons |= gta_pad_axes(axes); }   /* Modern: the right stick as the mouse camera (or looks) */
 #endif
     pthread_mutex_lock(&di_lock);
-    pad.connected = connected; memcpy(pad.ax, ax, sizeof pad.ax); pad.buttons = buttons; pad.pov = pov;
+    pad.connected = connected; memcpy(pad.ax, axes, sizeof pad.ax); pad.buttons = buttons; pad.pov = pov;
     pthread_mutex_unlock(&di_lock);
 }
 static void put_guid(uint32_t at, uint32_t d1, uint16_t d2, uint16_t d3, const char *d4)

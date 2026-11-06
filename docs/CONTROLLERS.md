@@ -35,6 +35,17 @@ pad, so each button is given the PS2 button its action is on, by where the playe
 bicycle or in an aircraft (San Andreas), read from the game (the player's in-vehicle flag and vehicle class). Menus keep
 the PS2's layout.
 
+The sticks work as in today's games: the left stick moves (toward where it points, seen from the camera) and the right
+stick turns the camera (up looks up).
+
+- **Right stick: the camera.** It drives each game's own mouse camera, a free orbit camera that also aims freely: on
+  foot in all three, and in San Andreas' vehicles (not aircraft, where the mouse would fly). GTA III and Vice City have
+  no free camera in vehicles: there the right stick looks left, right or (down) behind. Its speed:
+  `GTA_STICK_LOOK=<counts a second>` (default 1400; the games' own mouse sensitivity setting also applies).
+- **Left stick: moving.** GTA III's PC controls turn the player with left and right when the mouse camera is on; with
+  Modern it moves him as on the PS2, toward the stick's direction from the camera (while aiming with LT, the PC
+  control keeps him facing where the camera looks). Vice City and San Andreas already move that way.
+
 | Controller | On foot | Cars, motorbikes, boats | Bicycles (San Andreas) | Aircraft (San Andreas) |
 |---|---|---|---|---|
 | RT | attack | accelerate | — | ascend, thrust |

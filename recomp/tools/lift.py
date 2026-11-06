@@ -204,6 +204,7 @@ def df_moved(features, edition):
 GTA3_HOOKS = {
     0x00583be3: 'WinMain frame limiter: the time since the last frame due, by a steady clock (gta3_mode.c LIMIT_TEST)',
     0x00583bff: 'WinMain frame limiter: a frame runs, the next one due an interval later (LIMIT_RUN)',
+    0x004f0bca: 'CPlayerPed::ProcessControl: Modern controls move on foot as on the PS2 (PlayerControlZelda) with the mouse camera',
     0x005829f8: 'psSelectDevice: the launch window\'s video mode (GTA_MODE) before the saved one is read',
     0x0040604a: 'CdStreamSync: the wait for a read, without the lost-release hang (gta3_mode.c cd_sync_wait)',
     0x00527b00: 'CameraSize: Hor+ widescreen view window (gta3_mode.c camera_size)',

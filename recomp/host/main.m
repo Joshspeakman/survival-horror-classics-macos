@@ -174,7 +174,8 @@ static void *render_thread(void *arg)
 // DS_SCRIPT="1900:click:400,150;2100:shot:/tmp/a.png;2200:key:13" : at a presented frame, act through the same message
 // path as real input. Coordinates are in the game's current display mode.
 typedef struct { uint32_t frame; double at; char kind[8]; int x, y; char path[512]; } Act;   // at > 0: seconds from start
-static struct { uint32_t addr; uint8_t v; } holds[64]; static int nholds;   /* "pin:" (DS_CMDFILE): bytes kept in game memory */
+static struct { uint32_t addr; uint8_t v; } holds[64]; static int nholds;
+static volatile int fake_pad_set; static uint32_t fake_pad[1]; static float fake_pad_ax[4];   /* "pad:buttons(hex),lx,ly,rx,ry" */   /* "pin:" (DS_CMDFILE): bytes kept in game memory */
 static Act acts[2048]; static int nacts;
 static double vcur_x, vcur_y;          // virtual cursor in game (display mode) pixels
 static void post(uint32_t msg, uint32_t wp, uint32_t lp);
@@ -241,7 +242,7 @@ static void cmdfile_poll(uint32_t fno)
         Act *a = &acts[nacts]; char kind[8] = "", rest[600] = "";
         if (sscanf(line, "%7[a-z]:%599[^\n]", kind, rest) < 1 || !kind[0]) continue;
         memset(a, 0, sizeof *a); a->frame = fno + 1; snprintf(a->kind, sizeof a->kind, "%s", kind);
-        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp") || !strcmp(kind, "dump") || !strcmp(kind, "gta"))
+        if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp") || !strcmp(kind, "dump") || !strcmp(kind, "gta") || !strcmp(kind, "pad"))
             snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
         nacts++; fprintf(stderr, "DungeonSiegeNative: command %s\n", line);
     }
@@ -291,6 +292,10 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
                 else for (int k = 0; k < nholds; k++) if (holds[k].addr == ad) holds[k] = holds[--nholds];
             }
             fprintf(stderr, "DungeonSiegeNative: %s %s\n", a->kind, a->path);
+        }
+        else if (!strcmp(a->kind, "pad") && fno == a->frame) {   /* pad:buttons(hex),lx,ly,rx,ry: the test controller from now on */
+            unsigned bb = 0; float v[4] = {0, 0, 0, 0}; sscanf(a->path, "%x,%f,%f,%f,%f", &bb, &v[0], &v[1], &v[2], &v[3]);
+            fake_pad[0] = bb; memcpy(fake_pad_ax, v, sizeof v); fake_pad_set = 1;
         }
 #ifdef GTA_EDITION
         else if (!strcmp(a->kind, "gta") && fno == a->frame) { extern void gta_dev_command(const char *); gta_dev_command(a->path); }   /* gta:verb,args (gta3_mode.c) */
@@ -659,6 +664,8 @@ static void gta_pad_start(void)
                           if (n >= 4 && (tok[0] == '@' ? secs >= at : now >= at)) { b = bb; ax[0] = lx; ax[1] = ly; ax[2] = ax[3] = rx; ax[5] = ax[4] = ry; } tok = strtok_r(0, ";", &save); }
             free(e);
         }
+        if (test_mode && fake_pad_set) { connected = 1; memset(ax, 0, sizeof ax); b = fake_pad[0];   /* "pad:" (DS_CMDFILE) */
+                                         ax[0] = fake_pad_ax[0]; ax[1] = fake_pad_ax[1]; ax[2] = ax[3] = fake_pad_ax[2]; ax[5] = ax[4] = fake_pad_ax[3]; }
         w32_di_pad(connected, ax, b, pov);
         if (menu != menu_was) { gta_pad_key(0x1b, menu); menu_was = menu; }
     });
