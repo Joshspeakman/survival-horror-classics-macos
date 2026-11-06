@@ -1588,7 +1588,8 @@ static void fill_caps(uint32_t out)                    /* D3DCAPS9: a Radeon 850
     v[22] = v[23] = 4096; v[24] = 512;
 #ifdef GTA_EDITION
     v[22] = v[23] = 16384;   /* the Trails' copy of the screen is a texture the next power of two up: 8192 at Retina sizes */
-#endif v[25] = 8192; v[26] = 4096; v[27] = 16;
+#endif
+    v[25] = 8192; v[26] = 4096; v[27] = 16;   /* MaxTextureRepeat, MaxTextureAspectRatio, MaxAnisotropy */
     memcpy(&v[28], &(float){1e10f}, 4); memcpy(&v[29], &(float){-1e8f}, 4); memcpy(&v[30], &(float){-1e8f}, 4); memcpy(&v[31], &(float){1e8f}, 4); memcpy(&v[32], &(float){1e8f}, 4);
     v[34] = 0x1ff; v[35] = 0x80000 | 8; v[36] = 0x3fffffff; v[37] = 8; v[38] = 8; v[39] = 0x1 | 0x2 | 0x8 | 0x10 | 0x20;
     v[40] = 8; v[41] = 6; v[42] = 4; v[43] = 0; memcpy(&v[44], &(float){256.0f}, 4); v[45] = 0xfffff; v[46] = 0xfffff; v[47] = 16; v[48] = 255;

@@ -121,7 +121,7 @@ IMPL(kernel32, OutputDebugStringW)
     RET(0, 1);
 }
 
-IMPL(kernel32, FatalAppExitA) { fprintf(stderr, "w32: FatalAppExit: %s\n", ARG(1) ? GS(ARG(1)) : ""); w32_exit(c, 1); }
+IMPL(kernel32, FatalAppExitA) { fprintf(stderr, "w32: FatalAppExit: %s\n", ARG(1) ? GS(ARG(1)) : ""); w32_exit_how = "FatalAppExit"; w32_exit(c, 1); }
 IMPL(kernel32, GetConsoleScreenBufferInfo) { w32_set_last_error(c, 6); RET(0, 2); }
 IMPL(kernel32, SetConsoleCtrlHandler) { RET(1, 2); }
 IMPL(kernel32, SetConsoleTextAttribute) { RET(1, 2); }

@@ -13,6 +13,7 @@
 #define DS2_DOCUMENTS "GTA3 User Files"
 #define DS2_INI "gta3.ini"
 #define GAME_EXE "gta3.exe"
+#define GAME_DIR_WIN "C:\\Games\\GTA III"          /* the game's folder as the game sees it */
 #elif defined(GTAVC_EDITION)
 /* Grand Theft Auto: Vice City (the Windows Steam release, app 12110 depot 12111: gta-vc.exe, unwrapped by
  * tools/steamstub21.py; the Mac release's copy has SecuROM with online activation): RenderWare on Direct3D 8 */
@@ -21,6 +22,7 @@
 #define DS2_DOCUMENTS "GTA Vice City User Files"
 #define DS2_INI "gta-vc.ini"
 #define GAME_EXE "gta-vc.exe"
+#define GAME_DIR_WIN "C:\\Games\\GTA Vice City"
 #else
 /* Grand Theft Auto: San Andreas (the Mac Steam release, app 12250: gta_sa.exe 3.0 from the Cider wrapper, unwrapped
  * by tools/steamstub21.py): RenderWare on Direct3D 9, DirectSound, Ogg Vorbis; msvcr71/msvcp71 recompiled with it */
@@ -29,6 +31,7 @@
 #define DS2_DOCUMENTS "GTA San Andreas User Files"
 #define DS2_INI "gta_sa.ini"
 #define GAME_EXE "gta_sa.exe"
+#define GAME_DIR_WIN "C:\\Games\\GTA San Andreas"
 #endif
 #define DS2_LIGHT_LOOP 0xffffff00u
 #define DS2_LIGHT_AFTER 0xffffff01u
@@ -126,5 +129,8 @@
 #endif
 #ifndef GAME_EXE
 #define GAME_EXE "DungeonSiege.exe"
+#endif
+#ifndef GAME_DIR_WIN
+#define GAME_DIR_WIN "C:\\GOG Games\\Dungeon Siege"   /* the other ports' games (the runtime's first) */
 #endif
 #endif

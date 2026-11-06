@@ -34,7 +34,7 @@ for f in "$HERE"/third_party/mojoshader/mojoshader.c "$HERE"/third_party/mojosha
 done
 for f in "$HERE"/runtime/rt.c "$HERE"/runtime/win32/*.c "$OUT/imptab.c"; do
   opt=-O1; [ "$(basename "$f")" = native.c ] && opt="-O3 -ffp-contract=off"   # the native hot loops: optimised, no fused multiply-add
-  clang -c $opt -g -Wall -Wno-unused-function -fno-strict-aliasing ${SAN[@]+"${SAN[@]}"} "${EDITION_FLAGS[@]}" "${INC[@]}" -o "$OUT/obj/rt/$(basename "$f" .c).o" "$f" &
+  clang -c $opt -g -Wall -Wno-unused-function -Werror=extra-tokens -Werror=unsequenced -Werror=unused-variable -fno-strict-aliasing ${SAN[@]+"${SAN[@]}"} "${EDITION_FLAGS[@]}" "${INC[@]}" -o "$OUT/obj/rt/$(basename "$f" .c).o" "$f" &
   queue_job
 done; wait_jobs
 clang -shared ${SAN[@]+"${SAN[@]}"} -o "$OUT/libgame.dylib" "$OUT"/obj/*.o "$OUT"/obj/rt/*.o "$OUT"/obj/rt/mojo/*.o -framework CoreText -framework CoreGraphics -framework CoreFoundation -framework AudioToolbox -lz

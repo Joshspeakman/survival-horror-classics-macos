@@ -103,6 +103,7 @@ int heap_destroy(uint32_t handle)
     pthread_mutex_unlock(&heaps_lock);
     pthread_mutex_destroy(&h->lock); free(h->segs); free(h); return 1;
 }
+_Atomic int64_t w32_heap_bytes;                     /* blocks in use in every heap (the test stats line: leaks show as growth) */
 static uint32_t take(Heap *h, uint32_t b, uint32_t need, uint32_t req)
 {
     uint32_t sz = SZ(b), prev = R32x(b + 4);
@@ -112,7 +113,7 @@ static uint32_t take(Heap *h, uint32_t b, uint32_t need, uint32_t req)
         uint32_t r = b + need, rs = sz - need, nx = b + sz;
         set_block(r, rs, 0, need, 0, h->handle); W32x(nx + 4, rs); link_free(h, r); sz = need;
     }
-    set_block(b, sz, INUSE, prev, req, h->handle);
+    set_block(b, sz, INUSE, prev, req, h->handle); w32_heap_bytes += sz;
     return b + HDR;
 }
 static uint32_t alloc_locked(Heap *h, uint32_t size)
@@ -139,7 +140,7 @@ static int valid(Heap *h, uint32_t p)
 { return p >= 0x10000 && (R32x(p - HDR) & INUSE) && R32x(p - HDR + 12) == h->handle && SZ(p - HDR); }
 static void free_locked(Heap *h, uint32_t b)
 {
-    uint32_t sz = SZ(b), prev = R32x(b + 4), nx = b + sz;
+    uint32_t sz = SZ(b), prev = R32x(b + 4), nx = b + sz; w32_heap_bytes -= sz;
     if (!(R32x(nx) & INUSE)) { unlink_free(h, nx); sz += SZ(nx); }
     if (prev && !(R32x(b - prev) & INUSE)) { b -= prev; unlink_free(h, b); sz += SZ(b); prev = R32x(b + 4); }
     set_block(b, sz, 0, prev, 0, h->handle); W32x(b + sz + 4, sz);
@@ -167,7 +168,7 @@ uint32_t heap_realloc(uint32_t handle, uint32_t flags, uint32_t p, uint32_t size
     if (need < MINBLK) need = MINBLK;
     uint32_t nx = b + sz;
     if (need > sz && !(R32x(nx) & INUSE) && sz + SZ(nx) >= need) {       /* grow into the next free block */
-        unlink_free(h, nx); uint32_t tot = sz + SZ(nx);
+        unlink_free(h, nx); uint32_t tot = sz + SZ(nx); w32_heap_bytes += SZ(nx);
         set_block(b, tot, INUSE, R32x(b + 4), old, h->handle); W32x(b + tot + 4, tot); sz = tot;
     }
     if (need <= sz) {

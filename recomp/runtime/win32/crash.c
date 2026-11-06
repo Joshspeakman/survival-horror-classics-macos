@@ -44,6 +44,7 @@ typedef struct ThreadInfo {
 } ThreadInfo;
 enum { W_NONE, W_HANDLE, W_CS, W_SLEEP, W_MSG };
 static ThreadInfo threads[256]; static pthread_mutex_t tlock = PTHREAD_MUTEX_INITIALIZER;
+static struct { int valid; char name[64], reg[48]; void *bt[64]; int nbt; } fault;   /* the thread a fault signal came on (crash_signal) */
 __thread ThreadInfo *w32_ti; static __thread int is_game_main;
 extern __thread Ctx *w32_cur_ctx;
 static pthread_key_t tkey;
@@ -116,11 +117,13 @@ extern const struct rt_image rt_images[]; extern const unsigned rt_images_n;
 static const char *image_of(uint32_t a)
 {
     for (unsigned k = 0; k < rt_images_n; k++) {
-        uint32_t b = rt_images[k].base, sz = k ? 0x01000000u : DS2_IMAGE_END - b;
-        if (a - b < sz) return *rt_images[k].name ? rt_images[k].name : "DungeonSiege.exe";
+        uint32_t b = rt_images[k].base, lfa = 0, sz = 0;   /* the image's size from its PE header (SizeOfImage) */
+        if (!g32(b + 0x3c, &lfa) || lfa > 0x1000 || !g32(b + lfa + 0x50, &sz)) sz = k ? 0x01000000u : DS2_IMAGE_END - b;
+        if (a - b < sz) return *rt_images[k].name ? rt_images[k].name : GAME_EXE;
     }
     return 0;
 }
+int w32_code_address(uint32_t a) { uint32_t f; return image_of(a) && (f = nearest_fn(a)) && a - f < 0x4000; }
 static void describe_guest(char *out, size_t cap, uint32_t a)
 {
     const char *img = image_of(a); uint32_t f = img ? nearest_fn(a) : 0;
@@ -145,12 +148,12 @@ static void collect_stacks(void)
         usleep(5000);
     }
 }
-static void write_stack(int fd, ThreadInfo *t)
+static void write_frames(int fd, void *const *bt, int nbt)
 {
     int shown = 0;
-    for (int i = 0; i < t->nbt; i++) {
+    for (int i = 0; i < nbt; i++) {
         Dl_info di; const char *nm = 0; long off = 0;
-        if (dladdr(t->bt[i], &di) && di.dli_sname) { nm = di.dli_sname; off = (long)((char *)t->bt[i] - (char *)di.dli_saddr); }
+        if (dladdr(bt[i], &di) && di.dli_sname) { nm = di.dli_sname; off = (long)((char *)bt[i] - (char *)di.dli_saddr); }
         if (nm && (!strcmp(nm, "on_bt") || !strcmp(nm, "_sigtramp") || !strcmp(nm, "collect_stacks") || !strcmp(nm, "w32_crash_report") ||
                    !strcmp(nm, "crash_signal") || !strcmp(nm, "rt_fault_hook") || !strcmp(nm, "backtrace"))) continue;
         if (nm && (!strncmp(nm, "f_", 2) || !strncmp(nm, "b_", 2))) {
@@ -159,6 +162,10 @@ static void write_stack(int fd, ThreadInfo *t)
         } else dprintf(fd, "      %s+%#lx\n", nm ? nm : "?", off);
         if (++shown >= 40) { dprintf(fd, "      ...\n"); break; }
     }
+}
+static void write_stack(int fd, ThreadInfo *t)
+{
+    write_frames(fd, t->bt, t->nbt);
     if (!t->nbt) dprintf(fd, "      (no stack: the thread did not answer)\n");
 }
 static void write_wait(int fd, ThreadInfo *t, uint64_t now)
@@ -213,7 +220,7 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
     uint64_t now = now_ns();
     char when[64]; strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S %Z", &tm);
     int hang = !strcmp(kind, "hang");
-    dprintf(fd, "Dungeon Siege Native - %s report\n%s\n\n", hang ? "not responding" : "crash", when);
+    dprintf(fd, "%s (native) - %s report\n%s\n\n", DS2_TITLE, hang ? "not responding" : "crash", when);
     dprintf(fd, "WHAT HAPPENED\n  %s\n", reason);
     if (guest_pc) { char d[160]; describe_guest(d, sizeof d, guest_pc); dprintf(fd, "  where: %s\n", d); }
     dprintf(fd, "  %.0f s after launch; %llu frames presented (last %.1f s ago); messages last pumped %.1f s ago\n\n",
@@ -247,7 +254,13 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
         dprintf(fd, "\n");
     }
 
-    dprintf(fd, "THREADS (the one that failed or is stuck is usually the game main thread)\n");
+    if (fault.valid && !hang) {
+        dprintf(fd, "THE THREAD THAT CRASHED: %s%s%s%s\n", fault.name[0] ? fault.name : "(no name)", fault.reg[0] ? " = [" : "",
+                fault.reg[0] ? fault.reg : " (not one of the threads below)", fault.reg[0] ? "] below" : "");
+        write_frames(fd, fault.bt, fault.nbt);
+        dprintf(fd, "\n");
+    }
+    dprintf(fd, "THREADS%s\n", hang ? " (the one stuck is usually the game main thread)" : "");
     uint32_t w32_tid(Ctx *);
     for (int k = 0; k < 256; k++) {
         ThreadInfo *t = &threads[k]; if (!t->used) continue;
@@ -260,13 +273,15 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
         write_calls(fd, t);
     }
     dprintf(fd, "\nLOADED GAME CODE\n");
-    for (unsigned k = 0; k < rt_images_n; k++) dprintf(fd, "  %08x  %s\n", rt_images[k].base, *rt_images[k].name ? rt_images[k].name : "DungeonSiege.exe");
+    for (unsigned k = 0; k < rt_images_n; k++) dprintf(fd, "  %08x  %s\n", rt_images[k].base, *rt_images[k].name ? rt_images[k].name : GAME_EXE);
 
     /* for developers: host addresses, to map onto exact x86 instructions with tools/symbolize-report.sh (atos) */
 #ifdef __APPLE__
     const struct mach_header *mh0 = 0; intptr_t slide = 0;
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (strstr(_dyld_get_image_name(i), "DungeonSiegeNative")) { mh0 = _dyld_get_image_header(i); slide = _dyld_get_image_vmaddr_slide(i); break; }
-    dprintf(fd, "\nHOST ADDRESSES (load address %p, slide %#lx)\n", (void *)mh0, (long)slide);
+    Dl_info self = {0}; dladdr((void *)w32_crash_report, &self); const char *bin = self.dli_fname ? self.dli_fname : "?";   /* the binary this code is in */
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) if (_dyld_get_image_header(i) == self.dli_fbase) { mh0 = _dyld_get_image_header(i); slide = _dyld_get_image_vmaddr_slide(i); break; }
+    dprintf(fd, "\nHOST ADDRESSES (load address %p, slide %#lx, binary %s)\n", (void *)mh0, (long)slide, bin);
+    if (fault.valid && !hang) { dprintf(fd, "  the thread that crashed:"); for (int i = 0; i < fault.nbt && i < 40; i++) dprintf(fd, " %p", fault.bt[i]); dprintf(fd, "\n"); }
 #else
     Dl_info executable = {0}; dladdr((void *)w32_crash_report, &executable);
     dprintf(fd, "\nHOST ADDRESSES (ELF load address %p; subtract this base for addr2line)\n", executable.dli_fbase);
@@ -286,7 +301,7 @@ const char *w32_crash_report(const char *kind, const char *reason, Ctx *c, uint3
         }
     }
     close(fd);
-    fprintf(stderr, "DungeonSiegeNative: %s report written to %s\n", kind, last_report);
+    fprintf(stderr, "host: %s report written to %s\n", kind, last_report);
     last_written = now_ns(); writing = 0;
     return last_report;
 }
@@ -301,10 +316,36 @@ void rt_fault_hook(Ctx *c, uint32_t pc, const char *what)
 }
 
 /* ---- signals: runtime or host crashes ---- */
+/* The thread a signal arrived on (a fault's: the one that crashed, which may be none of the registered threads, e.g.
+ * Core Audio's I/O thread): its name and its stack from the fault's registers, the frame chain walked by hand (a
+ * backtrace() here would start in this handler). Shown first in the report. */
+static void capture_fault(void *ucv)
+{
+    fault.nbt = 0; fault.name[0] = fault.reg[0] = 0;
+    pthread_getname_np(pthread_self(), fault.name, sizeof fault.name);
+    if (w32_ti) snprintf(fault.reg, sizeof fault.reg, "%s", w32_ti->name);
+#if defined(__APPLE__) && defined(__arm64__)
+    ucontext_t *uc = ucv;
+    if (uc && uc->uc_mcontext) {
+        uintptr_t pc = (uintptr_t)__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss), lr = (uintptr_t)__darwin_arm_thread_state64_get_lr(uc->uc_mcontext->__ss),
+                  fp = (uintptr_t)__darwin_arm_thread_state64_get_fp(uc->uc_mcontext->__ss);
+        fault.bt[fault.nbt++] = (void *)pc; fault.bt[fault.nbt++] = (void *)lr;
+        uintptr_t top = (uintptr_t)pthread_get_stackaddr_np(pthread_self()), low = top - pthread_get_stacksize_np(pthread_self());
+        for (int i = 0; i < 60 && fault.nbt < 64 && fp >= low && fp + 16 <= top && !(fp & 7); i++) {   /* [fp] = caller's fp, [fp+8] = return address */
+            uintptr_t fr[2]; if (!safe_read((void *)fp, fr, sizeof fr) || !fr[1]) break;
+            if (i) fault.bt[fault.nbt++] = (void *)fr[1];    /* the first frame's return address is lr, already there */
+            if (fr[0] <= fp) break; fp = fr[0];
+        }
+    }
+#else
+    (void)ucv; fault.nbt = backtrace(fault.bt, 64);
+#endif
+    fault.valid = 1;
+}
 static void crash_signal(int sig, siginfo_t *si, void *uc)
 {
-    (void)uc;
     static volatile int in; if (in++) { signal(sig, SIG_DFL); raise(sig); return; }
+    if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE || sig == SIGTRAP) capture_fault(uc);
     if (now_ns() - last_written > 3000000000ull) {          /* not already explained by a report just written */
         extern __thread const char *fault_what;
         char r[300];
@@ -348,7 +389,7 @@ static void *watchdog(void *arg)
             if (fd >= 0) { dprintf(fd, "\nRECOVERED: the game responded again after about %.0f s.\n", secs); close(fd); }
             char np[1400]; const char *b = strrchr(hang_path, '/');
             if (b) { snprintf(np, sizeof np, "%.*s/hang-recovered-%s", (int)(b - hang_path), hang_path, b + 6); rename(hang_path, np); }
-            fprintf(stderr, "DungeonSiegeNative: the game responded again after %.0f s\n", secs);
+            fprintf(stderr, "host: the game responded again after %.0f s\n", secs);
             hang_since = 0;
         }
         double shown_age = beat[3] ? (now - beat[3]) / 1e9 : 0;     /* the game draws, but nothing reaches the screen */
@@ -373,7 +414,7 @@ void w32_crash_init(const char *data_dir, const char *build)
 #ifdef __linux__
     snprintf(log_path, sizeof log_path, "%s/last-run.log", data_dir);
 #else
-    snprintf(log_path, sizeof log_path, "%s/DungeonSiegeNative.log", data_dir);
+    snprintf(log_path, sizeof log_path, "%s/game.log", data_dir);
 #endif
     }
     snprintf(build_id, sizeof build_id, "%s", build ? build : "?");

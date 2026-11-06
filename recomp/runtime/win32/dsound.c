@@ -27,6 +27,26 @@ typedef struct Buf {
 static Buf bufs[NBUF];
 static struct { float pos[3], vel[3], front[3], top[3], dist, rolloff, doppler; } lis = {{0}, {0}, {0, 0, 1}, {0, 1, 0}, 1, 1, 1}; static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t vt_ds, vt_buf, vt_3d, vt_lis, vt_fx, ds_obj; static int ds_refs;
+/* Each buffer's sound data in the game's heap, and how many buffers use it (a duplicate shares its original's). San
+ * Andreas makes a buffer for almost every sound it loads: the data is freed with its last buffer (it leaked ~7 MB a
+ * minute). Under `lock`, which render() holds while it reads the data. */
+static struct { uint32_t mem; int users; } rings[NBUF];
+static void ring_use(uint32_t mem)
+{
+    for (int k = 0; k < NBUF; k++) if (rings[k].mem == mem) { rings[k].users++; return; }
+    for (int k = 0; k < NBUF; k++) if (!rings[k].mem) { rings[k].mem = mem; rings[k].users = 1; return; }
+}
+static uint32_t ring_drop(uint32_t mem)                 /* -> the data to free now (its last user went), or 0 */
+{
+    for (int k = 0; k < NBUF; k++) if (rings[k].mem == mem) { if (--rings[k].users > 0) return 0; rings[k].mem = 0; return mem; }
+    return 0;
+}
+uint32_t w32_dsound_heap_bytes(void)                    /* the stats line: sound data held */
+{
+    uint32_t n = 0; pthread_mutex_lock(&lock);
+    for (int k = 0; k < NBUF; k++) if (bufs[k].used && bufs[k].mem) { int first = 1; for (int j = 0; j < k; j++) if (bufs[j].used && bufs[j].mem == bufs[k].mem) { first = 0; break; } if (first) n += bufs[k].size; }
+    pthread_mutex_unlock(&lock); return n;
+}
 static DsAudio * au; static _Atomic int primary_playing;
 static _Atomic uint32_t slice_max = 512;                  /* largest render the device asked for: the write cursor's lead */
 
@@ -72,6 +92,10 @@ static void render(void *u, void *buffer, uint32_t frames)
     if (frames > slice_max) slice_max = frames;
     /* mixed under the buffers' lock: a buffer released and its slot taken by a new one (new_buf clears it: its ring at 0)
        while it was being mixed read the guest's first page (San Andreas, after a failed mission: SIGBUS) */
+    {   /* test mode, DS_TEST_FAULT=audio: a fault on Core Audio's thread after ~5 s (checks the crash report names that thread) */
+        static int tf = -1, n; if (tf < 0) { const char *e = getenv("DS_TEST_FAULT"); tf = e && getenv("DS_TEST") && !strcmp(e, "audio"); }
+        if (tf && ++n == 500) *(volatile uint32_t *)(uintptr_t)8 = 1;
+    }
     pthread_mutex_lock(&lock);
     for (int k = 0; k < NBUF; k++) {          /* secondaries play whether or not the primary was Play()ed: DirectSound runs it implicitly */
         Buf *b = &bufs[k]; if (!b->used || b->primary || !b->playing || b->mem < 0x10000u || !b->size || !b->align) continue;
@@ -132,7 +156,13 @@ static void b_AddRef(Ctx *c) { Buf *b = B(ARG(0)); RET(b ? ++b->refs : 0, 1); }
 static void b_Release(Ctx *c)
 {
     Buf *b = B(ARG(0)); if (!b) RET(0, 1);
-    int r = --b->refs; if (r <= 0) { b->playing = 0; if (b->dump) { fclose(b->dump); b->dump = 0; } pthread_mutex_lock(&lock); b->used = 0; pthread_mutex_unlock(&lock); LOG("release buffer\n"); }
+    int r = --b->refs;
+    if (r <= 0) {
+        b->playing = 0; if (b->dump) { fclose(b->dump); b->dump = 0; }
+        pthread_mutex_lock(&lock); b->used = 0; uint32_t f = b->mem ? ring_drop(b->mem) : 0; b->mem = 0; pthread_mutex_unlock(&lock);
+        if (f) heap_free(w32_process_heap, f);       /* nothing mixes it now: no buffer in use has it */
+        LOG("release buffer%s\n", f ? " (data freed)" : "");
+    }
     RET(r > 0 ? r : 0, 1);
 }
 static void b_GetCaps(Ctx *c)
@@ -241,8 +271,10 @@ static void d_CreateSoundBuffer(Ctx *c)
     if (wfx) set_format(b, wfx);
     if (!b->primary) {
         if (!wfx || bytes < 4) { b->used = 0; RET(DSERR_INVALIDPARAM, 4); }
-        b->size = bytes / b->align * b->align; b->mem = heap_alloc(w32_process_heap, 8, b->size);
-        memset(GP(b->mem), b->bits == 8 ? 0x80 : 0, b->size);
+        b->size = bytes / b->align * b->align; uint32_t mem = heap_alloc(w32_process_heap, 8, b->size);
+        if (!mem) { pthread_mutex_lock(&lock); b->used = 0; pthread_mutex_unlock(&lock); fprintf(stderr, "dsound: no memory for a %u-byte buffer\n", b->size); RET(0x8007000eu, 4); }   /* DSERR_OUTOFMEMORY */
+        memset(GP(mem), b->bits == 8 ? 0x80 : 0, b->size);
+        pthread_mutex_lock(&lock); b->mem = mem; ring_use(mem); pthread_mutex_unlock(&lock);
     }
     LOG("CreateSoundBuffer flags %#x, %u bytes, %d Hz %d bits %d ch%s\n", fl, bytes, b->rate, b->bits, b->ch, b->primary ? " (primary)" : "");
     rt_w32(G_MEM, out, obj); RET(DS_OK, 4);
@@ -258,7 +290,8 @@ static void d_DuplicateSoundBuffer(Ctx *c)             /* (original, duplicate *
 {
     Buf *o = B(ARG(1)); if (!o || o->primary) RET(DSERR_INVALIDPARAM, 3);
     Buf *b; uint32_t obj = new_buf(&b); if (!obj) RET(DSERR_GENERIC, 3);
-    b->flags = o->flags; b->is3d = o->is3d; b->ch = o->ch; b->bits = o->bits; b->rate = o->rate; b->align = o->align; b->size = o->size; b->mem = o->mem;
+    b->flags = o->flags; b->is3d = o->is3d; b->ch = o->ch; b->bits = o->bits; b->rate = o->rate; b->align = o->align; b->size = o->size;
+    pthread_mutex_lock(&lock); b->mem = o->mem; if (b->mem) ring_use(b->mem); pthread_mutex_unlock(&lock);
     b->vol = o->vol; b->pan = o->pan; b->freq = o->freq; set_gain(b);
     rt_w32(G_MEM, ARG(2), obj); RET(DS_OK, 3);
 }

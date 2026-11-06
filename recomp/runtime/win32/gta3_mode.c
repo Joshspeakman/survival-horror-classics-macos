@@ -342,7 +342,9 @@ enum { GAME_STATE = 0x00906a6cu, MEDIA_CONTROL = 0x008920ecu };
 #elif defined(GTASA_EDITION)
 enum { GAME_STATE = 0x00c6e1f0u, MEDIA_CONTROL = 0x00c72e08u };
 #endif
+#if defined(GTA3_EDITION) || defined(GTASA_EDITION)
 static struct { uint32_t hwnd, wp, lp; int on; } held[2];   /* [0] WM_ACTIVATE, [1] WM_ACTIVATEAPP: the latest of each */
+#endif
 int gta_hold_message(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp)
 {
 #if defined(GTA3_EDITION) || defined(GTASA_EDITION)

@@ -1,5 +1,6 @@
 /* Files: Windows paths -> host paths (case-insensitive), file handles. */
 #include "w32.h"
+#include "edition.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -10,8 +11,8 @@
 #endif
 
 char w32_drive_c[1024];                /* host directory for C:\ (other than the game folder) */
-char w32_cwd[1024] = "C:\\GOG Games\\Dungeon Siege";
-static const char GAME_PREFIX[] = "c:\\gog games\\dungeon siege";
+char w32_cwd[1024] = GAME_DIR_WIN;
+static const char GAME_PREFIX[] = GAME_DIR_WIN;          /* compared without case */
 
 /* find `name` in host directory `dir` ignoring case; writes the real name */
 static int ci_lookup(const char *dir, const char *name, char *out, size_t cap)

@@ -124,6 +124,8 @@ void rt_import(Ctx *c, uint32_t index)
 }
 
 /* ---- process exit ---- */
+const char *volatile w32_exit_how;                 /* who called for the end: ExitProcess, exit(), ... (run.c's message) */
+volatile uint32_t w32_unhandled_code;              /* an unhandled exception the game is about to end with */
 void w32_exit(Ctx *c, uint32_t code)
 {
     (void)c; w32_exit_code = code; w32_exited = 1;
@@ -277,10 +279,10 @@ int w32_load(const char *exe_path)
     w32_process_heap = heap_create(0, 0);
     rt_w32(G_MEM, PEB_ADDR + 0x08, w32_image_base); rt_w32(G_MEM, PEB_ADDR + 0x18, w32_process_heap);
     uint32_t at = PARAMS_ADDR;
-    w32_modname_a = at; put_str(&at, "C:\\GOG Games\\Dungeon Siege\\" GAME_EXE);
+    w32_modname_a = at; put_str(&at, GAME_DIR_WIN "\\" GAME_EXE);
     {   /* the game's command line; DS_ARGS adds arguments (e.g. zonematch=true opens the multiplayer screens) */
         char cl[1024]; const char *extra = getenv("DS_ARGS");
-        snprintf(cl, sizeof cl, "\"C:\\GOG Games\\Dungeon Siege\\" GAME_EXE "\"%s%s", extra ? " " : "", extra ? extra : "");
+        snprintf(cl, sizeof cl, "\"" GAME_DIR_WIN "\\" GAME_EXE "\"%s%s", extra ? " " : "", extra ? extra : "");
         w32_cmdline_a = at; put_str(&at, cl);
     }
     w32_cmdline_w = at; at += 2 * (uint32_t)w32_mb_to_wide(1252, (const uint8_t *)GS(w32_cmdline_a), -1, (uint16_t *)GP(at), 512); at = (at + 3) & ~3u;
@@ -385,7 +387,7 @@ static int load_image(int k)
 {
     if (image_loaded[k]) return 0;
     const struct rt_image *im = &rt_images[k];
-    char win[512], host[2048]; snprintf(win, sizeof win, "C:\\GOG Games\\Dungeon Siege\\%s", im->name);
+    char win[512], host[2048]; snprintf(win, sizeof win, GAME_DIR_WIN "\\%s", im->name);
     for (char *p = win; *p; p++) if (*p == '/') *p = '\\';
     if (w32_host_path(win, host, sizeof host, 0)) return -1;
     FILE *f = fopen(host, "rb"); if (!f) { fprintf(stderr, "w32: cannot open %s\n", host); return -1; }

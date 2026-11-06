@@ -252,8 +252,8 @@ static ssize_t netfuzz(uint8_t *b, ssize_t n, uint32_t cap)
     if (R() % 100 >= pct) return n;
     count++;
     switch (R() % 5) {
-    case 0: for (int k = 1 + (int)(R() % 4); k > 0 && n > 0; k--) b[R() % (uint32_t)n] ^= (uint8_t)(1u << (R() % 8)); break;
-    case 1: for (int k = 1 + (int)(R() % 8); k > 0 && n > 0; k--) b[R() % (uint32_t)n] = (uint8_t)R(); break;
+    case 0: for (int k = 1 + (int)(R() % 4); k > 0 && n > 0; k--) { uint32_t at = R() % (uint32_t)n, bit = R() % 8; b[at] ^= (uint8_t)(1u << bit); } break;
+    case 1: for (int k = 1 + (int)(R() % 8); k > 0 && n > 0; k--) { uint32_t at = R() % (uint32_t)n; b[at] = (uint8_t)R(); } break;
     case 2: if (n > 0) n = R() % (uint32_t)n; break;
     case 3: { ssize_t m = n + 1 + (ssize_t)(R() % 2048); if (m > (ssize_t)cap) m = cap; for (ssize_t k = n; k < m; k++) b[k] = (uint8_t)R(); n = m; break; }
     case 4: if (n >= 4) { uint32_t at = R() % (uint32_t)(n - 3); uint32_t v = R() % 3 ? 0xffffffffu : R(); memcpy(b + at, &v, 4); } break;   /* a length or count */
