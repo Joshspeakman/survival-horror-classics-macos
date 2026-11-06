@@ -383,11 +383,11 @@ static void teleport_now(void)
  * the player's vehicle's health (fire, explosions) and speed (held forward for some frames: the speed blur). On the game
  * thread between frames. */
 #if defined(GTA3_EDITION)
-static const uint32_t WEATHER[3] = {0x0096dfa8u, 0x0096dfb8u, 0x0096e024u}; enum { VEH_HEALTH = 0x200, VEH_SPEED = 0x78 };
+static const uint32_t WEATHER[3] = {0x0096dfa8u, 0x0096dfb8u, 0x0096e024u}; enum { VEH_HEALTH = 0x200, VEH_SPEED = 0x78, PED_HEALTH = 0x2c0 };
 #elif defined(GTAVC_EDITION)
-static const uint32_t WEATHER[3] = {0x00a0f974u, 0x00a0fa36u, 0x00a0fab2u}; enum { VEH_HEALTH = 0x204, VEH_SPEED = 0x70 };
+static const uint32_t WEATHER[3] = {0x00a0f974u, 0x00a0fa36u, 0x00a0fab2u}; enum { VEH_HEALTH = 0x204, VEH_SPEED = 0x70, PED_HEALTH = 0x354 };
 #else
-static const uint32_t WEATHER[3] = {0x00c62180u, 0x00c62184u, 0x00c62188u}; enum { VEH_HEALTH = 0x4c0, VEH_SPEED = 0x44 };
+static const uint32_t WEATHER[3] = {0x00c62180u, 0x00c62184u, 0x00c62188u}; enum { VEH_HEALTH = 0x4c0, VEH_SPEED = 0x44, PED_HEALTH = 0x540 };
 #endif
 static char dev_cmd[128]; static volatile int dev_pending; static float dev_speed; static int dev_speed_frames;
 void gta_dev_command(const char *cmd) { snprintf(dev_cmd, sizeof dev_cmd, "%s", cmd); __atomic_store_n(&dev_pending, 1, __ATOMIC_RELEASE); }
@@ -409,6 +409,7 @@ static void dev_tick(void)
         if (!strcmp(verb, "weather")) { for (int k = 0; k < 3; k++) { uint16_t w = (uint16_t)(int16_t)a; memcpy(G_MEM + WEATHER[k], &w, 2); } }
         else if (!strcmp(verb, "vhealth") && v) wrf(v + VEH_HEALTH, a);
         else if (!strcmp(verb, "vspeed") && v) { dev_speed = a; dev_speed_frames = b > 0 ? (int)b : 120; }
+        else if (!strcmp(verb, "phealth")) { uint32_t ped = rt_r32(G_MEM, PLAYERS); if (ped >= 0x10000u) wrf(ped + PED_HEALTH, a); }
         fprintf(stderr, "gta: dev %s%s\n", dev_cmd, (!strcmp(verb, "vhealth") || !strcmp(verb, "vspeed")) && !v ? " (not in a vehicle)" : "");
     }
     if (dev_speed_frames > 0) {   /* along the vehicle's forward vector */
