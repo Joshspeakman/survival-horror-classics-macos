@@ -22,7 +22,8 @@
 #define RE_AID_HP 0x00a5ccc0u
 #define RE_AID_HP_MAX 0x00a5ccc2u
 #elif defined(RE1_EDITION)
-#define RE_AID_HP 0x00be636cu                       /* Chris 140, Jill 96: held at the most seen this game */
+#define RE_AID_HP 0x00be636cu                       /* Chris 140, Jill 96: held at the most seen this session
+                                                       (Jill after Chris in one session is held at 140) */
 #define RE_AID_HP_SEEN 1
 #endif
 
