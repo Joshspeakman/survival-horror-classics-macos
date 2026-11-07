@@ -986,7 +986,7 @@ static void enter_sandbox(const char *exe, const char *game, const char *data, c
 }
 #endif
 
-#if defined(DF_EDITION) || defined(GTA_EDITION)
+#if defined(DF_EDITION) || defined(GTA_EDITION) || defined(RE_EDITION)
 /* Opened from Finder (no arguments): the app's own settings, written by install.sh in Contents/Resources/launch.plist
  * (game folder, data folder, log name, executable, updater), do what the generated launcher script does. The bundle's
  * executable is this binary, not a script: macOS only recognises a game, and so only turns on Game Mode, for a bundle
@@ -1052,7 +1052,7 @@ int main(int argc, char **argv)
             else if (!strcmp(argv[k], "--game")) game = argv[k + 1];
             else if (!strcmp(argv[k], "--data")) data = argv[k + 1];
         }
-#if defined(DF_EDITION) || defined(GTA_EDITION)
+#if defined(DF_EDITION) || defined(GTA_EDITION) || defined(RE_EDITION)
         if (!exe && !game && !data) bundle_launch(argv[0], &exe, &game, &data);
 #endif
         if (!exe || !game || !data) { fprintf(stderr, "usage: %s --exe <game exe> --game <game folder> --data <data folder>\n", argv[0]); return 1; }
@@ -1070,7 +1070,7 @@ int main(int argc, char **argv)
                 [NSApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
                 int shown = !getenv("DS_NO_LAUNCHER");
                 if (!ds_launcher_run(game, data)) return 0;
-#if defined(DF_EDITION) || defined(GTA_EDITION)
+#if defined(DF_EDITION) || defined(GTA_EDITION) || defined(RE_EDITION)
                 /* Play: the game in a fresh process (the choices are saved, and in the environment), this one ends. A game
                  * window shown by the process that ran the launch window can stay off screen in macOS full screen (seen in
                  * the Diablo II port); a process that never showed it always comes up. Before the sandbox, which forbids it. */
@@ -1089,7 +1089,7 @@ int main(int argc, char **argv)
         w32_crash_init(data, DS_BUILD); w32_crash_thread("macOS UI thread");
         { void w32_registry_install(const char *); w32_registry_install(data); }   /* values the game's installer would have written */
         NSSetUncaughtExceptionHandler(on_objc_exception);
-#if !defined(DF_EDITION) && !defined(GTA_EDITION)
+#if !defined(DF_EDITION) && !defined(GTA_EDITION) && !defined(RE_EDITION)
         ensure_resolution(drive_c);                                   // DungeonSiege2.ini
 #endif
         test_mode = getenv("DS_TEST") && atoi(getenv("DS_TEST"));

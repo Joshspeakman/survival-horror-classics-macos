@@ -221,8 +221,11 @@ IMPL(kernel32, GlobalMemoryStatus)
     memcpy(GP(p), v, 32); RET(0, 1);
 }
 
-/* ---- critical sections (host recursive mutexes keyed by the guest address) ---- */
-typedef struct CS { uint32_t addr; pthread_mutex_t m; } CS;
+/* ---- critical sections, keyed by the guest address: an owner and a recursion count as Windows keeps them. Windows
+ * does not check who leaves one, and Resident Evil 3's task switcher relies on that: the thread that takes a task slot
+ * enters the section and the task's new thread leaves it. (A host recursive mutex cannot be unlocked by another
+ * thread.) ---- */
+typedef struct CS { uint32_t addr; pthread_mutex_t m; pthread_cond_t cv; uint32_t owner; int count; } CS;
 #define NCS 4096
 static CS cstab[NCS]; static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 static CS *cs_find(uint32_t a, int create)
@@ -241,8 +244,7 @@ static CS *cs_find(uint32_t a, int create)
         }
     }
     if (create && free_slot) {
-        pthread_mutexattr_t at; pthread_mutexattr_init(&at); pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
-        pthread_mutex_init(&free_slot->m, &at); pthread_mutexattr_destroy(&at); free_slot->addr = a;
+        pthread_mutex_init(&free_slot->m, 0); pthread_cond_init(&free_slot->cv, 0); free_slot->owner = 0; free_slot->count = 0; free_slot->addr = a;
         pthread_mutex_unlock(&cs_lock); return free_slot;
     }
     pthread_mutex_unlock(&cs_lock); return 0;
@@ -255,21 +257,31 @@ IMPL(kernel32, InitializeCriticalSection)
 IMPL(kernel32, DeleteCriticalSection)
 {
     CS *s = cs_find(ARG(0), 0);
-    if (s) { pthread_mutex_lock(&cs_lock); pthread_mutex_destroy(&s->m); s->addr = 1; pthread_mutex_unlock(&cs_lock); }
+    if (s) { pthread_mutex_lock(&cs_lock); pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); s->addr = 1; pthread_mutex_unlock(&cs_lock); }
     RET(0, 1);
 }
 IMPL(kernel32, EnterCriticalSection)
 {
-    uint32_t p = ARG(0); CS *s = cs_find(p, 1);
+    uint32_t p = ARG(0), me = w32_tid(c); CS *s = cs_find(p, 1);
     void w32_crash_wait_begin(int, uint32_t, uint32_t), w32_crash_wait_end(void);
-    if (pthread_mutex_trylock(&s->m)) { w32_crash_wait_begin(2, p, 0xffffffffu); pthread_mutex_lock(&s->m); w32_crash_wait_end(); }
-    rt_w32(G_MEM, p + 8, rt_r32(G_MEM, p + 8) + 1); rt_w32(G_MEM, p + 12, w32_tid(c));
+    pthread_mutex_lock(&s->m);
+    if (s->count && s->owner != me) {
+        w32_crash_wait_begin(2, p, 0xffffffffu);
+        while (s->count) pthread_cond_wait(&s->cv, &s->m);
+        w32_crash_wait_end();
+    }
+    if (!s->count) s->owner = me;
+    s->count++;
+    rt_w32(G_MEM, p + 8, (uint32_t)s->count); rt_w32(G_MEM, p + 12, s->owner);
+    pthread_mutex_unlock(&s->m);
     RET(0, 1);
 }
 IMPL(kernel32, LeaveCriticalSection)
 {
     uint32_t p = ARG(0); CS *s = cs_find(p, 1);
-    uint32_t r = rt_r32(G_MEM, p + 8) - 1; rt_w32(G_MEM, p + 8, r); if (!r) rt_w32(G_MEM, p + 12, 0);
+    pthread_mutex_lock(&s->m);
+    if (s->count > 0 && !--s->count) { s->owner = 0; pthread_cond_signal(&s->cv); }
+    rt_w32(G_MEM, p + 8, (uint32_t)s->count); rt_w32(G_MEM, p + 12, s->owner);
     pthread_mutex_unlock(&s->m);
     RET(0, 1);
 }
@@ -279,9 +291,13 @@ IMPL(kernel32, InitializeCriticalSectionAndSpinCount)
 }
 IMPL(kernel32, TryEnterCriticalSection)
 {
-    uint32_t p = ARG(0); CS *s = cs_find(p, 1);
-    if (pthread_mutex_trylock(&s->m)) RET(0, 1);
-    rt_w32(G_MEM, p + 8, rt_r32(G_MEM, p + 8) + 1); rt_w32(G_MEM, p + 12, w32_tid(c));
+    uint32_t p = ARG(0), me = w32_tid(c); CS *s = cs_find(p, 1);
+    pthread_mutex_lock(&s->m);
+    if (s->count && s->owner != me) { pthread_mutex_unlock(&s->m); RET(0, 1); }
+    if (!s->count) s->owner = me;
+    s->count++;
+    rt_w32(G_MEM, p + 8, (uint32_t)s->count); rt_w32(G_MEM, p + 12, s->owner);
+    pthread_mutex_unlock(&s->m);
     RET(1, 1);
 }
 IMPL(kernel32, InterlockedExchangeAdd) { RET(__atomic_fetch_add((uint32_t *)GP(ARG(0)), ARG(1), __ATOMIC_SEQ_CST), 2); }

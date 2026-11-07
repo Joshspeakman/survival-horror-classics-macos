@@ -1498,6 +1498,8 @@ def find_except_handler4(path):
     if not c: return 0, ()
     h = max(c, key=lambda k: len(c[k])); return h, tuple(c[h])
 
+RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('exe'); ap.add_argument('analysis'); ap.add_argument('outdir')
@@ -1505,7 +1507,7 @@ def main():
     ap.add_argument('--per-file', type=int, default=400)
     ap.add_argument('--imp-base', type=int, default=0, help='index of this image\'s first import in the global import table')
     ap.add_argument('--tag', default='', help='multi-image builds: file name prefix; tables come from tools/link_tables.py')
-    ap.add_argument('--game', default='ds2', choices=('ds2', 'fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa'), help='which executable: HOOKS/OVERRIDES are Dungeon Siege II addresses')
+    ap.add_argument('--game', default='ds2', choices=('ds2', 'fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') + RE_GAMES, help='which executable: HOOKS/OVERRIDES are Dungeon Siege II addresses')
     a = ap.parse_args()
     L = Lifter(a.exe, a.analysis); L.jt_cache = {}
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
@@ -1516,7 +1518,8 @@ def main():
     L.overrides = {} if a.tag else dict(OVERRIDES)
     if not a.tag:
         from editions import identify, PROFILES
-        edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') else identify(a.exe, prepared=True)
+        edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') + RE_GAMES else identify(a.exe, prepared=True)
+        if edition in RE_GAMES: L.hooks, L.overrides = {}, {}         # the GOG Resident Evil / Dino Crisis programs: no hooks yet
         if edition in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa'):      # Fallout: New Vegas, The Sims, Delta Force, GTA III: none of the DS2 hooks apply
             L.hooks = df_table(DF_HOOKS, edition) if edition in ('df1', 'df2') else dict(GTA3_HOOKS) if edition == 'gta3' else dict(GTASA_HOOKS) if edition == 'gtasa' else dict(GTAVC_HOOKS) if edition == 'gtavc' else {}
             L.overrides = df_table(DF_OVERRIDES, edition) if edition in ('df1', 'df2') else dict(GTA3_OVERRIDES) if edition == 'gta3' else dict(GTAVC_OVERRIDES) if edition == 'gtavc' else {}

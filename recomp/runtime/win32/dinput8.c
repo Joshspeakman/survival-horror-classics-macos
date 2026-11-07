@@ -25,6 +25,7 @@ static pthread_mutex_t di_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t keys[256], mbuttons[8];
 static Dev *kbd, *mouse; static uint32_t seq;
 static uint32_t vt_di, vt_dev, di_obj;
+static int di_old;                         /* made by DirectInputCreateA (DirectInput 3-5): the device types of then */
 
 static uint32_t now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000); }
 static void enqueue(Dev *d, uint32_t ofs, uint32_t data)          /* di_lock held */
@@ -99,7 +100,7 @@ static void joy_instance(uint32_t p)                         /* DIDEVICEINSTANCE
 {
     memset(GP(p), 0, 580); rt_w32(G_MEM, p, 580);
     put_guid(p + 4, JOY_GUID, 0, 0, "GTACPAD0"); put_guid(p + 20, JOY_VIDPID, 0, 0, "\0\0PIDVID");
-    rt_w32(G_MEM, p + 36, 0x0215u);                           /* DI8DEVTYPE_GAMEPAD, standard */
+    rt_w32(G_MEM, p + 36, di_old ? 0x0804u : 0x0215u);       /* DIDEVTYPE_JOYSTICK | GAMEPAD; DI8DEVTYPE_GAMEPAD, standard */
     snprintf((char *)GP(p + 40), 260, "Controller"); snprintf((char *)GP(p + 300), 260, "Controller");
 }
 static const uint32_t AXIS_GUID[6] = {0xa36d02e0u, 0xa36d02e1u, 0xa36d02e2u, 0xa36d02f4u, 0xa36d02f5u, 0xa36d02e3u};   /* X Y Z Rx Ry Rz */
@@ -123,7 +124,7 @@ static void d_GetCapabilities(Ctx *c)                 /* DIDEVCAPS: size, flags,
     Dev *d = dev_of(c); uint32_t p = ARG(1), n = rt_r32(G_MEM, p);
     memset(GP(p + 4), 0, n > 4 && n < 256 ? n - 4 : 40);
     rt_w32(G_MEM, p + 4, 5);                               /* DIDC_ATTACHED | DIDC_POLLEDDEVICE */
-    rt_w32(G_MEM, p + 8, d->joy ? 0x215 : d->mouse ? 0x112 : 0x413);   /* gamepad / DI8DEVTYPE_MOUSE | subtype / DI8DEVTYPE_KEYBOARD | PCENH */
+    rt_w32(G_MEM, p + 8, di_old ? (d->joy ? 0x804 : d->mouse ? 0x102 : 0x403) : (d->joy ? 0x215 : d->mouse ? 0x112 : 0x413));   /* gamepad / mouse / keyboard (PC enhanced) */
     rt_w32(G_MEM, p + 12, d->joy ? 6 : d->mouse ? 3 : 0); rt_w32(G_MEM, p + 16, d->joy ? 16 : d->mouse ? 8 : 128);
     if (d->joy) rt_w32(G_MEM, p + 20, 1);                  /* one point-of-view hat */
     RET(DI_OK, 2);
@@ -254,7 +255,7 @@ static void d_GetDeviceInfo(Ctx *c)                   /* DIDEVICEINSTANCEA: size
     Dev *d = dev_of(c); uint32_t p = ARG(1), n = rt_r32(G_MEM, p);
     if (d->joy) { joy_instance(p); rt_w32(G_MEM, p, n); RET(DI_OK, 2); }
     memset(GP(p + 4), 0, n > 4 && n < 1024 ? n - 4 : 0);
-    rt_w32(G_MEM, p + 36, d->mouse ? 0x112 : 0x413);
+    rt_w32(G_MEM, p + 36, di_old ? (d->mouse ? 0x102 : 0x403) : (d->mouse ? 0x112 : 0x413));
     snprintf((char *)GP(p + 40), 260, "%s", d->mouse ? "Mouse" : "Keyboard"); snprintf((char *)GP(p + 300), 260, "%s", d->mouse ? "Mouse" : "Keyboard");
     RET(DI_OK, 2);
 }
@@ -305,7 +306,18 @@ static uint32_t vtable(const char *iface, void (*const *fns)(Ctx *), int n)
     for (int k = 0; k < n; k++) { char nm[96]; snprintf(nm, sizeof nm, "dinput8!%s.%d", iface, k); rt_w32(G_MEM, t + 4u * (uint32_t)k, w32_thunk_register(nm, fns[k])); }
     return t;
 }
+static void di_init(void);
 IMPL(dinput8, DirectInput8Create)                     /* (hinstance, version, IID *, out **, outer) */
+{
+    di_init(); rt_w32(G_MEM, ARG(3), di_obj); RET(DI_OK, 5);
+}
+/* DirectInput 3-5 (the Resident Evil games, Dino Crisis): IDirectInputA / 2A and IDirectInputDeviceA / 2A are the first
+ * 8 (9) and 18 (27) methods of the version 8 interfaces, the same methods; the device types are the old numbers */
+IMPL(dinput, DirectInputCreateA)                      /* (hinstance, version, out **, outer) */
+{
+    di_old = 1; di_init(); rt_w32(G_MEM, ARG(2), di_obj); RET(DI_OK, 4);
+}
+static void di_init(void)
 {
     if (!vt_di) {
         static void (*const di[])(Ctx *) = { i_QueryInterface, i_AddRef, i_Release, i_CreateDevice, i_EnumDevices, i_GetDeviceStatus,
@@ -319,5 +331,4 @@ IMPL(dinput8, DirectInput8Create)                     /* (hinstance, version, II
         vt_di = vtable("IDirectInput8A", di, 11); vt_dev = vtable("IDirectInputDevice8A", dv, 32);
         di_obj = heap_alloc(w32_process_heap, 8, 8); rt_w32(G_MEM, di_obj, vt_di);
     }
-    rt_w32(G_MEM, ARG(3), di_obj); RET(DI_OK, 5);
 }

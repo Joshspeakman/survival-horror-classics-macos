@@ -504,11 +504,14 @@ static void upload_over(DSRRenderer *r, const uint32_t *p, uint32_t size)
     int32_t dr[4] = {(int32_t)x, (int32_t)y, (int32_t)(x + w), (int32_t)(y + h)}, sr[4] = {0, 0, (int32_t)w, (int32_t)h};
     quad(r, p[0], dr, 0, sr, 2, 0);
 }
+static void quad_key(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t src, const int32_t *srect, int fill, uint32_t color, int key);
 static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t src, const int32_t *srect, int fill, uint32_t color)
+{ quad_key(r, dst, drect, src, srect, fill, color, 0); }
+static void quad_key(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t src, const int32_t *srect, int fill, uint32_t color, int key)
 {
     Surf *d = surf(r, dst), *s = surf(r, src); if (!d || d->fmt == 3 || !(d->tex.usage & MTLTextureUsageRenderTarget)) return;
     if (s && s != d) resolve(r, s);
-    if (!fill && s && s != d && !d->ms && s->fmt != 3 && s->tex.pixelFormat == d->tex.pixelFormat && s->tex.sampleCount == 1 &&
+    if (!fill && !key && s && s != d && !d->ms && s->fmt != 3 && s->tex.pixelFormat == d->tex.pixelFormat && s->tex.sampleCount == 1 &&
         drect[2] - drect[0] == srect[2] - srect[0] && drect[3] - drect[1] == srect[3] - srect[1] && drect[2] > drect[0] && drect[3] > drect[1] &&
         drect[0] >= 0 && drect[1] >= 0 && srect[0] >= 0 && srect[1] >= 0 && (uint32_t)drect[2] <= d->w && (uint32_t)drect[3] <= d->h &&
         (uint32_t)srect[2] <= s->w && (uint32_t)srect[3] <= s->h) {   /* a copy at the same size: the rectangle alone, not a pass over the target */
@@ -522,7 +525,7 @@ static void quad(DSRRenderer *r, uint32_t dst, const int32_t *drect, uint32_t sr
     if (fill == 2) { q.src[0] = srect[0] / 256.0f; q.src[1] = srect[1] / 256.0f; q.src[2] = srect[2] / 256.0f; q.src[3] = srect[3] / 256.0f; }
     else if (s) { float sw = s->w, sh = s->h; q.src[0] = srect[0] / sw; q.src[1] = srect[1] / sh; q.src[2] = srect[2] / sw; q.src[3] = srect[3] / sh; }
     q.color[0] = ((color >> 16) & 255) / 255.0f; q.color[1] = ((color >> 8) & 255) / 255.0f; q.color[2] = (color & 255) / 255.0f; q.color[3] = ((color >> 24) & 255) / 255.0f;
-    q.mode[0] = fill == 1;
+    q.mode[0] = fill == 1; q.mode[1] = key; q.mode[2] = q.mode[3] = 0;
     id<MTLRenderCommandEncoder> e = enc_for(r, dst, 0); if (!e) return;
     int k = sidx(samples_of(d)); [e setRenderPipelineState:fill == 2 ? r->hqo[k] : r->hq[k]]; [e setDepthStencilState:r->nodepth_ds]; [e setCullMode:MTLCullModeNone];
     [e setViewport:(MTLViewport){0, 0, d->w, d->h, 0, 1}];
@@ -1360,7 +1363,7 @@ int dsr_renderer_exec(DSRRenderer *r, uint32_t op, const uint8_t *pl, uint32_t s
     case DSR_BLT: { int32_t dr[4], sr[4]; memcpy(dr, p + 1, 16); memcpy(sr, p + 6, 16);
                     { static int lf = -2; if (lf == -2) lf = getenv("DSR_PASSLOG") ? atoi(getenv("DSR_PASSLOG")) : -1;
                       if (lf >= 0 && dsr_frame == lf) fprintf(stderr, "dsr blt: %u %d,%d-%d,%d <- %u %d,%d-%d,%d flags %x\n", p[0], dr[0], dr[1], dr[2], dr[3], p[5], sr[0], sr[1], sr[2], sr[3], p[10]); }
-                    if (p[5]) quad(r, p[0], dr, p[5], sr, 0, 0); else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
+                    if (p[5]) quad_key(r, p[0], dr, p[5], sr, 0, 0, (p[10] & 0x8000) || (p[10] & 0x80000001u) == 0x80000001u);   /* DDBLT_KEYSRC, BltFast's SRCCOLORKEY */ else if (!(p[10] & 0x20000)) quad(r, p[0], dr, 0, dr, 1, p[11]); } break;
     case DSR_PRESENT: r->presented = p[0]; dsr_frame++;   // caller presents/commits
         { static int glow = -1; if (glow < 0) glow = getenv("DSR_GLOWLOG") != 0;   // development: effect targets in the corner
           if (glow) { int x = 0; for (uint32_t id = 1; id < MAXSURF && x < 5 * 260; id++) if (r->s[id].used && r->s[id].fxrt) {

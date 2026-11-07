@@ -7,6 +7,7 @@
  * thunks (methods shared, argument counts and structure sizes per version). Surface pixels live in guest memory
  * because the game writes through the pointers Lock returns. */
 #include "w32.h"
+#include "edition.h"
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
@@ -1174,7 +1175,8 @@ static void init_vtables(void)
     vt_d3d = vtable("IDirect3D3", d3, 12); vt_dev = vtable("IDirect3DDevice3", dv, 42); vt_vp = vtable("IDirect3DViewport3", vp, 21); vt_tex = vtable("IDirect3DTexture2", tx, 6);
 }
 
-/* ---- exports ---- */
+/* ---- exports ---- (the Resident Evil games and Dino Crisis: ddraw.c's, on the GPU) */
+#ifndef RE_EDITION
 IMPL(ddraw, DirectDrawCreate)                                       /* (GUID *, out, outer) */
 {
     init_vtables();
@@ -1192,3 +1194,4 @@ IMPL(ddraw, DirectDrawEnumerateA)                                   /* (callback
     w32_callback(c, ARG(0), 4, a);
     heap_free(w32_process_heap, buf); RET(DD_OK, 2);
 }
+#endif
