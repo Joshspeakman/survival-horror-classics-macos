@@ -35,7 +35,6 @@ IMPL(winmm, joyGetNumDevs) { RET(16, 0); }
 IMPL(winmm, mciGetDeviceIDA) { RET(0, 1); }
 IMPL(winmm, waveOutGetNumDevs) { RET(1, 0); }
 IMPL(winmm, waveOutGetVolume) { if (ARG(1)) rt_w32(G_MEM, ARG(1), 0xffffffffu); RET(0, 2); }
-IMPL(winmm, mmioSetInfo) { RET(0, 3); }
 
 /* ---- msacm32: two codecs (Microsoft ADPCM, IMA ADPCM), whose streams df_imports.c decodes ---- */
 static const struct { uint16_t tag; const char *s, *l; } ACM_DRV[2] = { {2, "MS-ADPCM", "Microsoft ADPCM CODEC"}, {0x11, "IMA ADPCM", "IMA ADPCM CODEC"} };

@@ -283,6 +283,21 @@ IMPL(winmm, mmioGetInfo)                              /* (handle, MMIOINFO *, fl
     rt_w32(G_MEM, i + 28, m->base + m->pos); rt_w32(G_MEM, i + 32, m->base + m->size); rt_w32(G_MEM, i + 36, m->base + m->size);
     rt_w32(G_MEM, i + 68, ARG(0)); RET(0, 3);
 }
+IMPL(winmm, mmioSeek)                                 /* (handle, offset, origin SEEK_SET/CUR/END) -> the new position */
+{
+    pthread_mutex_lock(&mmio_lock); Mmio *m = mm_get(ARG(0)); int64_t at = -1;
+    if (m) { int32_t off = (int32_t)ARG(1); uint32_t org = ARG(2);
+             at = (org == 0 ? 0 : org == 1 ? (int64_t)m->pos : (int64_t)m->size) + off;
+             if (at < 0 || at > m->size) at = -1; else m->pos = (uint32_t)at; }
+    pthread_mutex_unlock(&mmio_lock);
+    RET(at < 0 ? 0xffffffffu : (uint32_t)at, 3);              /* Resident Evil's wave reader seeks back to find 'data' */
+}
+IMPL(winmm, mmioSetInfo)                              /* (handle, MMIOINFO *, flags): the reader's place (pchNext) taken back */
+{
+    Mmio *m = mm_get(ARG(0)); uint32_t i = ARG(1); if (!m) RET(5, 3);
+    if (i) { uint32_t next = rt_r32(G_MEM, i + 28); if (next >= m->base && next <= m->base + m->size) m->pos = next - m->base; }
+    RET(0, 3);
+}
 IMPL(winmm, mmioAdvance)                              /* (handle, MMIOINFO *, flags): everything is already "buffered" */
 {
     Mmio *m = mm_get(ARG(0)); uint32_t i = ARG(1); if (!m) RET(5, 3);
