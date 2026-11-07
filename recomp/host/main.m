@@ -1088,6 +1088,7 @@ int main(int argc, char **argv)
         }
         w32_crash_init(data, DS_BUILD); w32_crash_thread("macOS UI thread");
         { void w32_registry_install(const char *); w32_registry_install(data); }   /* values the game's installer would have written */
+        { void w32_registry_gog(const char *); w32_registry_gog(game); }        /* and a GOG installer's (goggame-*.script) */
         NSSetUncaughtExceptionHandler(on_objc_exception);
 #if !defined(DF_EDITION) && !defined(GTA_EDITION) && !defined(RE_EDITION)
         ensure_resolution(drive_c);                                   // DungeonSiege2.ini

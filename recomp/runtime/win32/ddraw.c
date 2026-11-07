@@ -562,6 +562,15 @@ static void emit_blt(DSurface *d, const int32_t *dr, DSurface *src, const int32_
     if (src) memcpy(p + 6, sr, 16); else memset(p + 6, 0, 16);
     p[10] = flags; p[11] = fill; cmd_end();
 }
+/* a copy onto the primary surface that covers at least half of it (a game drawing off screen and copying the frame over
+ * in parts or with a rectangle: Resident Evil 2) shows the primary as it now is */
+static void present_if_frame(Ctx *c, DSurface *me, const int32_t *a)
+{
+    if (!(U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE)) return;
+    int64_t w = U32(me->desc, SD_WIDTH), h = U32(me->desc, SD_HEIGHT), aw = a[2] - a[0], ah = a[3] - a[1];
+    { static int n; if (n < 8 && log_on > 0) { n++; dsr_log("copy onto the primary %d,%d-%d,%d (primary %lldx%lld)", a[0], a[1], a[2], a[3], w, h); } }
+    if (aw > 0 && ah > 0 && aw * ah * 2 >= w * h) present(c, me);
+}
 M(s_Blt, 6) ME(DSurface, O_SURF)
     uint32_t dr = ARG(1), flags = ARG(4), fx = ARG(5); DSurface *src = obj(ARG(2), O_SURF); int32_t a[4], b[4];
     rect_or_full(me, dr, a);
@@ -573,6 +582,7 @@ M(s_Blt, 6) ME(DSurface, O_SURF)
            the whole picture copied over is the picture presented */
         if ((U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE) && a[0] == 0 && a[1] == 0 && a[2] == (int32_t)U32(me->desc, SD_WIDTH) && a[3] == (int32_t)U32(me->desc, SD_HEIGHT) &&
             b[0] == 0 && b[1] == 0 && b[2] == (int32_t)U32(src->desc, SD_WIDTH) && b[3] == (int32_t)U32(src->desc, SD_HEIGHT)) present(c, src);
+        else present_if_frame(c, me, a);
     }
     RET(DD_OK, 6);
 END
@@ -581,6 +591,7 @@ M(s_BltFast, 6) ME(DSurface, O_SURF)
     rect_or_full(src, ARG(4), r);
     dr[0] = (int32_t)ARG(1); dr[1] = (int32_t)ARG(2); dr[2] = dr[0] + (r[2] - r[0]); dr[3] = dr[1] + (r[3] - r[1]);
     emit_blt(me, dr, src, r, ARG(5) | 0x80000000u, 0);
+    present_if_frame(c, me, dr);
     RET(DD_OK, 6);
 END
 /* flip / present */
@@ -649,6 +660,8 @@ M(s_Lock, 5) ME(DSurface, O_SURF)
         rt_w32(G_MEM, sd + SD_SURFACE, me->mem + (r ? (uint32_t)rr[1] * (uint32_t)me->pitch + (uint32_t)rr[0] * bpp : 0));
     }
     me->locked++; me->lock_flags = flags; me->lock_has_rect = r != 0; if (r) memcpy(me->lock_rect, rr, 16);
+    { static int n; if (log_on > 0 && n < 12) { n++; dsr_log("lock surface %u (%ux%u caps %08x) flags %08x rect %d,%d-%d,%d rt %d gpu_dirty %d", me->id, U32(me->desc, SD_WIDTH), U32(me->desc, SD_HEIGHT),
+        U32(me->desc, SD_CAPS), flags, r ? rr[0] : -1, r ? rr[1] : -1, r ? rr[2] : -1, r ? rr[3] : -1, me->is_rt, me->gpu_dirty); } }
     { static int n; if (getenv("DSR_STATS") && frames > 3000 && n++ < 12) fprintf(stderr, "dsr: lock surface %u %ux%u caps %08x flags %08x gpu_dirty %d\n", me->id, U32(me->desc, SD_WIDTH), U32(me->desc, SD_HEIGHT), U32(me->desc, SD_CAPS), flags, me->gpu_dirty); }
     me->upload_over = 0;
     uint32_t caps = U32(me->desc, SD_CAPS);

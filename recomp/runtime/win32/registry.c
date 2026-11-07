@@ -1,5 +1,6 @@
 /* ADVAPI32 registry: an in-memory tree (empty at start; the GOG game keeps its settings in INI files). */
 #include "w32.h"
+#include <dirent.h>
 #include "edition.h"
 
 typedef struct RVal { char name[128]; uint32_t type, size; uint8_t *data; } RVal;
@@ -31,7 +32,8 @@ static RKey *lookup(const char *path, int create)
     return k;
 }
 /* a string value put in place before the game looks (install-time values; W32_REGISTRY="key|name|value;..." in tests) */
-void w32_reg_string(const char *path, const char *name, const char *str)
+/* a value of any type (REG_SZ 1, REG_BINARY 3, REG_DWORD 4); keep: leave one that is already there */
+static void reg_value(const char *path, const char *name, uint32_t type, const void *data, uint32_t size, int keep)
 {
     char p[512]; snprintf(p, sizeof p, "%s", path);
     for (char *q = p; *q; q++) { if (*q >= 'A' && *q <= 'Z') *q += 32; if (*q == '/') *q = '\\'; }
@@ -39,10 +41,61 @@ void w32_reg_string(const char *path, const char *name, const char *str)
     RKey *k = lookup(p, 1);
     if (k) {
         RVal *v = 0; for (int j = 0; j < k->nv; j++) if (!strcasecmp(k->v[j].name, name)) v = &k->v[j];
+        if (v && keep) { pthread_mutex_unlock(&rlock); return; }
         if (!v) { k->v = realloc(k->v, (size_t)(k->nv + 1) * sizeof *k->v); v = &k->v[k->nv++]; memset(v, 0, sizeof *v); snprintf(v->name, sizeof v->name, "%s", name); }
-        free(v->data); v->type = 1; v->size = (uint32_t)strlen(str) + 1; v->data = (uint8_t *)strdup(str);   /* REG_SZ */
+        free(v->data); v->type = type; v->size = size; v->data = malloc(size ? size : 1); memcpy(v->data, data, size);
     }
     pthread_mutex_unlock(&rlock);
+}
+void w32_reg_string(const char *path, const char *name, const char *str) { reg_value(path, name, 1, str, (uint32_t)strlen(str) + 1, 0); }
+/* The registry values a GOG installer writes (goggame-<id>.script in the game folder: "setRegistry" actions), so the
+ * game finds what it would after GOG's setup. The GOG Resident Evil games keep their settings there (Resident Evil 2's
+ * "Install Flag" carries two values GOG's fixes divide by); values the game has written since are kept. */
+static const char *json_field(const char *obj, const char *end, const char *name, char *out, size_t cap)
+{
+    char pat[64]; snprintf(pat, sizeof pat, "\"%s\"", name);
+    const char *q = strstr(obj, pat); if (!q || q > end) return 0;
+    q = strchr(q + strlen(pat), ':'); if (!q) return 0;
+    q = strchr(q, '"'); if (!q || q > end) return 0;
+    size_t n = 0; for (q++; *q && *q != '"' && n + 1 < cap; q++) { if (*q == '\\' && q[1]) q++; out[n++] = *q; }
+    out[n] = 0; return out;
+}
+static int b64(char ch) { return ch >= 'A' && ch <= 'Z' ? ch - 'A' : ch >= 'a' && ch <= 'z' ? ch - 'a' + 26 : ch >= '0' && ch <= '9' ? ch - '0' + 52 : ch == '+' ? 62 : ch == '/' ? 63 : -1; }
+static void gog_script_registry(const char *game_dir, const char *app_win)
+{
+    char pat[1200]; snprintf(pat, sizeof pat, "%s", game_dir);
+    DIR *d = opendir(pat); if (!d) return;
+    struct dirent *e; char path[1400] = "";
+    while ((e = readdir(d))) if (!strncasecmp(e->d_name, "goggame-", 8) && strlen(e->d_name) > 7 && !strcasecmp(e->d_name + strlen(e->d_name) - 7, ".script")) { snprintf(path, sizeof path, "%s/%s", game_dir, e->d_name); break; }
+    closedir(d);
+    FILE *f = *path ? fopen(path, "rb") : 0; if (!f) return;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    char *js = malloc((size_t)n + 1); if (!js || fread(js, 1, (size_t)n, f) != (size_t)n) { free(js); fclose(f); return; }
+    js[n] = 0; fclose(f); int count = 0;
+    for (const char *a = strstr(js, "\"setRegistry\""); a; a = strstr(a + 1, "\"setRegistry\"")) {
+        const char *end = strchr(a, '}'); if (!end) break;
+        char root[64], sub[512], data[4096], name[256], type[32];
+        if (!json_field(a, end, "root", root, sizeof root) || !json_field(a, end, "subkey", sub, sizeof sub) || !json_field(a, end, "valueName", name, sizeof name) ||
+            !json_field(a, end, "valueType", type, sizeof type) || !json_field(a, end, "valueData", data, sizeof data)) continue;
+        { const char *skip = getenv("W32_GOGREG_SKIP"); if (skip && strstr(skip, name)) continue; }   /* development: leave these out */
+        char key[700]; snprintf(key, sizeof key, "%s\\%s", !strcasecmp(root, "HKEY_LOCAL_MACHINE") ? "hklm" : "hkcu", sub);
+        if (!strcasecmp(type, "string")) {
+            char v[4600] = ""; const char *s2 = data; size_t o = 0;
+            while (*s2 && o + 1 < sizeof v) { if (!strncmp(s2, "{app}", 5)) { o += (size_t)snprintf(v + o, sizeof v - o, "%s", app_win); s2 += 5; if (o >= sizeof v) o = sizeof v - 1; } else v[o++] = *s2++; }
+            v[o] = 0; reg_value(key, name, 1, v, (uint32_t)strlen(v) + 1, 1);
+        } else if (!strcasecmp(type, "dword")) {
+            uint32_t v = (uint32_t)strtoul(data + (data[0] == '$'), 0, data[0] == '$' ? 16 : 10);
+            { const char *m = getenv("W32_GOGREG_AND"); if (m && !strcasecmp(name, "Install Flag")) v &= (uint32_t)strtoul(m, 0, 16); }   /* development */
+            reg_value(key, name, 4, &v, 4, 1);
+        } else if (!strcasecmp(type, "binary")) {
+            uint8_t b[3072]; uint32_t nb = 0, acc = 0; int bits = 0;
+            for (const char *s2 = data; *s2 && nb < sizeof b; s2++) { int x = b64(*s2); if (x < 0) continue; acc = acc << 6 | (uint32_t)x; bits += 6; if (bits >= 8) { bits -= 8; b[nb++] = (uint8_t)(acc >> bits); } }
+            reg_value(key, name, 3, b, nb, 1);
+        } else continue;
+        count++;
+    }
+    free(js);
+    if (count) fprintf(stderr, "w32: %d registry values from %s\n", count, path);
 }
 /* What the game's installer would have written. The GOG and Steam releases never run that installer, so these are
  * filled in from the data folder at start-up:
@@ -50,6 +103,23 @@ void w32_reg_string(const char *path, const char *name, const char *str)
  *                   (install.sh --cd-key computes it the way the installer does). The game shows it to GameSpy (now
  *                   OpenSpy) as its CD key for multiplayer; without it multiplayer stops at "Could not find a valid
  *                   CDKey". Only the hash is kept, never the key. */
+void w32_registry_gog(const char *game_dir)                 /* (main.m, with the host's game folder) */
+{
+#ifdef RE_EDITION
+    /* Windows' own install paths (Resident Evil 2 reads ProgramFilesDir at start: "Reg Open Error" without it) */
+    w32_reg_string("hklm\\software\\microsoft\\windows\\currentversion", "ProgramFilesDir", "C:\\Program Files");
+    w32_reg_string("hklm\\software\\microsoft\\windows\\currentversion", "CommonFilesDir", "C:\\Program Files\\Common Files");
+    gog_script_registry(game_dir, GAME_DIR_WIN);
+#ifdef RE2_EDITION
+    /* what Capcom's own installer recorded and GOG's leaves out: with the key there but no path, the game finds none
+     * of its data (and stops with "Failed to initialize DIRECTX") */
+    reg_value("hkcu\\software\\capcom\\resident evil2", "Install Path", 1, GAME_DIR_WIN "\\", (uint32_t)sizeof GAME_DIR_WIN + 1, 1);
+    reg_value("hkcu\\software\\capcom\\resident evil2", "Install Path2", 1, GAME_DIR_WIN "\\", (uint32_t)sizeof GAME_DIR_WIN + 1, 1);
+#endif
+#else
+    (void)game_dir;
+#endif
+}
 void w32_registry_install(const char *data_dir)
 {
     /* the user's Documents, as Windows records it (GTA III keeps "GTA3 User Files" there: settings, saves; without the

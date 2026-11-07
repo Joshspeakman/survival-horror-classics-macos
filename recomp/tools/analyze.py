@@ -142,7 +142,9 @@ def validate_candidates():
     for v, src in sorted(cands.items()):
         if v in funcs: continue
         if v in starts: ok = True                                      # an instruction boundary of known code
-        elif candidate_coverage[v - TLO]: ok = bool(relocated)         # BW deliberately overlaps instruction streams
+        elif candidate_coverage[v - TLO]:                                # BW deliberately overlaps instruction streams; a code
+            ok = bool(relocated) or src == 'imm'                         # address pushed or moved as an immediate (a callback:
+                                                                         # Resident Evil 2's after a jump table decoded as code)
         else: ok = True                                                # undiscovered code: keep (junk is harmless)
         if ok: ptrsrc[v] = src; work.append(v); added += 1
     return added
@@ -183,6 +185,15 @@ for gap_round in range(256):
         if f in funcs or not (TLO <= f < THI): continue
         funcs[f] = lift_func(f); new_f.append(f)
     for f in new_f: mark(funcs[f])
+    # code addresses the gap functions name (callbacks they push) are candidates like the first waves': Resident Evil
+    # 2's frame callback is pushed only by a function this sweep finds
+    while validate_candidates():
+        extra = []
+        while work:
+            f = work.pop()
+            if f in funcs or not (TLO <= f < THI): continue
+            funcs[f] = lift_func(f); extra.append(f)
+        for f in extra: mark(funcs[f])
     if len(funcs) == nf: break
 covered = set(); mix = collections.Counter(); m80 = []; seh_set = []; seh_push = []; raise_calls = []
 for f, ins in funcs.items():
