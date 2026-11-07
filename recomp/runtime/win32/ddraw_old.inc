@@ -481,6 +481,128 @@ MD(dev_old_Index, 2) if (o->imm_on) { if (o->idx_n >= o->idx_cap) { o->idx_cap =
 MD(dev_old_End, 2) if (o->imm_on) { o->imm_on = 0; draw_old(me, o->imm_prim, o->imm_fvf, o->imm, o->imm_n, o->indexed ? o->idx : 0, o->indexed ? o->idx_n : 0, ARG(1)); } RET(DD_OK, 2); END
 OK_M(dev2_SwapTextureHandles, 3)
 
+
+/* ================= Direct3D 1: IDirect3DDevice and execute buffers (Resident Evil) =================
+ * The game fills a buffer with vertices and an instruction stream (D3DINSTRUCTION: opcode, size, count, then count
+ * records): process vertices into the device's vertex array (copied as they are, or transformed by the world, view and
+ * projection matrices onto the viewport), set render, light and transform states, draw triangles, lines and points
+ * indexed into that array, load textures. Execute runs it here: each run of triangles is one indexed draw of the
+ * transformed-and-lit vertices (D3DTLVERTEX: the renderer's FVF 0x1c4). */
+typedef struct DExb { uint32_t g; int ref; uint32_t mem, size; uint8_t data[48]; uint32_t status; } DExb;
+static float mat1[512][16]; static uint8_t mat1_used[512];
+static void mat_mul4(float *d, const float *a, const float *b)       /* d = a x b, row vectors */
+{
+    float t[16]; for (int r = 0; r < 4; r++) for (int k = 0; k < 4; k++) t[r * 4 + k] = a[r * 4] * b[k] + a[r * 4 + 1] * b[4 + k] + a[r * 4 + 2] * b[8 + k] + a[r * 4 + 3] * b[12 + k];
+    memcpy(d, t, 64);
+}
+static const float *mat1_of(uint32_t h) { static const float id[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}; return h && h < 512 && mat1_used[h] ? mat1[h] : id; }
+typedef struct DOld1 { uint32_t xf[4]; uint8_t *tlv; uint32_t ntlv; } DOld1;
+static DOld1 *old1(DDevice *d) { static DOld1 *tab[8]; static DDevice *who[8]; for (int k = 0; k < 8; k++) if (who[k] == d) return tab[k];
+    for (int k = 0; k < 8; k++) if (!who[k]) { who[k] = d; tab[k] = calloc(1, sizeof(DOld1)); return tab[k]; } return tab[0]; }
+static void light_state(DDevice *me, uint32_t t, uint32_t v)
+{
+    DOld *o = me->old; if (t < 16) o->ls[t] = v;
+    switch (t) {
+    case 1: { DMat *m = v && v < 1024 ? mat_handles[v] : 0; if (m) memcpy(me->material, m->m + 4, 68); break; }
+    case 2: send_rs(me, 139, v); break; case 4: send_rs(me, 140, v); break;
+    case 5: send_rs(me, 36, v); break; case 6: send_rs(me, 37, v); break; case 7: send_rs(me, 38, v); break; case 8: send_rs(me, 141, v); break;
+    }
+}
+M(exb_QueryInterface, 3) DExb *me = obj(ARG(0), O_EXB); if (me) { me->ref++; rt_w32(G_MEM, ARG(2), me->g); RET(DD_OK, 3); } RET(E_NOINTERFACE, 3); END
+M(exb_AddRef, 1) DExb *me = obj(ARG(0), O_EXB); RET(me ? (uint32_t)++me->ref : 0, 1); END
+M(exb_Release, 1) DExb *me = obj(ARG(0), O_EXB); if (!me) RET(0, 1); uint32_t r = (uint32_t)--me->ref;
+    if (!r) { heap_free(w32_process_heap, me->mem); obj_drop(me->g); free(me); } RET(r, 1); END
+OK_M(exb_Initialize, 3) OK_M(exb_Unlock, 1) OK_M(exb_Validate, 2) OK_M(exb_Optimize, 2)
+M(exb_Lock, 2) DExb *me = obj(ARG(0), O_EXB); if (!me) RET(DDERR_INVALIDPARAMS, 2);
+    uint32_t d = ARG(1); rt_w32(G_MEM, d + 4, rt_r32(G_MEM, d + 4) | 0x2 | 0x10); rt_w32(G_MEM, d + 12, me->size); rt_w32(G_MEM, d + 16, me->mem); RET(DD_OK, 2); END
+M(exb_SetExecuteData, 2) DExb *me = obj(ARG(0), O_EXB); if (!me) RET(DDERR_INVALIDPARAMS, 2);
+    uint32_t sz = rt_r32(G_MEM, ARG(1)); if (!sz || sz > 48) sz = 48; memcpy(me->data, GP(ARG(1)), sz); RET(DD_OK, 2); END
+M(exb_GetExecuteData, 2) DExb *me = obj(ARG(0), O_EXB); if (!me) RET(DDERR_INVALIDPARAMS, 2);
+    uint32_t sz = rt_r32(G_MEM, ARG(1)); if (!sz || sz > 48) sz = 48; memcpy(GP(ARG(1)), me->data, sz); rt_w32(G_MEM, ARG(1), sz); RET(DD_OK, 2); END
+MD(dev1_CreateExecuteBuffer, 4)
+    uint32_t d = ARG(1), size = rt_r32(G_MEM, d + 12); if (!size || size > (16u << 20)) RET(DDERR_INVALIDPARAMS, 4);
+    DExb *e = calloc(1, sizeof *e); e->ref = 1; e->size = size; e->mem = heap_alloc(w32_process_heap, 8, size + 16); U32(e->data, 0) = 48;
+    e->g = make_iface(O_EXB, e); rt_w32(G_MEM, ARG(2), e->g); RET(DD_OK, 4); END
+/* the vertex records into the device's array of transformed vertices */
+static void process_vertices(DDevice *me, DExb *e, uint32_t flags, uint32_t start, uint32_t dest, uint32_t count)
+{
+    DOld1 *o1 = old1(me); uint32_t need = dest + count;
+    if (need > 65536) return;
+    if (need > o1->ntlv) { o1->tlv = realloc(o1->tlv, (size_t)need * 32); memset(o1->tlv + (size_t)o1->ntlv * 32, 0, (size_t)(need - o1->ntlv) * 32); o1->ntlv = need; }
+    const uint8_t *src = G_MEM + e->mem + U32(e->data, 4) + (size_t)start * 32;
+    if (U32(e->data, 4) + (size_t)(start + count) * 32 > e->size) return;
+    uint8_t *dst = o1->tlv + (size_t)dest * 32;
+    if ((flags & 7) == 2) { memcpy(dst, src, (size_t)count * 32); return; }    /* D3DPROCESSVERTICES_COPY: already D3DTLVERTEX */
+    float wvp[16], wv[16]; mat_mul4(wv, mat1_of(o1->xf[1]), mat1_of(o1->xf[2])); mat_mul4(wvp, wv, mat1_of(o1->xf[3]));
+    DVp *v = me->old->cur; float vx = 0, vy = 0, vw = 640, vh = 480, sx = 320, sy = 240;
+    if (v) { vx = (float)U32(v->v1, 4); vy = (float)U32(v->v1, 8); vw = (float)U32(v->v1, 12); vh = (float)U32(v->v1, 16); memcpy(&sx, v->v1 + 20, 4); memcpy(&sy, v->v1 + 24, 4); }
+    for (uint32_t k = 0; k < count; k++, src += 32, dst += 32) {
+        float p[3], t[4]; memcpy(p, src, 12);
+        for (int j = 0; j < 4; j++) t[j] = p[0] * wvp[j] + p[1] * wvp[4 + j] + p[2] * wvp[8 + j] + wvp[12 + j];
+        float rhw = t[3] != 0 ? 1.0f / t[3] : 1.0f, out[4] = {vx + vw * 0.5f + t[0] * rhw * sx, vy + vh * 0.5f - t[1] * rhw * sy, t[2] * rhw, rhw};
+        memcpy(dst, out, 16);
+        if ((flags & 7) == 1) memcpy(dst + 16, src + 16, 16);              /* TRANSFORM: D3DLVERTEX's colours and coordinates */
+        else { uint32_t white = 0xffffffffu, none = 0; memcpy(dst + 16, &white, 4); memcpy(dst + 20, &none, 4); memcpy(dst + 24, src + 24, 8); }   /* D3DVERTEX: not lit here */
+    }
+}
+static void draw_tl(DDevice *me, uint32_t prim, const uint16_t *idx, uint32_t ni)
+{
+    DOld1 *o1 = old1(me); uint32_t mx = 0; for (uint32_t k = 0; k < ni; k++) if (idx[k] > mx) mx = idx[k];
+    if (!ni || mx >= o1->ntlv) return;
+    draw_old(me, prim, 0x1c4, o1->tlv, mx + 1, idx, ni, 0);
+}
+MD(dev1_Execute, 4)
+    DExb *e = obj(ARG(1), O_EXB); DVp *v = obj(ARG(2), O_VP); if (!e) RET(DDERR_INVALIDPARAMS, 4);
+    if (v) { v->dev = me; if (o->cur != v) { o->cur = v; vp_apply(v); } }
+    DOld1 *o1 = old1(me);
+    uint32_t ins = U32(e->data, 12), len = U32(e->data, 16); if (ins > e->size || len > e->size - ins) RET(DDERR_INVALIDPARAMS, 4);
+    const uint8_t *p = G_MEM + e->mem + ins, *end = p + len; uint16_t *idx = 0; uint32_t cap = 0;
+    while (p + 4 <= end) {
+        uint32_t op = p[0], sz = p[1], cnt = (uint32_t)(p[2] | p[3] << 8); const uint8_t *d = p + 4; p = d + (size_t)sz * cnt;
+        if (p > end) break;
+        if (op == 11) break;                                                     /* EXIT */
+        switch (op) {
+        case 3: {                                                                /* TRIANGLE: v1 v2 v3 flags (WORDs) */
+            if (cap < cnt * 3) { cap = cnt * 3; idx = realloc(idx, cap * 2); }
+            for (uint32_t k = 0; k < cnt; k++) { memcpy(idx + k * 3, d + (size_t)k * sz, 6); }
+            draw_tl(me, 4, idx, cnt * 3); break; }
+        case 2: {                                                                /* LINE */
+            if (cap < cnt * 2) { cap = cnt * 2; idx = realloc(idx, cap * 2); }
+            for (uint32_t k = 0; k < cnt; k++) memcpy(idx + k * 2, d + (size_t)k * sz, 4);
+            draw_tl(me, 2, idx, cnt * 2); break; }
+        case 1:                                                                  /* POINT: count, first */
+            for (uint32_t k = 0; k < cnt; k++) { uint16_t n = (uint16_t)(d[k * sz] | d[k * sz + 1] << 8), f0 = (uint16_t)(d[k * sz + 2] | d[k * sz + 3] << 8);
+                if ((uint32_t)f0 + n <= o1->ntlv && n) draw_old(me, 1, 0x1c4, o1->tlv + (size_t)f0 * 32, n, 0, 0, 0); }
+            break;
+        case 4: for (uint32_t k = 0; k < cnt; k++) { uint32_t a = U32(d, k * sz), b = U32(d, k * sz + 4); if (a < 512) { memcpy(mat1[a], mat1_of(b), 64); mat1_used[a] = 1; } } break;   /* MATRIXLOAD */
+        case 5: for (uint32_t k = 0; k < cnt; k++) { uint32_t a = U32(d, k * sz), b = U32(d, k * sz + 4), cc = U32(d, k * sz + 8); if (a < 512) { mat_mul4(mat1[a], mat1_of(b), mat1_of(cc)); mat1_used[a] = 1; } } break;   /* MATRIXMULTIPLY */
+        case 6: for (uint32_t k = 0; k < cnt; k++) { uint32_t t = U32(d, k * sz), h = U32(d, k * sz + 4); if (t >= 1 && t <= 3) o1->xf[t] = h; } break;   /* STATETRANSFORM */
+        case 7: for (uint32_t k = 0; k < cnt; k++) light_state(me, U32(d, k * sz), U32(d, k * sz + 4)); break;           /* STATELIGHT */
+        case 8: for (uint32_t k = 0; k < cnt; k++) old_render_state(me, U32(d, k * sz), U32(d, k * sz + 4)); break;    /* STATERENDER */
+        case 9: for (uint32_t k = 0; k < cnt; k++) { const uint8_t *q = d + (size_t)k * sz;                                 /* PROCESSVERTICES */
+                    process_vertices(me, e, U32(q, 0), (uint32_t)(q[4] | q[5] << 8), (uint32_t)(q[6] | q[7] << 8), U32(q, 8)); } break;
+        case 10: for (uint32_t k = 0; k < cnt; k++) { DSurface *dt = tex_of_handle(U32(d, k * sz)), *st = tex_of_handle(U32(d, k * sz + 4));   /* TEXTURELOAD */
+                    if (dt && st) { int32_t u[4] = {0, 0, (int32_t)U32(dt->desc, SD_WIDTH), (int32_t)U32(dt->desc, SD_HEIGHT)};
+                        uint32_t h = U32(dt->desc, SD_HEIGHT) < U32(st->desc, SD_HEIGHT) ? U32(dt->desc, SD_HEIGHT) : U32(st->desc, SD_HEIGHT), row = (uint32_t)(dt->pitch < st->pitch ? dt->pitch : st->pitch);
+                        for (uint32_t y = 0; y < h; y++) memcpy(G_MEM + dt->mem + y * (uint32_t)dt->pitch, G_MEM + st->mem + y * (uint32_t)st->pitch, row);
+                        dt->has_ck = st->has_ck; dt->ck[0] = st->ck[0]; dt->ck[1] = st->ck[1]; dt->upload_over = 0; upload_rect(dt, u); } } break;
+        case 12: {                                                               /* BRANCHFORWARD: mask, value, negate, offset */
+            uint32_t mask = U32(d, 0), val = U32(d, 4), neg = U32(d, 8), off = U32(d, 12); int take = ((e->status & mask) == val) != (neg != 0);
+            if (take) { if (!off) p = end; else p = d + off; } break; }
+        case 14: e->status = U32(d, 4); break;                                   /* SETSTATUS */
+        default: break;                                                          /* SPAN: not drawn */
+        }
+    }
+    free(idx); RET(DD_OK, 4);
+END
+MD(dev1_CreateMatrix, 2) uint32_t h = 0; for (uint32_t k = 1; k < 512; k++) if (!mat1_used[k]) { h = k; break; }
+    if (h) { mat1_used[h] = 1; memcpy(mat1[h], mat1_of(0), 64); } rt_w32(G_MEM, ARG(1), h); RET(h ? DD_OK : DDERR_INVALIDPARAMS, 2); END
+MD(dev1_SetMatrix, 3) uint32_t h = ARG(1); if (h && h < 512) { memcpy(mat1[h], GP(ARG(2)), 64); mat1_used[h] = 1; } RET(DD_OK, 3); END
+MD(dev1_GetMatrix, 3) uint32_t h = ARG(1); memcpy(GP(ARG(2)), mat1_of(h), 64); RET(DD_OK, 3); END
+MD(dev1_DeleteMatrix, 2) uint32_t h = ARG(1); if (h && h < 512) mat1_used[h] = 0; RET(DD_OK, 2); END
+OK_M(dev1_Initialize, 4)
+M(dev1_Pick, 5) RET(DD_OK, 5); END
+M(dev1_GetPickRecords, 3) if (ARG(1)) rt_w32(G_MEM, ARG(1), 0); RET(DD_OK, 3); END
 /* ================= the vtables ================= */
 static void old_vtables(const Fn *dd, const Fn *surf, const Fn *dev)
 {
@@ -527,6 +649,14 @@ static void old_vtables(const Fn *dd, const Fn *surf, const Fn *dev)
         dev_ComputeSphereVisibility, dev_GetTexture, dev_SetTexture, dev_GetTextureStageState, dev_SetTextureStageState, dev_ValidateDevice };
     _Static_assert(sizeof dev2 / sizeof *dev2 == 33 && sizeof dev3 / sizeof *dev3 == 42 && sizeof vp / sizeof *vp == 21, "old vtable sizes");
     vt[O_DEV2] = build_vtable("IDirect3DDevice2", dev2, 33); vt[O_DEV3] = build_vtable("IDirect3DDevice3", dev3, 42);
+    static const Fn dev1[] = { dev_old_QueryInterface, dev_AddRef, dev_Release, dev1_Initialize, dev_old_GetCaps, dev2_SwapTextureHandles,
+        dev1_CreateExecuteBuffer, dev_old_GetStats, dev1_Execute, dev_old_AddViewport, dev_old_DeleteViewport, dev_old_NextViewport,
+        dev1_Pick, dev1_GetPickRecords, dev2_EnumTextureFormats, dev1_CreateMatrix, dev1_SetMatrix, dev1_GetMatrix, dev1_DeleteMatrix,
+        dev_BeginScene, dev_EndScene, dev_old_GetDirect3D };
+    static const Fn exb[] = { exb_QueryInterface, exb_AddRef, exb_Release, exb_Initialize, exb_Lock, exb_Unlock, exb_SetExecuteData,
+        exb_GetExecuteData, exb_Validate, exb_Optimize };
+    _Static_assert(sizeof dev1 / sizeof *dev1 == 22 && sizeof exb / sizeof *exb == 10, "Direct3D 1 vtable sizes");
+    vt[O_DEV1] = build_vtable("IDirect3DDevice", dev1, 22); vt[O_EXB] = build_vtable("IDirect3DExecuteBuffer", exb, 10);
 }
 
 /* ---- exports: DirectDraw before DirectDrawCreateEx (the GOG Resident Evil games and Dino Crisis; the other games

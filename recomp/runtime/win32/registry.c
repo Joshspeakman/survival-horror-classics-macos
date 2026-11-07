@@ -73,7 +73,8 @@ static void gog_script_registry(const char *game_dir, const char *app_win)
     char *js = malloc((size_t)n + 1); if (!js || fread(js, 1, (size_t)n, f) != (size_t)n) { free(js); fclose(f); return; }
     js[n] = 0; fclose(f); int count = 0;
     for (const char *a = strstr(js, "\"setRegistry\""); a; a = strstr(a + 1, "\"setRegistry\"")) {
-        const char *end = strchr(a, '}'); if (!end) break;
+        /* this action's fields: up to the next action ("{app}" in a value holds a brace of its own) */
+        const char *end = strstr(a + 1, "\"setRegistry\""); if (!end) end = js + n;
         char root[64], sub[512], data[4096], name[256], type[32];
         if (!json_field(a, end, "root", root, sizeof root) || !json_field(a, end, "subkey", sub, sizeof sub) || !json_field(a, end, "valueName", name, sizeof name) ||
             !json_field(a, end, "valueType", type, sizeof type) || !json_field(a, end, "valueData", data, sizeof data)) continue;

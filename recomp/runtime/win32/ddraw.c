@@ -570,7 +570,10 @@ static void present_if_frame(Ctx *c, DSurface *me, const int32_t *a)
     if (!(U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE)) return;
     int64_t w = U32(me->desc, SD_WIDTH), h = U32(me->desc, SD_HEIGHT), aw = a[2] - a[0], ah = a[3] - a[1];
     { static int n; if (n < 8 && log_on > 0) { n++; dsr_log("copy onto the primary %d,%d-%d,%d (primary %lldx%lld)", a[0], a[1], a[2], a[3], w, h); } }
-    if (aw > 0 && ah > 0 && aw * ah * 4 >= w * h) present(c, me);
+    if (aw > 0 && ah > 0 && aw * ah * 4 >= w * h) {
+        { static int n; if (log_on > 0 && n++ < 3) dsr_log("present the primary %u after a copy onto %d,%d-%d,%d", me->id, a[0], a[1], a[2], a[3]); }
+        present(c, me);
+    }
 }
 M(s_Blt, 6) ME(DSurface, O_SURF)
     uint32_t dr = ARG(1), flags = ARG(4), fx = ARG(5); DSurface *src = obj(ARG(2), O_SURF); int32_t a[4], b[4];
