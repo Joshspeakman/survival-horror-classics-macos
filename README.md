@@ -65,9 +65,10 @@ screen.
 ## Test Aids
 
 Options > Test Aids (or `SHC_AIDS=1`): the player's health is held full (Resident Evil, Resident Evil 2, Resident Evil
-3, The Mercenaries), and Resident Evil 2 starts with every weapon (GOG's own `-wepall`). For testing a room:
+3, The Mercenaries), and Resident Evil 2 gets GOG's own all-weapons switch (`-wepall`; the inventory was not checked). For testing a room:
 `SHC_ROOM=<stage><room>` (as the room files are named, `101` = stage 1 room 01) makes the first room a new game loads
-that one (Resident Evil, 2 and 3), and `SHC_ROOM_AT=<n>` the n-th. `recomp/tools/re_qa.sh <folder>` is the QA pass: each
+that one (Resident Evil, 2 and 3; at the room's first camera, the player where the new game put them), and
+`SHC_ROOM_AT=<n>` the n-th. Dino Crisis has no aids yet ([#2](../../issues/2)). `recomp/tools/re_qa.sh <folder>` is the QA pass: each
 version from the installed app through a new game and a set of rooms, with a contact sheet and a report.
 
 ## How it works
