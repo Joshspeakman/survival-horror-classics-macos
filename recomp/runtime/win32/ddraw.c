@@ -562,14 +562,14 @@ static void emit_blt(DSurface *d, const int32_t *dr, DSurface *src, const int32_
     if (src) memcpy(p + 6, sr, 16); else memset(p + 6, 0, 16);
     p[10] = flags; p[11] = fill; cmd_end();
 }
-/* a copy onto the primary surface that covers at least half of it (a game drawing off screen and copying the frame over
+/* a copy onto the primary surface that covers at least a quarter of it (a game drawing off screen and copying the frame over
  * in parts or with a rectangle: Resident Evil 2) shows the primary as it now is */
 static void present_if_frame(Ctx *c, DSurface *me, const int32_t *a)
 {
     if (!(U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE)) return;
     int64_t w = U32(me->desc, SD_WIDTH), h = U32(me->desc, SD_HEIGHT), aw = a[2] - a[0], ah = a[3] - a[1];
     { static int n; if (n < 8 && log_on > 0) { n++; dsr_log("copy onto the primary %d,%d-%d,%d (primary %lldx%lld)", a[0], a[1], a[2], a[3], w, h); } }
-    if (aw > 0 && ah > 0 && aw * ah * 2 >= w * h) present(c, me);
+    if (aw > 0 && ah > 0 && aw * ah * 4 >= w * h) present(c, me);
 }
 M(s_Blt, 6) ME(DSurface, O_SURF)
     uint32_t dr = ARG(1), flags = ARG(4), fx = ARG(5); DSurface *src = obj(ARG(2), O_SURF); int32_t a[4], b[4];
@@ -735,6 +735,7 @@ M(s_SetColorKey, 3) ME(DSurface, O_SURF)
     if (!(fl & 8)) { dsr_log("SetColorKey flags %08x (not a source key: ignored)", fl); RET(DD_OK, 3); }
     int had = me->has_ck; uint32_t old0 = me->ck[0], old1 = me->ck[1];
     if (k) { me->has_ck = 1; me->ck[0] = rt_r32(G_MEM, k); me->ck[1] = (fl & 1) ? rt_r32(G_MEM, k + 4) : me->ck[0]; } else me->has_ck = 0;
+    { static int n; if (log_on > 0 && n < 6) { n++; dsr_log("SetColorKey surface %u flags %#x key %08x..%08x (struct %08x %08x)", me->id, fl, me->ck[0], me->ck[1], k ? rt_r32(G_MEM, k) : 0, k ? rt_r32(G_MEM, k + 4) : 0); } }
     if ((had != me->has_ck || old0 != me->ck[0] || old1 != me->ck[1]) && !me->gpu_dirty && !(U32(me->desc, SD_CAPS) & DDSCAPS_ZBUFFER)) {
         int32_t u[4] = {0, 0, (int32_t)U32(me->desc, SD_WIDTH), (int32_t)U32(me->desc, SD_HEIGHT)}; upload_rect(me, u);
     }

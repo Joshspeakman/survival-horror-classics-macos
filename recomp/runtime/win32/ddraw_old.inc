@@ -208,7 +208,12 @@ IMPL(ddraw, DirectDrawCreateClipper) { DClip *k = calloc(1, sizeof *k); k->ref =
 #endif
 
 /* ================= textures (IDirect3DTexture, IDirect3DTexture2) ================= */
-M(tex_GetHandle, 3) ME(DSurface, O_SURF) rt_w32(G_MEM, ARG(2), tex_handle(me)); RET(DD_OK, 3); END
+M(tex_GetHandle, 3) ME(DSurface, O_SURF)
+    uint32_t h = tex_handle(me); rt_w32(G_MEM, ARG(2), h);
+    dsr_log("texture handle %#x: surface %u %ux%u %u-bit (pf flags %#x masks %x %x %x %x) key %d caps %#x", h, me->id, U32(me->desc, SD_WIDTH), U32(me->desc, SD_HEIGHT),
+            bpp_of(me->desc), U32(me->desc, SD_PF + PF_FLAGS), U32(me->desc, SD_PF + PF_R), U32(me->desc, SD_PF + PF_G), U32(me->desc, SD_PF + PF_B), U32(me->desc, SD_PF + PF_A), me->has_ck, U32(me->desc, SD_CAPS));
+    RET(DD_OK, 3);
+END
 /* Load: the source texture's pixels (and key) into this one, as the drivers' copy from system memory did */
 M(tex_Load, 2) ME(DSurface, O_SURF)
     DSurface *src = obj(ARG(1), O_SURF); if (!src) RET(DDERR_INVALIDPARAMS, 2);
@@ -307,7 +312,6 @@ static void vp_clear(DVp *v, uint32_t n, uint32_t rects, uint32_t flags, uint32_
     /* a background material with a texture (D3DMATERIAL.hTexture): clearing the target fills the viewport with that
      * texture, stretched over it. Resident Evil 2's rooms are drawn so, its pre-rendered picture as the background. */
     DMat *m = v->bg && v->bg < 1024 ? mat_handles[v->bg] : 0; DSurface *t = m ? tex_of_handle(U32(m->m, 72)) : 0;
-    { static int n; if (log_on > 0 && (flags & 1) && n++ % 300 == 0) { dsr_log("viewport clear: background material %u (%s) texture handle %u -> %s", v->bg, m ? "found" : "none", m ? U32(m->m, 72) : 0, t ? "texture" : "none"); } }
     if ((flags & 1) && t && v->dev->rt) {
         const uint8_t *q = v->have2 ? v->v2 : v->v1; int32_t dr[4], sr[4] = {0, 0, (int32_t)U32(t->desc, SD_WIDTH), (int32_t)U32(t->desc, SD_HEIGHT)};
         dr[0] = (int32_t)U32(q, 4); dr[1] = (int32_t)U32(q, 8); dr[2] = dr[0] + (int32_t)U32(q, 12); dr[3] = dr[1] + (int32_t)U32(q, 16);
