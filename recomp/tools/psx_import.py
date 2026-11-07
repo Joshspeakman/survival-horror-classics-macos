@@ -13,6 +13,14 @@ nothing from a disc is part of the project.
       mix stay as they were. A match is confirmed on the waveform itself (above 0.9); PC clips with none keep the
       PC's (reported).
 
+  psx_import.py movies re1 <disc .cue>[,<another disc .cue>] <game folder> <mod folder> [--report <file>]
+      The disc's movies (MDEC, 15 fps, 37.8 kHz sound) in place of the PC's (Resident Evil: Cinepak, 10 fps, 22 kHz),
+      each converted to MPEG-1 (what the port's player decodes; 30 fps, each frame shown twice) as "<PC movie>.mpg"
+      below <mod folder>, which the port plays in its place (amstream.inc, dshow.c). The discs are tried in the order
+      given (Resident Evil: the Ultimate Director's Cut first, for its uncut colour opening and endings, then the
+      original release for the staff rolls it lacks). Each pairing is checked frame by frame against the PC's movie
+      (the same scene: thumbnails at a quarter, half and three quarters through); one that differs is left out.
+
 Needs: ffmpeg (Homebrew), numpy (the project's recomp/.venv). Run with recomp/.venv/bin/python.
 """
 import os, struct, subprocess, sys, tempfile, wave
@@ -203,8 +211,84 @@ def fine_env(a, rate):
     if n == 0: return np.zeros(1, np.float32)
     return np.log10(np.sqrt((a[:n * step].reshape(n, step) ** 2).mean(axis=1) + 1e-9) + 1e-4).astype(np.float32)
 
+# the PC's movies and the disc's names for them (Resident Evil: the US PC names its opening and two endings by region)
+MOVIES = {
+    're1': {'pc': 'USA/Movie', 'ext': '.avi', 'disc_dirs': ('PSXUSA/ZMOVIE/', 'PSX/MOVIE/'),
+            'names': {'pu': 'pj', 'ou': 'oj', 'eu4': 'ed4', 'eu5': 'ed5'},
+            'keep': ('staf_r', 'stfc_r', 'stfj_r', 'stfz_r')},   # the PC's staff rolls carry the credits in the picture;
+                                                                 # the PlayStation drew them over its rolls in the game
+}
+
+def frames(path, fmt=None, fps=4):
+    """a movie as grey 32x24 frames, fps a second: an array (frames, 768)"""
+    args = [FFMPEG, '-v', 'error'] + (['-f', fmt] if fmt else []) + ['-i', path, '-vf', f'fps={fps},scale=32:24,format=gray', '-f', 'rawvideo', '-']
+    r = subprocess.run(args, capture_output=True); n = len(r.stdout) // 768
+    return np.frombuffer(r.stdout[:n * 768], np.uint8).astype(np.float32).reshape(n, 768)
+
+def same_scene(a, b, fps=4, max_shift=3.0):
+    """how alike two movies look: the mean frame correlation at the best offset within +-max_shift seconds"""
+    if not len(a) or not len(b): return 0.0
+    def z(m): m = m - m.mean(1, keepdims=True); return m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-6)
+    a, b = z(a), z(b); best = -1.0
+    for sh in range(-int(max_shift * fps), int(max_shift * fps) + 1):
+        x, y = (a[sh:], b) if sh >= 0 else (a, b[-sh:])
+        n = min(len(x), len(y))
+        if n < max(4, min(len(a), len(b)) // 2): continue
+        best = max(best, float((x[:n] * y[:n]).sum(1).mean()))
+    return best
+
+def duration(path, fmt=None):
+    args = ['ffprobe' if not FFMPEG.endswith('ffmpeg') else FFMPEG[:-6] + 'ffprobe', '-v', 'error'] + (['-f', fmt] if fmt else []) + \
+           ['-show_entries', 'format=duration', '-of', 'csv=p=0', path]
+    r = subprocess.run(args, capture_output=True, text=True)
+    try: return float(r.stdout.strip())
+    except ValueError: return 0.0
+
+def movies(game, cues, game_dir, mod, report=None):
+    g = MOVIES[game]; d = find_ci(game_dir, g['pc']); lines = []
+    pcs = sorted(n for n in os.listdir(d) if n.lower().endswith(g['ext']))
+    discs = [psx_disc.Disc(c) for c in cues.split(',')]
+    try:
+        tables = [{p.upper(): (p, lba, size) for p, lba, size, xa in psx_disc.walk(dd)} for dd in discs]
+        for name in pcs:
+            stem = name[:-len(g['ext'])].lower(); want = g['names'].get(stem, stem).upper()
+            if stem in g.get('keep', ()): lines.append(f'  -    {name}: the PC\'s (kept)'); continue
+            src = None
+            for dd, t in zip(discs, tables):
+                for prefix in g['disc_dirs']:
+                    e = t.get(prefix + want + '.STR')
+                    if e: src = (dd, e); break
+                if src: break
+            if not src: lines.append(f'  -    {name}: not on these discs (kept)'); continue
+            dd, (path, lba, size) = src
+            with tempfile.NamedTemporaryFile(suffix='.str', delete=False) as tmp:
+                for k in range((size + 2047) // 2048):
+                    sec = dd.sector(lba + k)
+                    if len(sec) < 2352: break
+                    tmp.write(sec)
+                raw = tmp.name
+            try:
+                pc_path = os.path.join(d, name); dpc = duration(pc_path); dps = (size // 2048) / 150.0
+                score = same_scene(frames(pc_path), frames(raw, 'psxstr'))
+                if score < 0.6:
+                    lines.append(f'  -    {name}: {os.path.basename(cues.split(",")[discs.index(dd)])} {path} looks different ({score:.2f}): kept'); continue
+                out = os.path.join(mod, *g['pc'].lower().split('/'), name.lower() + '.mpg'); os.makedirs(os.path.dirname(out), exist_ok=True)
+                r = subprocess.run([FFMPEG, '-nostdin', '-v', 'error', '-y', '-f', 'psxstr', '-i', raw, '-c:v', 'mpeg1video', '-q:v', '2', '-r', '30',
+                                    '-c:a', 'mp2', '-b:a', '224k', '-ar', '44100', '-f', 'mpeg', out + '.part'], capture_output=True)
+                if r.returncode: lines.append(f'  -    {name}: conversion failed: {r.stderr.decode()[-200:]}'); continue
+                os.replace(out + '.part', out)
+                lines.append(f'{score:.2f}  {name}  <-  {path} ({dps:.1f} s; PC {dpc:.1f} s)')
+            finally: os.unlink(raw)
+    finally:
+        for dd in discs: dd.close()
+    for l in lines: say(l)
+    if report: open(report, 'w').write('\n'.join(lines) + '\n')
+
 def main(argv):
-    if len(argv) >= 5 and argv[0] == 'voices' and argv[1] in GAMES:
+    if len(argv) >= 5 and argv[0] == 'movies' and argv[1] in MOVIES:
+        rep = argv[argv.index('--report') + 1] if '--report' in argv else None
+        movies(argv[1], argv[2], argv[3], argv[4], rep)
+    elif len(argv) >= 5 and argv[0] == 'voices' and argv[1] in GAMES:
         rep = argv[argv.index('--report') + 1] if '--report' in argv else None
         voices(argv[1], argv[2], argv[3], argv[4], rep)
     else: sys.exit(__doc__)

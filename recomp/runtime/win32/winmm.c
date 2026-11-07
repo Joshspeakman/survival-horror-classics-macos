@@ -177,7 +177,83 @@ IMPL(winmm, auxGetNumDevs) { RET(0, 0); }
 IMPL(winmm, auxGetDevCapsA) { RET(2, 3); }
 IMPL(winmm, auxGetVolume) { RET(2, 2); }
 IMPL(winmm, auxSetVolume) { RET(2, 2); }
-IMPL(winmm, mciSendCommandA) { RET(257, 4); }
+/* MCI: the AVI video device ("avivideo"), as Resident Evil plays its movies: MCI_OPEN of the device, then of the movie
+ * (MCI_OPEN_ELEMENT, a child window of the game's), MCI_STATUS of that window, MCI_PLAY with MCI_NOTIFY (the game's
+ * window hears MM_MCINOTIFY when it ends), MCI_STOP / MCI_CLOSE when it is skipped. The host plays the movie
+ * (main.m gta_movie_play: AVFoundation over the game): its "<file>.mpg" (a mod's first, else the installer's MPEG-1 copy
+ * beside it), or the file itself. RE_NO_MOVIES / GTA_NO_MOVIES: each movie ends as it starts. Other MCI devices: none. */
+#include <dlfcn.h>
+#include <sys/stat.h>
+enum { MCI_OPEN = 0x803, MCI_CLOSE = 0x804, MCI_PLAY = 0x806, MCI_SEEK = 0x807, MCI_STOP = 0x808, MCI_PAUSE = 0x809,
+       MCI_STATUS = 0x814, MCI_RESUME = 0x855, MCI_NOTIFY_F = 1, MCI_OPEN_TYPE = 0x2000, MCI_OPEN_ELEMENT = 0x200,
+       MCI_STATUS_ITEM = 0x100, MM_MCINOTIFY = 0x3b9, MCI_NOTIFY_SUCCESSFUL = 1, MCI_NOTIFY_ABORTED = 4 };
+static struct { int open; char path[2048]; uint32_t notify_hwnd; volatile int playing, gen; } mci[8];   /* id 1: the device, 2..7: movies */
+static int mci_log(void) { static int v = -1; if (v < 0) v = getenv("W32_MOVIELOG") != 0; return v; }
+static void mci_done(void *user)                          /* the host's player: the movie ended (main thread) */
+{
+    uintptr_t u = (uintptr_t)user; int id = (int)(u & 7), gen = (int)(u >> 3);
+    if (id < 2 || id > 7 || !mci[id].playing || mci[id].gen != gen) return;
+    mci[id].playing = 0;
+    uint32_t w32_window_tid(uint32_t); void w32_post(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    if (mci[id].notify_hwnd) w32_post(w32_window_tid(mci[id].notify_hwnd), mci[id].notify_hwnd, MM_MCINOTIFY, MCI_NOTIFY_SUCCESSFUL, (uint32_t)id);
+    if (mci_log()) fprintf(stderr, "mci: %d ended\n", id);
+}
+IMPL(winmm, mciSendCommandA)                         /* (device, message, flags, parameters) */
+{
+    uint32_t id = ARG(0), msg = ARG(1), flags = ARG(2), p = ARG(3);
+    static int (*play)(const char *, void (*)(void *), void *); static void (*stop)(void); static int looked;
+    if (!looked) { looked = 1; play = (int (*)(const char *, void (*)(void *), void *))dlsym(RTLD_DEFAULT, "gta_movie_play");
+                   stop = (void (*)(void))dlsym(RTLD_DEFAULT, "gta_movie_stop"); }
+    if (mci_log()) fprintf(stderr, "mci: device %u message %#x flags %#x\n", id, msg, flags);
+    if (msg == MCI_OPEN) {
+        if (flags & MCI_OPEN_ELEMENT) {                  /* a movie */
+            const char *name = GS(rt_r32(G_MEM, p + 12)); char host[2048], conv[1100]; struct stat st;
+            snprintf(conv, sizeof conv, "%s.mpg", name);
+            if (!w32_host_path(conv, host, sizeof host, 0) && !stat(host, &st)) {}
+            else if (w32_host_path(name, host, sizeof host, 0) || stat(host, &st)) RET(275 /* MCIERR_FILE_NOT_FOUND */, 4);
+            int k = 2; while (k < 8 && mci[k].open) k++;
+            if (k == 8) RET(257, 4);
+            mci[k].open = 1; mci[k].playing = 0; snprintf(mci[k].path, sizeof mci[k].path, "%s", host);
+            rt_w32(G_MEM, p + 4, (uint32_t)k);
+            if (mci_log()) fprintf(stderr, "mci: open %s -> %d (%s)\n", name, k, host);
+            RET(0, 4);
+        }
+        if (flags & MCI_OPEN_TYPE) {                     /* the device itself: "avivideo" only */
+            uint32_t t = rt_r32(G_MEM, p + 8);
+            if ((flags & 0x1000 /* MCI_OPEN_TYPE_ID */) || !t || strcasecmp(GS(t), "avivideo")) RET(266 /* MCIERR_INVALID_DEVICE_NAME */, 4);
+            mci[1].open = 1; rt_w32(G_MEM, p + 4, 1); RET(0, 4);
+        }
+        RET(257, 4);
+    }
+    if (id < 1 || id > 7 || !mci[id].open) RET(257 /* MCIERR_INVALID_DEVICE_ID */, 4);
+    switch (msg) {
+    case MCI_PLAY:
+        if (id < 2) RET(0, 4);
+        mci[id].notify_hwnd = (flags & MCI_NOTIFY_F) ? rt_r32(G_MEM, p) : 0;
+        mci[id].gen++; mci[id].playing = 1;
+        { const char *off = getenv("RE_NO_MOVIES"); if (!off) off = getenv("GTA_NO_MOVIES");
+          if ((off && strcmp(off, "0")) || !play || !play(mci[id].path, mci_done, (void *)(uintptr_t)((uint32_t)id | (uint32_t)mci[id].gen << 3)))
+              mci_done((void *)(uintptr_t)((uint32_t)id | (uint32_t)mci[id].gen << 3)); }   /* nothing to show: over at once */
+        RET(0, 4);
+    case MCI_STOP: case MCI_CLOSE:
+        if (id >= 2 && mci[id].playing) {
+            mci[id].playing = 0; mci[id].gen++; if (stop) stop();
+            if ((flags & MCI_NOTIFY_F) && mci[id].notify_hwnd) { uint32_t w32_window_tid(uint32_t); void w32_post(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+                w32_post(w32_window_tid(mci[id].notify_hwnd), mci[id].notify_hwnd, MM_MCINOTIFY, MCI_NOTIFY_ABORTED, id); }
+        }
+        if (msg == MCI_CLOSE) mci[id].open = 0;
+        RET(0, 4);
+    case MCI_STATUS:
+        if (flags & MCI_STATUS_ITEM) {
+            uint32_t item = rt_r32(G_MEM, p + 8), v = 0;
+            if (item == 4) v = mci[id].playing ? 526 /* MCI_MODE_PLAY */ : 525 /* MCI_MODE_STOP */;
+            else if (item == 0x4001) v = 0x7fff0001u;    /* the movie's window: one of the host's, not the game's */
+            rt_w32(G_MEM, p + 4, v);
+        }
+        RET(0, 4);
+    default: RET(0, 4);                                  /* MCI_WINDOW, MCI_PUT, MCI_SEEK, MCI_PAUSE, MCI_SET ...: accepted */
+    }
+}
 IMPL(winmm, midiOutOpen) { RET(6, 5); }
 IMPL(winmm, midiOutClose) { RET(5, 1); }
 IMPL(winmm, midiOutLongMsg) { RET(5, 3); }
