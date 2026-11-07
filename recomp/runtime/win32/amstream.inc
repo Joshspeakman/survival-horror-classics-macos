@@ -108,6 +108,7 @@ MA(ams_AddMediaStream, 5)
 static plm_t *ams_open_one(const char *host) { plm_t *p = plm_create_with_filename(host); if (p && !plm_probe(p, 5000 * 1024)) { plm_destroy(p); p = 0; } return p; }
 MA(ams_OpenFile, 3)
     char a[1024]; int k = 0; for (; k < 1023 && rt_r16(G_MEM, ARG(1) + 2u * (uint32_t)k); k++) a[k] = (char)rt_r16(G_MEM, ARG(1) + 2u * (uint32_t)k); a[k] = 0;
+    if (getenv("RE_NO_MOVIES") && strcmp(getenv("RE_NO_MOVIES"), "0")) { ams_log("OpenFile %s: movies off", a); RET(0x80070002u, 3); }   /* the launcher's Movies: Off */
     char host[2048], conv[2100]; if (w32_host_path(a, host, sizeof host, 0)) { ams_log("OpenFile %s: not found", a); RET(0x80070002u, 3); }
     snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb"); if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); }   /* the installer's MPEG-1 copy */
     ams_close(me);
