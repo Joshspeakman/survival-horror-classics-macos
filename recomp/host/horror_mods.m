@@ -47,10 +47,16 @@ NSString *hmods_env(NSString *game)
         if ([m[@"enabled"] boolValue] && [m[@"kind"] isEqualToString:@"files"]) [dirs addObject:[mods_dir(game) stringByAppendingPathComponent:m[@"folder"]]];
     return [dirs componentsJoinedByString:@"\n"];
 }
-void hmods_counts(NSString *game, NSUInteger *installed, NSUInteger *on)
+void hmods_counts(NSString *game, NSUInteger *installed, NSUInteger *on)   /* the launcher's tile, each redraw: read again only when the list changed */
 {
-    NSArray *a = load_index(game); *installed = a.count; *on = 0;
-    for (NSDictionary *m in a) if ([m[@"enabled"] boolValue]) (*on)++;
+    static NSMutableDictionary *seen; if (!seen) seen = [NSMutableDictionary dictionary];
+    NSDictionary *at = [[NSFileManager defaultManager] attributesOfItemAtPath:index_path(game) error:nil];
+    NSArray *key = @[at.fileModificationDate ?: NSDate.distantPast, @(at.fileSize)], *c = seen[game];
+    if (!c || ![c[0] isEqual:key]) {
+        NSArray *a = load_index(game); NSUInteger n = 0; for (NSDictionary *m in a) if ([m[@"enabled"] boolValue]) n++;
+        seen[game] = c = @[key, @(a.count), @(n)];
+    }
+    *installed = [c[1] unsignedIntegerValue]; *on = [c[2] unsignedIntegerValue];
 }
 
 // ---------------------------------------------------------------- the game's layout

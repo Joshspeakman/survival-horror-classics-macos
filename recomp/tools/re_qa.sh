@@ -47,7 +47,11 @@ for id in $IDS; do
   run $id play $SECS "$S"
   if [ -n "${QA_MODS_ROOT:-}" ]; then
     case $id in re2c) game=re2;; re3m) game=re3;; *) game=$id;; esac; mods=""
-    for d in "$QA_MODS_ROOT/$game"/*/; do [ -d "$d" ] && mods="$mods${mods:+$'\n'}${d%/}"; done
+    for k in $(seq 0 63); do                     # the launcher's order (index.plist, first wins), on ones only; else every folder
+      f=$(/usr/libexec/PlistBuddy -c "Print :$k:folder" "$QA_MODS_ROOT/$game/index.plist" 2>/dev/null) || break
+      [ "$(/usr/libexec/PlistBuddy -c "Print :$k:enabled" "$QA_MODS_ROOT/$game/index.plist" 2>/dev/null)" = true ] && mods="$mods${mods:+$'\n'}$QA_MODS_ROOT/$game/$f"
+    done
+    [ -n "$mods" ] || for d in "$QA_MODS_ROOT/$game"/*/; do [ -d "$d" ] && mods="$mods${mods:+$'\n'}${d%/}"; done
     if [ -n "$mods" ]; then
       S="$KEYS"; for f in $PLAY; do S="$S;${f}:shot:$OUT/$id/mods-$f.png"; shots+=("$OUT/$id/mods-$f.png"); done
       run $id mods $SECS "$S" GTA_MODS="$mods" W32_FILELOG=1
