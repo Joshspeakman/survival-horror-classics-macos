@@ -104,6 +104,10 @@ static uint32_t render_file(Graph *gr, uint32_t wname)
     char host[2048]; if (w32_host_path(a, host, sizeof host, 0)) return VFW_E_NOT_FOUND;
     close_stream(gr);
     const char *dot = strrchr(a, '.');
+    {   /* a movie the installer converted (Resident Evil 2's Indeo AVIs, named .bin): its MPEG-1 copy, "<file>.mpg" */
+        char conv[2100]; snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb");
+        if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); dot = ".mpg"; }
+    }
     if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg") || !strcasecmp(dot, ".avi") || !strcasecmp(dot, ".wmv"))) {
         if (getenv("W32_AUDIOLOG")) fprintf(stderr, "dshow: RenderFile %s -> a video\n", a);
         gr->video = 1; gr->complete_pending = gr->complete_sent = 0; snprintf(gr->vpath, sizeof gr->vpath, "%s", host); return S_OK;

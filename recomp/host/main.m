@@ -578,8 +578,8 @@ static void pad_start(void)
 }
 #endif
 
-#ifdef GTA_EDITION
-// ---------------------------------------------------------------- movies (the GTA games' intro movies, MPEG-1)
+#if defined(GTA_EDITION) || defined(RE_EDITION)
+// ---------------------------------------------------------------- movies (the GTA games' intro movies, MPEG-1; Resident Evil 2's)
 /* The games play Logo.mpg and GTAtitles.mpg through DirectShow (runtime/win32/dshow.c), whose video renderer drew into
  * the game's window. Here AVFoundation plays the file in a layer over the game's picture (aspect-fit on black); the
  * runtime is told when it ends (done(user), on the main thread) and stops it when the game skips it. Muted with
@@ -682,6 +682,8 @@ __attribute__((visibility("default"), used)) void gta_movie_close(void)   /* the
     });
 }
 
+#endif
+#ifdef GTA_EDITION
 // ---------------------------------------------------------------- game controller (the GTA games: DirectInput's gamepad)
 /* The controller (the one used last) as DirectInput's gamepad (runtime/win32/dinput8.c), read 250 times a second on the
  * main thread while the game is the active app. Buttons in the order the games' default joypad layout expects, so a

@@ -241,7 +241,10 @@ M(mat_Release, 1)
     RET(r, 1);
 END
 M(mat_SetMaterial, 2) DMat *me = mat_of(ARG(0)); if (!me) RET(DDERR_INVALIDPARAMS, 2);
-    uint32_t sz = rt_r32(G_MEM, ARG(1)); if (!sz || sz > 80) sz = 80; memcpy(me->m, GP(ARG(1)), sz); RET(DD_OK, 2); END
+    uint32_t sz = rt_r32(G_MEM, ARG(1)); if (!sz || sz > 80) sz = 80; memcpy(me->m, GP(ARG(1)), sz);
+    { static int n; static uint32_t last = 0xffffffffu; float f[4]; memcpy(f, me->m + 4, 16);
+      if (log_on > 0 && n < 20 && U32(me->m, 72) != last) { n++; last = U32(me->m, 72); dsr_log("SetMaterial size %u diffuse %.2f %.2f %.2f %.2f texture %u", sz, f[0], f[1], f[2], f[3], U32(me->m, 72)); } }
+    RET(DD_OK, 2); END
 M(mat_GetMaterial, 2) DMat *me = mat_of(ARG(0)); if (!me) RET(DDERR_INVALIDPARAMS, 2);
     uint32_t sz = rt_r32(G_MEM, ARG(1)); if (!sz || sz > 80) sz = 80; memcpy(GP(ARG(1)), me->m, sz); RET(DD_OK, 2); END
 M(mat_GetHandle, 3) DMat *me = mat_of(ARG(0)); if (!me) RET(DDERR_INVALIDPARAMS, 3);
@@ -306,6 +309,8 @@ static void vp_clear(DVp *v, uint32_t n, uint32_t rects, uint32_t flags, uint32_
     if (!v->dev) return;
     if (v->dev->old && v->dev->old->cur != v) vp_apply(v);
     if (!rects || n > 4096) n = 0;
+    { static int k; if (log_on > 0 && k++ % 200 == 0) { int32_t r4[4] = {0, 0, 0, 0}; if (n) memcpy(r4, GP(rects), 16);
+        dsr_log("viewport clear flags %u colour %08x z %.3f rects %u: %d,%d-%d,%d (rt %u)", flags, color, z, n, r4[0], r4[1], r4[2], r4[3], v->dev->rt ? v->dev->rt->id : 0); } }
     uint32_t *p = cmd_begin(DSR_CLEAR, 20 + 16 * n);
     p[0] = flags; p[1] = color; memcpy(&p[2], &z, 4); p[3] = stencil; p[4] = n; if (n) memcpy(p + 5, GP(rects), 16 * n);
     cmd_end();
