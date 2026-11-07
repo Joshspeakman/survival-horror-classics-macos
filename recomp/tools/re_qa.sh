@@ -3,6 +3,8 @@
 # ~/Applications, or SHC_APP=<app>). For each version: title -> a new game (scripted keys) -> play, then room jumps with
 # the Test Aids on (SHC_AIDS=1 SHC_ROOM=<room>), each run in test mode (a background window, muted). Writes a contact
 # sheet per version (<out>/<id>.png), and <out>/report.txt: faults, crash reports, frame rate, frames per run.
+# QA_MODS_ROOT=<folder like ~/Games/SurvivalHorrorClassics/mods>: one more play run per version with every mod installed
+# for its game on (GTA_MODS), its mod files listed in the report.
 set -uo pipefail
 OUT="$1"; shift; IDS="${*:-re1 re2 re2c re3 re3m dc}"
 APP="${SHC_APP:-$HOME/Applications/Survival Horror Classics Nightly.app}"
@@ -43,6 +45,15 @@ for id in $IDS; do
   mkdir -p "$OUT/$id"; shots=()
   S="$KEYS"; for f in $PLAY; do S="$S;${f}:shot:$OUT/$id/play-$f.png"; shots+=("$OUT/$id/play-$f.png"); done
   run $id play $SECS "$S"
+  if [ -n "${QA_MODS_ROOT:-}" ]; then
+    case $id in re2c) game=re2;; re3m) game=re3;; *) game=$id;; esac; mods=""
+    for d in "$QA_MODS_ROOT/$game"/*/; do [ -d "$d" ] && mods="$mods${mods:+$'\n'}${d%/}"; done
+    if [ -n "$mods" ]; then
+      S="$KEYS"; for f in $PLAY; do S="$S;${f}:shot:$OUT/$id/mods-$f.png"; shots+=("$OUT/$id/mods-$f.png"); done
+      run $id mods $SECS "$S" GTA_MODS="$mods" W32_FILELOG=1
+      echo "      mod files read: $(grep -a 'CreateFileA\|re: mod file' "$OUT/$id/mods/log.txt" | grep -a -c "$QA_MODS_ROOT")" | tee -a "$OUT/report.txt"
+    fi
+  fi
   for room in $ROOMS; do
     S="$KEYS;$((AT + 300)):shot:$OUT/$id/room-$room.png"; shots+=("$OUT/$id/room-$room.png")
     run $id room-$room $((SECS - 20)) "$S" SHC_AIDS=1 SHC_ROOM=$room
