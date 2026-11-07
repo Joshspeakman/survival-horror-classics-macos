@@ -77,3 +77,30 @@ IMPL(msacm32, acmFormatSuggest)                   /* (driver, source format, des
     RLOG("acmFormatSuggest %#x %u ch %u Hz -> PCM\n", rt_r16(G_MEM, s), ch, rate);
     RET(0, 5);
 }
+
+/* ---- winmm's joystick (Resident Evil, Resident Evil 2): the controller (dinput8.c's pad), as joystick 0 ---- */
+#ifdef RE_EDITION
+int w32_pad_state(float ax[6], uint32_t *buttons, int *pov);
+IMPL(winmm, joyGetDevCapsA)                       /* (id, JOYCAPSA *, size) */
+{
+    float ax[6]; uint32_t b; int pov;
+    if (ARG(0) != 0 || !w32_pad_state(ax, &b, &pov)) RET(167, 3);       /* JOYERR_UNPLUGGED */
+    uint32_t p = ARG(1), n = ARG(2) < 404 ? ARG(2) : 404; memset(GP(p), 0, n);
+    rt_w16(G_MEM, p, 0x045e); rt_w16(G_MEM, p + 2, 0x02ea); if (n >= 36) snprintf((char *)GP(p + 4), 32, "Controller");
+    uint32_t v[] = {0, 65535, 0, 65535, 0, 65535, 16, 10, 1000, 0, 65535, 0, 65535, 0, 65535, 0x1 | 0x2 | 0x4 | 0x10 | 0x20, 6, 6, 16};   /* X Y Z, buttons, period, R U V, caps (Z R U V POV), axes, buttons */
+    for (uint32_t k = 0; k < sizeof v / sizeof *v && 36 + 4 * k + 4 <= n; k++) rt_w32(G_MEM, p + 36 + 4 * k, v[k]);
+    RET(0, 3);
+}
+IMPL(winmm, joyGetPosEx)                          /* (id, JOYINFOEX *): axes 0..65535, buttons, the hat in hundredths of a degree */
+{
+    float ax[6]; uint32_t b; int pov;
+    if (ARG(0) != 0 || !w32_pad_state(ax, &b, &pov)) RET(167, 2);
+    uint32_t p = ARG(1);
+    for (int k = 0; k < 6; k++) { float x = ax[k] < -1 ? -1 : ax[k] > 1 ? 1 : ax[k]; rt_w32(G_MEM, p + 8 + 4u * (uint32_t)k, (uint32_t)((x + 1) * 32767.5f)); }
+    uint32_t bb = b & 0xfffu; if (b & (1u << 12)) pov = 0; else if (b & (1u << 13)) pov = 9000; else if (b & (1u << 14)) pov = 18000; else if (b & (1u << 15)) pov = 27000;
+    rt_w32(G_MEM, p + 32, bb); uint32_t nb = 0; for (int k = 0; k < 32; k++) nb += (bb >> k) & 1; rt_w32(G_MEM, p + 36, nb);
+    rt_w32(G_MEM, p + 40, pov >= 0 ? (uint32_t)pov : 0xffffu);
+    RET(0, 2);
+}
+#endif
+

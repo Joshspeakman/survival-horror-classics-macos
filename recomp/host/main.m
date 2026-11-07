@@ -683,8 +683,8 @@ __attribute__((visibility("default"), used)) void gta_movie_close(void)   /* the
 }
 
 #endif
-#ifdef GTA_EDITION
-// ---------------------------------------------------------------- game controller (the GTA games: DirectInput's gamepad)
+#if defined(GTA_EDITION) || defined(RE_EDITION)
+// ---------------------------------------------------------------- game controller (the GTA games, the Resident Evil games: DirectInput's gamepad)
 /* The controller (the one used last) as DirectInput's gamepad (runtime/win32/dinput8.c), read 250 times a second on the
  * main thread while the game is the active app. Buttons in the order the games' default joypad layout expects, so a
  * modern controller plays like the PS2 (GTA III's generic table, InitDefaultControlConfigJoyPad: 1 fire, 2 sprint /
@@ -773,7 +773,7 @@ static void window_created(uint32_t hwnd, int x, int y, int w, int h, uint32_t s
 #ifdef DF_EDITION
         pad_start();
 #endif
-#ifdef GTA_EDITION
+#if defined(GTA_EDITION) || defined(RE_EDITION)
         gta_pad_start();
 #endif
         NSRect f = NSScreen.mainScreen.frame;

@@ -3,6 +3,7 @@
  * not recompiled: Netcomm.dll (NovaWorld voice chat) and iBrowse.dll (NovaWorld's built-in web pages) report failure,
  * so the game runs without them. DirectPlay (DPLAYX) is only probed by the games; their LAN play is Netsock.dll. */
 #include "w32.h"
+#include "edition.h"
 #include <time.h>
 
 /* calls another stdcall import with its own arguments on a scratch frame below the caller's */
@@ -185,8 +186,10 @@ IMPL(winmm, midiStreamRestart) { RET(5, 1); }
 IMPL(winmm, midiStreamStop) { RET(5, 1); }
 IMPL(winmm, midiStreamPosition) { RET(5, 3); }
 IMPL(winmm, midiStreamProperty) { RET(5, 3); }
+#ifndef RE_EDITION
 IMPL(winmm, joyGetDevCapsA) { RET(167, 3); }                       /* JOYERR_UNPLUGGED */
 IMPL(winmm, joyGetPosEx) { RET(167, 2); }
+#endif
 IMPL(winmm, mixerGetDevCapsA) { RET(2, 3); }
 IMPL(winmm, mmioSeek) { RET(0xffffffffu, 3); }
 
