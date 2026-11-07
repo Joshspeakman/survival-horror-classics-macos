@@ -2,7 +2,9 @@
 """psx_import.py: PlayStation content from the player's own discs, as mods (docs/PLAYSTATION-IMPORT.md). This Mac only;
 nothing from a disc is part of the project.
 
-  psx_import.py voices <re1|re2|dc> <disc .cue>[,<disc 2 .cue>] <game folder> <mod folder> [--report <file>]
+  psx_import.py voices <re1|re2|re3|dc> <disc .cue>[,<disc 2 .cue>] <game folder> <mod folder> [--report <file>]
+      (Resident Evil 3: <game folder> is the voices unpacked from its archives by the game's own reader, re_mods.c's
+      W32_ROFSDUMP, since the PC keeps them packed)
       The disc's voice lines (XA, 37.8 kHz) in place of the PC's (22 kHz). Each XA channel of the disc's voice files
       is decoded whole (ffmpeg): a channel holds many lines one after another, which the game finds by position. Each
       PC clip is then looked for in every channel by the shape of its loudness over time (a sliding comparison, by
@@ -29,6 +31,9 @@ GAMES = {
             'pc': [('USA/Voice', '.wav')], 'store': 'wav'},
     're2': {'disc': lambda p: '/VOICE/' in p.upper() and p.upper().endswith('.XAS'),
             'pc': [('Pl0/Voice', '.sap'), ('Pl1/Voice', '.sap')], 'store': 'sap'},
+    're3': {'disc': lambda p: p.upper().startswith('CD_DATA/') and p.upper().endswith('.XAS'),
+            'pc': [('data_a/voice', '.wav')], 'store': 'wav'},      # <game folder>: the game's own unpacked voices
+                                                                     # (re_mods.c W32_ROFSDUMP), as the archive names them
     'dc':  {'disc': lambda p: p.upper().startswith('PSX/DATA_XA/') and p.upper().endswith('.XAS'),
             'pc': [('Sound/VOICE', '.dat')], 'store': 'wav'},
 }
