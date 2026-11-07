@@ -30,6 +30,9 @@ cp "$GAME/$EXE_NAME" "$OUT/$EXE_NAME"; chmod u+w "$OUT/$EXE_NAME"; EXE="$OUT/$EX
 if [[ -n "${RE_RELINK:-}" && -d "$OUT/obj" ]]; then            # runtime changes only: keep the lifted objects
   echo "== runtime and link (RE_RELINK)"; exec "$HERE/tools/build_runtime.sh" "$OUT"
 fi
+# Resident Evil: its task switcher's entry points (reached by jumps only) are functions of their own, so the runtime can
+# take them over (runtime/win32/re1_tasks.c: a host thread per task instead of switching stacks)
+[ "$ID" = re1 ] && echo '[4675420, 4675452, 4675484, 4675496]' > "$OUT/observed_targets.json"
 echo "== analysis"
 "$PY" "$HERE/tools/analyze.py" "$EXE" "$OUT/analysis.json" > "$OUT/analysis.log"
 sed -n '/^functions /p; /^decode failures:/p; /^jump tables /p; /^SEH:/p' "$OUT/analysis.log"

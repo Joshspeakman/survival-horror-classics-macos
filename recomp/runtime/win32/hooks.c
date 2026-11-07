@@ -76,8 +76,8 @@ void rt_hook(Ctx *c, uint32_t addr)
                 else if (!want && calls <= 64) { char p[1100]; snprintf(p, sizeof p, "%s.%ld", file, calls); vm_snapshot(p, c); }
             }
         }
-        if (getenv("DS_HOOKTRACE")) fprintf(stderr, "hook %08x: eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x | ret %08x args %08x %08x %08x %08x | st0 %g\n",
-                                            addr, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi, rt_r32(G_MEM, c->esp), rt_r32(G_MEM, c->esp + 4),
+        if (getenv("DS_HOOKTRACE")) fprintf(stderr, "hook %08x: eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x esp %08x ebp %08x | ret %08x args %08x %08x %08x %08x | st0 %g\n",
+                                            addr, c->eax, c->ecx, c->edx, c->ebx, c->esi, c->edi, c->esp, c->ebp, rt_r32(G_MEM, c->esp), rt_r32(G_MEM, c->esp + 4),
                                             rt_r32(G_MEM, c->esp + 8), rt_r32(G_MEM, c->esp + 12), rt_r32(G_MEM, c->esp + 16), c->st[c->top & 7]);
         if (getenv("DS_HOOKTRACE") && atoi(getenv("DS_HOOKTRACE")) >= 2)   /* and 80 bytes at the first two stack arguments */
             for (int k = 1; k <= 2; k++) {
@@ -108,6 +108,9 @@ int rt_override(Ctx *c, uint32_t addr)
 #endif
 #ifdef GTA_EDITION
     { int gta3_override(Ctx *, uint32_t); if (gta3_override(c, addr)) return 1; }   /* gta3_mode.c */
+#endif
+#ifdef RE1_EDITION
+    { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
 #endif
     switch (addr) {
 #ifdef DS2_BROKEN_WORLD

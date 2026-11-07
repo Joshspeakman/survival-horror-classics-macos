@@ -789,6 +789,14 @@ class Lifter:
                 if mn == 'call' and self.guest_flow:
                     break  # relocated calls resume through a guest continuation
                 if self.inline_data_call(i): t = self.inline_data_call(i); own.add(t); stack.append(t); break
+                if mn == 'push' and op0 is not None and op0.type == X.X86_OP_IMM:
+                    # MSVC's local call of a __finally block: "push <label>; jmp <block>", the block ending in a ret
+                    # that comes back to <label> in this function (Resident Evil's C runtime, unoptimised)
+                    t = op0.imm & 0xffffffff; nx = self.ins(nxt)
+                    if nx is not None and nx.mnemonic == 'jmp' and nx.operands[0].type == X.X86_OP_IMM and self.ins(t) is not None \
+                            and abs(t - va) < 0x1000 and abs((nx.operands[0].imm & 0xffffffff) - va) < 0x1000:
+                        self.local_rets.setdefault(f, set()).add(t); own.add(t); stack.append(t)
+                        b = nx.operands[0].imm & 0xffffffff; self.local_blocks.setdefault(f, set()).add(b); own.add(b); stack.append(b)
                 if mn == 'jmp':
                     if op0.type == X.X86_OP_IMM:
                         t = op0.imm & 0xffffffff
@@ -920,6 +928,7 @@ class Lifter:
             if mn == 'jmp' and i.operands[0].type == X.X86_OP_MEM:
                 jt = self.jt_cache.get(va)
                 if jt: labels.update(jt[1])
+        labels.update(t for t in self.local_rets.get(f, ()) if t in insns)   # where a __finally block's ret comes back
         for k, va in enumerate(order):                          # fall-through into overlapping code needs a label too
             i = insns[va]; nxt = va + i.size
             if self.falls_through(i) and (k + 1 == len(order) or order[k + 1] != nxt): labels.add(nxt)
@@ -1004,7 +1013,7 @@ class Lifter:
         if mn in JUNK and mn not in ('lock', 'wait'): return False
         return True
     def goto(self, t, f, insns, callees):
-        if t in insns and (t == f or t not in self.funcs or t in getattr(self, 'cur_seh', ())): return 'goto L_%08x;' % t
+        if t in insns and (t == f or t not in self.funcs or t in getattr(self, 'cur_seh', ()) or t in self.local_blocks.get(f, ())): return 'goto L_%08x;' % t
         if self.guest_flow and self.TLO <= t < self.THI:
             callees.add(t)
             return 'c->tc = 0x%08xu; SPILL; return;' % t
@@ -1177,7 +1186,10 @@ class Lifter:
         if mn == 'call': return self.call(i, callees)
         if mn == 'ret':
             n = (o[0].imm & 0xffff) if o else 0
-            return ('c->tc = R32(esp); ' if self.guest_flow else '') + 'esp += %du; SPILL; return;' % (4 + n)
+            lr = sorted(t for t in self.local_rets.get(f, ()) if t in insns)
+            back = ''.join('case 0x%08xu: esp += 4; goto L_%08x; ' % (t, t) for t in lr) if not n else ''
+            if back: back = 'switch (R32(esp)) { %s} ' % back      # back from a local call (a __finally block)
+            return back + ('c->tc = R32(esp); ' if self.guest_flow else '') + 'esp += %du; SPILL; return;' % (4 + n)
         if mn == 'jmp': return self.jmp(i, f, insns, callees)
         if mn in ('jecxz', 'jcxz'):
             counter = '(ecx & 0xffffu)' if mn == 'jcxz' else 'ecx'
@@ -1498,7 +1510,10 @@ def find_except_handler4(path):
     if not c: return 0, ()
     h = max(c, key=lambda k: len(c[k])); return h, tuple(c[h])
 
-RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
+RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')
+# Resident Evil's cooperative tasks switch stacks by hand (save esp, load another task's, ret into it): the runtime
+# runs each task on a host thread of its own and hands over at these four points (runtime/win32/re1_tasks.c)
+RE1_OVERRIDES = {0x0047575c: 'task start', 0x0047577c: 'task yield', 0x0047579c: 'task resume', 0x004757a8: 'task end'}   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1509,7 +1524,7 @@ def main():
     ap.add_argument('--tag', default='', help='multi-image builds: file name prefix; tables come from tools/link_tables.py')
     ap.add_argument('--game', default='ds2', choices=('ds2', 'fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') + RE_GAMES, help='which executable: HOOKS/OVERRIDES are Dungeon Siege II addresses')
     a = ap.parse_args()
-    L = Lifter(a.exe, a.analysis); L.jt_cache = {}
+    L = Lifter(a.exe, a.analysis); L.jt_cache = {}; L.local_rets = {}; L.local_blocks = {}
     L.imp_index = {va: a.imp_base + k for k, (va, _) in enumerate(L.imports)}
     L.illegal_seh = bool(a.tag); edition = None
     if not a.tag:                                               # (DLLs keep the DS1 behaviour: CPU-check paths only)
@@ -1519,7 +1534,7 @@ def main():
     if not a.tag:
         from editions import identify, PROFILES
         edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') + RE_GAMES else identify(a.exe, prepared=True)
-        if edition in RE_GAMES: L.hooks, L.overrides = {}, {}         # the GOG Resident Evil / Dino Crisis programs: no hooks yet
+        if edition in RE_GAMES: L.hooks, L.overrides = {}, dict(RE1_OVERRIDES) if edition == 're1' else {}   # the GOG Resident Evil / Dino Crisis programs
         if edition in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa'):      # Fallout: New Vegas, The Sims, Delta Force, GTA III: none of the DS2 hooks apply
             L.hooks = df_table(DF_HOOKS, edition) if edition in ('df1', 'df2') else dict(GTA3_HOOKS) if edition == 'gta3' else dict(GTASA_HOOKS) if edition == 'gtasa' else dict(GTAVC_HOOKS) if edition == 'gtavc' else {}
             L.overrides = df_table(DF_OVERRIDES, edition) if edition in ('df1', 'df2') else dict(GTA3_OVERRIDES) if edition == 'gta3' else dict(GTAVC_OVERRIDES) if edition == 'gtavc' else {}
