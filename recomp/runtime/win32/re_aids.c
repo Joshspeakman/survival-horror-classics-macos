@@ -6,7 +6,8 @@
  * them: the player survives the opening attacks):
  *   Resident Evil 2   LeonU.exe 0x994646, ClaireU.exe 0x9946c6 (s16, the most is 200; read by the status screen's ECG)
  *   Resident Evil 3   0xa5ccc0 (s16), its maximum at 0xa5ccc2 (both programs: the game and The Mercenaries)
- *   Resident Evil     0xbe63a6? / Dino Crisis: see RE_AID_HP below */
+ *   Resident Evil     0xbe636c (s16; Chris 140, Jill 96: held at the most seen)
+ *   Dino Crisis       not found yet */
 #include "w32.h"
 #include "edition.h"
 #ifdef RE_EDITION
@@ -20,6 +21,9 @@
 #elif defined(RE3_EDITION)
 #define RE_AID_HP 0x00a5ccc0u
 #define RE_AID_HP_MAX 0x00a5ccc2u
+#elif defined(RE1_EDITION)
+#define RE_AID_HP 0x00be636cu                       /* Chris 140, Jill 96: held at the most seen this game */
+#define RE_AID_HP_SEEN 1
 #endif
 
 /* Room jump (SHC_ROOM=<stage><room>, as the room files are named: 101 = ROOM1010.RDT, stage 1 room 01): the first room
@@ -100,6 +104,11 @@ void re_aids_tick(void)                        /* the host calls it once a frame
 #ifdef RE_AID_HP_MAX
     want = (int16_t)rt_r16(G_MEM, RE_AID_HP_MAX);
     if (want <= 0 || want > 2000) return;      /* not in a game */
+#elif defined(RE_AID_HP_SEEN)
+    static int16_t most;
+    if (hp > most && hp <= 2000) most = hp;   /* a new game starts at full health */
+    if (most <= 0) return;
+    want = most;
 #else
     want = RE_AID_HP_FIXED;
 #endif
