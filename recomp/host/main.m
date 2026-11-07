@@ -713,12 +713,22 @@ static void gta_pad_start(void)
             ax[0] = g.leftThumbstick.xAxis.value; ax[1] = -g.leftThumbstick.yAxis.value;
             ax[2] = ax[3] = g.rightThumbstick.xAxis.value; ax[5] = ax[4] = -g.rightThumbstick.yAxis.value;   /* the right stick as Z/Rz and Rx/Ry
                                                                                                                 (games read one pair or the other) */
+#ifdef RE_EDITION
+            /* the layout GOG's input layer gives these games (their default bindings expect it: Dino Crisis's Joy Def,
+               Resident Evil 3's bio3.ini): A B X Y, LB RB, LT RT, Back, Start, L3 R3 as buttons 0-11 */
+            GCControllerButtonInput *in[12] = {g.buttonA, g.buttonB, g.buttonX, g.buttonY, g.leftShoulder, g.rightShoulder, g.leftTrigger, g.rightTrigger,
+                                               g.buttonOptions, g.buttonMenu, g.leftThumbstickButton, g.rightThumbstickButton};
+            for (int k = 0; k < 12; k++) if (in[k].pressed) b |= 1u << k;
+#else
             GCControllerButtonInput *in[11] = {g.buttonB, g.buttonA, g.buttonX, g.buttonY, g.leftTrigger, g.rightTrigger, g.leftShoulder, g.rightShoulder,
                                                g.buttonOptions, g.leftThumbstickButton, g.rightThumbstickButton};
             for (int k = 0; k < 11; k++) if (in[k].pressed) b |= 1u << k;
+#endif
             if (g.dpad.up.pressed) b |= 1u << 12; if (g.dpad.right.pressed) b |= 1u << 13;
             if (g.dpad.down.pressed) b |= 1u << 14; if (g.dpad.left.pressed) b |= 1u << 15;
-            menu = g.buttonMenu.pressed;
+#ifndef RE_EDITION
+            menu = g.buttonMenu.pressed;                  /* (the Resident Evil games: Menu is their Start button) */
+#endif
         }
         int connected = g != nil;
         if (test_mode && getenv("GTA_FAKE_PAD")) {   /* development: GTA_FAKE_PAD="frame:buttons(hex):lx:ly[:rx:ry];..." a pad from the start, its state by presented frame */
