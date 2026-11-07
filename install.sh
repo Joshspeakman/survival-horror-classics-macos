@@ -118,6 +118,12 @@ for g in $ALL; do
   fi
   for f in "$g-title.png" "$g-banner.jpg"; do [ -f "$ART/$f" ] || [ ! -f "$A/Contents/Resources/art/$f" ] || cp "$A/Contents/Resources/art/$f" "$ART/"; done
 done
+# Restore from Disc (the Mods window): the disc tools in the app, and a Python with numpy for them
+cp "$HERE/recomp/tools/psx_disc.py" "$HERE/recomp/tools/psx_import.py" "$STAGE/Contents/Resources/"
+PSXPY="$HOMEDIR/.venv/bin/python"
+if ! "$PSXPY" -c 'import numpy' >/dev/null 2>&1; then
+  { python3 -m venv "$HOMEDIR/.venv" && "$HOMEDIR/.venv/bin/pip" install -q numpy; } >/dev/null 2>&1 || echo "   (numpy could not be installed: Restore from Disc will ask for install.sh again)"
+fi
 # the app's icon: Resident Evil's card art, else the first there is
 for g in re1 re2 re3 dc; do
   p="$STAGE/Contents/Resources/art/$g.png"; [ -f "$p" ] || continue

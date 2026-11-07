@@ -78,6 +78,27 @@ What can't run is kept but stays off, with the reason shown:
 - **DLL-based mods** (Classic REbirth itself, texture-pack loaders): Windows code; the port has its own renderer.
 - **Classic REbirth texture packs** (folders of PNGs): the port has no texture replacement.
 
+### Restore from Disc
+
+**Restore from Disc…** turns your own PlayStation discs into mods for the chosen game. Point it at a folder of disc
+images (BIN/CUE or CHD; a plain `.iso` drops the voices and movies) or at one image. Each disc is known by its serial
+(Resident Evil: original, Director's Cut, Dual Shock; Resident Evil 2: both discs, original or Dual Shock; Resident
+Evil 3; Dino Crisis).
+
+- **PlayStation voices** (all four games): the disc's voice lines in place of the PC's.
+  - Resident Evil 1-3: 37.8 kHz with the full top end, where the PC's are 22 kHz or re-compressed.
+  - Dino Crisis: without the PC's 8-bit hiss.
+  - Every line is matched to the PC line it replaces by its waveform, then cut to that line's timing and set to its
+    loudness, so scenes and the mix stay as they were. Lines the disc doesn't have stay the PC's.
+- **PlayStation movies** (Resident Evil): 15 fps where the PC's are 10 fps Cinepak, the uncut colour cuts where a disc
+  has them (a Director's Cut Dual Shock with the original content restored). The PC's staff rolls stay, because their
+  credits are part of the picture.
+
+The other games' movies stay the PC's: Resident Evil 2's run at 30 fps on PC, and Resident Evil 3's are the disc's
+own, already full size. Dino Crisis's are 640×480 on PC. Resident Evil 3's PC voices are packed in its archives, so
+restoring them runs the game for a few seconds in the background to unpack them with its own reader. The mods appear
+at the top of the list, switched on; restoring again replaces them.
+
 From a terminal: `"Survival Horror Classics Nightly.app/Contents/MacOS/SurvivalHorrorClassics" --install-mod re2
 <archive> [leon|claire|both]`, and `--list-mods <game>`.
 

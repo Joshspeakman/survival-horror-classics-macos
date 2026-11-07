@@ -2,7 +2,8 @@
 # re_qa.sh <out dir> [version ids...] : the QA pass, from the installed app ("Survival Horror Classics Nightly.app" in
 # ~/Applications, or SHC_APP=<app>). For each version: title -> a new game (scripted keys) -> play, then room jumps with
 # the Test Aids on (SHC_AIDS=1 SHC_ROOM=<room>), each run in test mode (a background window, muted). Writes a contact
-# sheet per version (<out>/<id>.png), and <out>/report.txt: faults, crash reports, frame rate, frames per run.
+# sheet per version (<out>/<id>.png), and <out>/report.txt: faults, crash reports, the game's error boxes, movies the host
+# played, frame rate, frames per run.
 # QA_MODS_ROOT=<folder like ~/Games/SurvivalHorrorClassics/mods>: one more play run per version with every mod installed
 # for its game on (GTA_MODS), its mod files listed in the report.
 set -uo pipefail
@@ -13,9 +14,10 @@ GAMES="${SHC_GAMES_ROOT:-/Volumes/Expansion Pak/Games}"
 M="$OUT/.montage"; mkdir -p "$OUT"; clang -O2 -fobjc-arc -framework Cocoa -o "$M" "$HERE/montage.m" 2>/dev/null || exit 1
 : > "$OUT/report.txt"
 
-info() {   # id -> BIN EXE DIR ARGS NEWGAME(keys) ROOMS SECS
+info() {   # id -> BIN EXE DIR ARGS NEWGAME(keys) ROOMS SECS SKIP (DS_MOVIE_SKIP: each movie this long, then skipped)
+  SKIP=""
   case $1 in
-    re1)  BIN=ResidentEvil;            EXE=re1-ResidentEvil.exe;       DIR="ResidentEvilNative/game-files/Resident Evil"; ARGS=""
+    re1)  BIN=ResidentEvil;            EXE=re1-ResidentEvil.exe;       DIR="ResidentEvilNative/game-files/Resident Evil"; ARGS=""; SKIP="4,4,4,4,4,4,4,4"
           KEYS="700:key:13;900:key:13;1100:key:13;1300:key:13;1500:key:13;1700:key:13"; PLAY="2000 2400 2800"; ROOMS="103 10a 20e 305"; SECS=110; AT=2000;;
     re2|re2c) BIN=$([ $1 = re2 ] && echo ResidentEvil2Leon || echo ResidentEvil2Claire); EXE=$([ $1 = re2 ] && echo re2-LeonU.exe || echo re2c-ClaireU.exe)
           DIR="ResidentEvil2Native/game-files/Resident Evil 2"; ARGS="-mode0"
@@ -32,12 +34,13 @@ info() {   # id -> BIN EXE DIR ARGS NEWGAME(keys) ROOMS SECS
 run() {    # id tag secs script [env...]: one run; shots named <tag>-<frame>.png
   local id=$1 tag=$2 secs=$3 script=$4; shift 4
   local R="$OUT/$id/$tag"; mkdir -p "$R/data"
-  env DS_TEST=1 DS_NO_LAUNCHER=1 W32_AUDIO_MUTE=1 DS_ARGS="$ARGS" DS_SCRIPT="$script" "$@" timeout "$secs" "$APP/Contents/MacOS/$BIN" \
+  env DS_TEST=1 DS_NO_LAUNCHER=1 W32_AUDIO_MUTE=1 DS_ARGS="$ARGS" DS_SCRIPT="$script" DS_MOVIE_SKIP="$SKIP" "$@" timeout "$secs" "$APP/Contents/MacOS/$BIN" \
       --exe "$APP/Contents/Resources/$EXE" --game "$GAMES/$DIR" --data "$R/data" > "$R/log.txt" 2>&1
-  local rc=$? faults crash fps frames
+  local rc=$? faults crash fps frames boxes movies
   faults=$(grep -a -c "fault\|unhandled exception" "$R/log.txt"); crash=$(ls "$R/data/CrashReports" 2>/dev/null | wc -l | tr -d ' ')
+  boxes=$(grep -a -c "MessageBox" "$R/log.txt"); movies=$(grep -a -c "host: movie /" "$R/log.txt")   # error boxes (test mode closes them)
   fps=$(grep -a "host: frame" "$R/log.txt" | tail -1 | sed -E 's/.*\) ([0-9.]+) fps.*/\1/'); frames=$(grep -a "host: frame" "$R/log.txt" | tail -1 | awk '{print $3}')
-  printf "%-5s %-10s exit %-3s faults %-3s crash reports %-2s last fps %-5s frames %s %s\n" "$id" "$tag" "$rc" "$faults" "$crash" "${fps:-?}" "${frames:-?}" \
+  printf "%-5s %-10s exit %-3s faults %-3s crash reports %-2s boxes %-2s movies %-2s last fps %-5s frames %s %s\n" "$id" "$tag" "$rc" "$faults" "$crash" "$boxes" "$movies" "${fps:-?}" "${frames:-?}" \
          "$(grep -a 'room jump' "$R/log.txt" | head -1 | sed 's/^re: //')" | tee -a "$OUT/report.txt"
 }
 for id in $IDS; do

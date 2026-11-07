@@ -20,6 +20,10 @@
  *   other     nothing the game reads: kept, off
  * Files that don't belong to the game (readmes, pictures) are kept in the mod's _extras folder.
  * Archives: zip (ditto), rar and 7z (bsdtar).
+ *
+ * Restore from Disc…: the player's own PlayStation discs (a folder of BIN/CUE, CHD or ISO images, or one image) into
+ * mods for this game, "PlayStation voices" and for Resident Evil "PlayStation movies" (tools/psx_import.py restore, in
+ * the app's Resources, run with the Python install.sh set up in ~/Games/SurvivalHorrorClassics/.venv; ffmpeg).
  * Command line (also for testing): SurvivalHorrorClassics --install-mod <re1|re2|re3|dc> <archive> [leon|claire|both]
  *                                  SurvivalHorrorClassics --list-mods <game> */
 #import <Cocoa/Cocoa.h>
@@ -261,7 +265,7 @@ static NSMutableDictionary *plan_commit(Plan *P)
 @interface SHMods : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 @property NSPanel *panel, *browser; @property NSTableView *table, *btable; @property NSTextField *status, *bstatus; @property NSProgressIndicator *spin;
 @property NSSearchField *search; @property NSPopUpButton *sort; @property NSImageView *preview; @property NSTextField *pinfo;
-@property NSString *title, *game, *gameDir, *prefer; @property int gb;
+@property NSString *title, *game, *gameDir, *prefer; @property int gb; @property NSButton *restoreButton;
 @property NSMutableArray<NSMutableDictionary *> *mods; @property NSArray<NSDictionary *> *results;
 @property (copy) void (^changed)(void);
 - (void)browse:(id)s;
@@ -297,34 +301,35 @@ static NSString *ask_place(NSString *modName, NSString *prefer)   /* Resident Ev
 @implementation SHMods
 - (void)show:(NSWindow *)parent
 {
-    NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 760, 470) styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+    NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 900, 470) styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                               backing:NSBackingStoreBuffered defer:NO];
     p.title = [NSString stringWithFormat:@"Mods — %@", self.title]; p.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     p.delegate = self; p.releasedWhenClosed = NO; p.minSize = NSMakeSize(660, 360); self.panel = p;
     NSView *cv = p.contentView;
     NSTextField *head = [NSTextField wrappingLabelWithString:@"The first mod wins where two change the same file. The game's own files are never changed: switching a mod off or removing it brings them back. Drop a zip, rar or 7z here to install it."];
-    head.frame = NSMakeRect(16, 424, 728, 36); head.textColor = NSColor.secondaryLabelColor; head.font = [NSFont systemFontOfSize:12];
+    head.frame = NSMakeRect(16, 424, 868, 36); head.textColor = NSColor.secondaryLabelColor; head.font = [NSFont systemFontOfSize:12];
     head.autoresizingMask = NSViewMinYMargin | NSViewWidthSizable; [cv addSubview:head];
     NSTableView *t = [NSTableView new]; self.table = t;
-    [t addTableColumn:column(@"on", @"On", 34)]; [t addTableColumn:column(@"name", @"Mod", 250)]; [t addTableColumn:column(@"kind", @"What it changes", 420)];
+    [t addTableColumn:column(@"on", @"On", 34)]; [t addTableColumn:column(@"name", @"Mod", 250)]; [t addTableColumn:column(@"kind", @"What it changes", 560)];
     t.dataSource = self; t.delegate = self; t.usesAlternatingRowBackgroundColors = YES; t.rowHeight = 22;
     [t registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
-    NSScrollView *sv = scroller(t, NSMakeRect(16, 64, 728, 352)); sv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; [cv addSubview:sv];
+    NSScrollView *sv = scroller(t, NSMakeRect(16, 64, 868, 352)); sv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; [cv addSubview:sv];
     CGFloat x = 12; NSMutableArray *row = [NSMutableArray array];
     if (self.gb) { [row addObject:button(@"Browse GameBanana…", self, @selector(browse:), NSMakeRect(x, 22, 170, 32))]; x += 172; }
     [row addObject:button(@"From File…", self, @selector(installFile:), NSMakeRect(x, 22, 104, 32))]; x += 106;
+    self.restoreButton = button(@"Restore from Disc…", self, @selector(restoreDisc:), NSMakeRect(x, 22, 150, 32)); [row addObject:self.restoreButton]; x += 152;
     [row addObject:button(@"Show Folder", self, @selector(openFolder:), NSMakeRect(x, 22, 110, 32))]; x += 112;
     [row addObject:button(@"Up", self, @selector(up:), NSMakeRect(x, 22, 46, 32))]; x += 46;
     [row addObject:button(@"Down", self, @selector(down:), NSMakeRect(x, 22, 58, 32))]; x += 60;
     [row addObject:button(@"Remove", self, @selector(remove:), NSMakeRect(x, 22, 80, 32))];
     for (NSButton *b in row) [cv addSubview:b];
-    NSButton *done = button(@"Done", self, @selector(done:), NSMakeRect(664, 22, 84, 32)); done.keyEquivalent = @"\r"; done.autoresizingMask = NSViewMinXMargin;
+    NSButton *done = button(@"Done", self, @selector(done:), NSMakeRect(804, 22, 84, 32)); done.keyEquivalent = @"\r"; done.autoresizingMask = NSViewMinXMargin;
     [cv addSubview:done];
     NSTextField *st = [NSTextField labelWithString:self.gb ? @"" : @"GameBanana has no Dino Crisis section: install mods from a file or by dropping them here."];
-    st.frame = NSMakeRect(16, 4, 728, 16); st.font = [NSFont systemFontOfSize:11]; st.textColor = NSColor.secondaryLabelColor;
+    st.frame = NSMakeRect(16, 4, 868, 16); st.font = [NSFont systemFontOfSize:11]; st.textColor = NSColor.secondaryLabelColor;
     st.autoresizingMask = NSViewWidthSizable; self.status = st; [cv addSubview:st];
     self.mods = load_index(self.game); [t reloadData];
-    if (parent) [p setFrameOrigin:NSMakePoint(NSMidX(parent.frame) - 380, NSMidY(parent.frame) - 235)]; else [p center];
+    if (parent) [p setFrameOrigin:NSMakePoint(NSMidX(parent.frame) - 450, NSMidY(parent.frame) - 235)]; else [p center];
     [p makeKeyAndOrderFront:nil];
 }
 - (void)saveAndNotify { save_index(self.game, self.mods); [self.table reloadData]; if (self.changed) self.changed(); }
@@ -395,6 +400,53 @@ static NSString *ask_place(NSString *modName, NSString *prefer)   /* Resident Ev
             });
         });
     });
+}
+/* Restore from Disc: the player's own PlayStation discs into this game's mods (tools/psx_import.py restore) */
+- (void)restoreDisc:(id)s
+{
+    NSOpenPanel *o = [NSOpenPanel openPanel]; o.canChooseDirectories = YES; o.canChooseFiles = YES; o.allowsMultipleSelection = NO;
+    o.message = [NSString stringWithFormat:@"Your %@ PlayStation disc images (BIN/CUE, CHD or ISO): a folder of them, or one", self.title];
+    for (NSString *d in @[@"/Volumes/Expansion Pak/PS1 Games", @"/Volumes/Expansion Pak", NSHomeDirectory()])
+        if ([[NSFileManager defaultManager] fileExistsAtPath:d]) { o.directoryURL = [NSURL fileURLWithPath:d isDirectory:YES]; break; }
+    [o beginSheetModalForWindow:self.panel completionHandler:^(NSModalResponse r) { if (r == NSModalResponseOK) [self restoreFrom:o.URL.path]; }];
+}
+- (void)restoreFrom:(NSString *)discs
+{
+    NSString *res = NSBundle.mainBundle.resourcePath, *tool = [res stringByAppendingPathComponent:@"psx_import.py"];
+    NSString *py = [NSHomeDirectory() stringByAppendingPathComponent:@"Games/SurvivalHorrorClassics/.venv/bin/python"];
+    if (getenv("SHC_PSX_TOOL")) tool = @(getenv("SHC_PSX_TOOL"));                                   /* development */
+    if (getenv("SHC_PSX_PYTHON")) py = @(getenv("SHC_PSX_PYTHON"));
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (![fm fileExistsAtPath:tool] || ![fm isExecutableFileAtPath:py]) { self.status.stringValue = @"This copy of the app has no disc tools: run install.sh again."; NSBeep(); return; }
+    if (![fm fileExistsAtPath:self.gameDir]) { self.status.stringValue = @"The game's folder isn't reachable: connect its drive first."; NSBeep(); return; }
+    self.restoreButton.enabled = NO; self.status.stringValue = @"Reading your disc…";
+    NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:py];
+    t.arguments = @[@"-I", tool, @"restore", self.game, discs, self.gameDir, hmods_root(), @"--app", NSBundle.mainBundle.bundlePath];
+    NSMutableDictionary *env = [NSProcessInfo.processInfo.environment mutableCopy];
+    env[@"PATH"] = [@"/opt/homebrew/bin:/usr/local/bin:" stringByAppendingString:env[@"PATH"] ?: @"/usr/bin:/bin"]; t.environment = env;
+    NSPipe *pipe = [NSPipe pipe]; t.standardOutput = pipe; t.standardError = pipe;
+    __block NSMutableString *all = [NSMutableString string];
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *h) {
+        NSData *d = h.availableData; if (!d.length) return;
+        NSString *chunk = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [all appendString:chunk];
+            NSArray *ls = [[all stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"];
+            NSString *last = ls.lastObject; if (last.length) self.status.stringValue = last;
+        });
+    };
+    t.terminationHandler = ^(NSTask *task) {
+        int code = task.terminationStatus;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            pipe.fileHandleForReading.readabilityHandler = nil;
+            self.restoreButton.enabled = YES;
+            self.mods = load_index(self.game); [self.table reloadData]; if (self.changed) self.changed();
+            if (code) NSBeep();
+            if (getenv("SHC_MODS_RESTORE_EXIT")) { printf("%s\n", all.UTF8String); fflush(stdout); exit(code); }   /* development */
+        });
+    };
+    NSError *err = nil;
+    if (![t launchAndReturnError:&err]) { self.restoreButton.enabled = YES; self.status.stringValue = @"The disc tools could not be started."; NSBeep(); }
 }
 - (void)installFile:(id)s
 {
@@ -550,6 +602,7 @@ void hmods_show(NSWindow *parent, NSString *title, NSString *game, int gamebanan
     /* development: SHC_MODS_BROWSE=1 opens the browser; SHC_MODS_SHOT=<png> renders the window (and <png>-browser.png the
      * browser, once GameBanana answers) and exits */
     if (getenv("SHC_MODS_BROWSE")) [m browse:nil];
+    if (getenv("SHC_MODS_RESTORE")) [m restoreFrom:@(getenv("SHC_MODS_RESTORE"))];   /* development: Restore from Disc with these */
     if (getenv("SHC_MODS_SHOT")) {
         NSString *shot = @(getenv("SHC_MODS_SHOT"));
         void (^render)(NSView *, NSString *) = ^(NSView *v, NSString *path) {
