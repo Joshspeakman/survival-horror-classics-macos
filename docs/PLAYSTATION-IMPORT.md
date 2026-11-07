@@ -8,10 +8,15 @@ Restore from Disc (`gta_restore.py`) and Theme Park's original-content imports.
 
 ## What the PC releases ship (measured on these GOG copies)
 
+These numbers come from the files in the current GOG installs, not from articles. The data files are dated November
+2025 (Resident Evil, Resident Evil 3, Dino Crisis) and January 2026 (Resident Evil 2), matching the latest builds:
+Resident Evil 1.0 hotfix4, Resident Evil 2 1.0 hotfix5, Resident Evil 3 1.0 hotfix4, Dino Crisis 1.0 hotfix3. The port's
+file log confirms these are the files each game opens.
+
 | | Music | Voices | Sound effects | Movies |
 |---|---|---|---|---|
 | Resident Evil | WAV, **8-bit mono 22 kHz** | 16-bit mono 22 kHz | 16-bit 22 kHz | Cinepak 320×240 at **10 fps** |
-| Resident Evil 2 | MS ADPCM 22 kHz (`.SAP`) | MS ADPCM 22 kHz | (to check) | Indeo 5, 320×160 at 30 fps |
+| Resident Evil 2 | PlayStation SEQ sequences (`.BGM`, `pQES`) plus MS ADPCM 22 kHz audio (`.SAP`) | MS ADPCM 22 kHz | (to check) | Indeo 5, 320×160 at 30 fps |
 | Resident Evil 3 | PlayStation-style sequences (`.bgm` + `.vb` banks) | 22 kHz | (to check) | MPEG-1 320×160 |
 | Dino Crisis | **8-bit stereo 22 kHz** | **8-bit mono 22 kHz** | **8-bit mono 22 kHz** | MPEG-1 640×480 |
 
@@ -20,7 +25,31 @@ The PlayStation discs carry the same material at a higher quality:
 - Sequenced music plays through the SPU at 44.1 kHz with its hardware reverb.
 - Movies are STR files: MDEC video with XA audio.
 
+## What GOG's updates changed, and what they didn't
+
+GOG's release notes (GOG Database) list these changes:
+- a new video player (all four games)
+- smooth animation, video and music playback (Dino Crisis)
+- improved audio volume and panning (Resident Evil 2)
+- restored background music missing in some rooms, A/B scenarios included (Resident Evil 2)
+- fixes to Resident Evil 2's room 409 looping sound and room 114/115 text
+- controllers, rendering and saves
+
+None of them re-encodes music, voices, effects or movies at a higher quality, and the measured files bear that out.
+So the playback bugs that older write-ups describe (music speeding up in Dino Crisis, Resident Evil 2's silent rooms,
+choppy movies) are fixed in these builds, or don't apply to the port. The asset quality is unchanged.
+
+Two caveats for this port:
+- **GOG's player isn't used:** the port runs GOG's programs and data (so their fixes made there apply) but not GOG's
+  `ddraw.dll`, `dinput.dll` and `dshow.dll`, which the runtime replaces. GOG's new video player lives there; the port
+  plays the same movie files with its own player.
+- **Resident Evil 2's restored room music:** whether it is in the program or the data, it should be there; it will be
+  checked by ear in the rooms GOG names before PlayStation music is laid over it.
+
 ## What the community counts as better on PlayStation, and what stays PC
+
+Most write-ups below describe the original PC releases; each point is kept only where the measured GOG files show the
+same thing.
 
 **Resident Evil**
 - **Take from the disc:** the music (the PC's 8-bit mono WAVs are its weakest point), voices, and the movies other than
@@ -32,8 +61,9 @@ The PlayStation discs carry the same material at a higher quality:
   off by default; the original soundtrack is the one to take.
 
 **Resident Evil 2**
-- **Take from the disc:** the music (sequenced, rendered at 44.1 kHz with reverb), voices, and the movies. The 1998 PC
-  release is widely called the weakest version for its movies.
+- **Take from the disc:** the voices, the movies (the 1998 PC release, which GOG's is built on, is widely called the
+  weakest for its movies; GOG changed the player, not the files), and the music's samples and reverb. The PC already
+  plays the PlayStation's own sequences (`.BGM`), with its audio cut down to 22 kHz ADPCM.
 - **Keep from PC:** the 640×480 backgrounds, the Extreme Battle and gallery extras, and everything from the Dual Shock
   version that the PC already has.
 
@@ -119,6 +149,7 @@ The PlayStation discs carry the same material at a higher quality:
 ## Open points, settled once a disc is here
 
 - Whether each game's PlayStation music is sequenced (SEQ/VAB) or streamed (XA). It decides how much of step 3 each
-  game needs.
+  game needs. Resident Evil 2 on PC already uses the PlayStation's sequences next to ADPCM `.SAP` audio; which `.SAP`
+  files are whole tracks and which are sample banks gets mapped first.
 - Resident Evil 2's PlayStation movies against the PC's Indeo ones: compared frame by frame before either is chosen.
 - Which PC files have no PlayStation counterpart (PC-only content). These are left as the PC has them.
