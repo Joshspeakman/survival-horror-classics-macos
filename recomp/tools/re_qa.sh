@@ -20,7 +20,7 @@ info() {   # id -> BIN EXE DIR ARGS NEWGAME(keys) ROOMS SECS
           KEYS="1250:key:40;1280:key:13;1500:key:13;1750:key:13;2000:key:13;2250:key:13"; PLAY="2400 2800 3200"; ROOMS="101 10a 203 30b"; SECS=110; AT=2600;;
     re3|re3m) BIN=$([ $1 = re3 ] && echo ResidentEvil3 || echo ResidentEvil3Mercenaries); EXE=$([ $1 = re3 ] && echo re3-ResidentEvil3.exe || echo re3m-RE3_MERCE.exe)
           DIR="ResidentEvil3Native/game-files/Resident Evil 3"; ARGS=""
-          KEYS="1250:key:37;1270:key:37;1300:key:13;1700:key:13;2100:key:13;2500:key:13"; PLAY="2900 3300 3700"; ROOMS="107 20a 112 30b"; SECS=150; AT=3000
+          KEYS="1250:key:37;1270:key:37;1300:key:13;1700:key:13;2100:key:13;2500:key:13"; PLAY="2900 3300 3700"; ROOMS="107 112 113 10e 20a 305 30b"; SECS=150; AT=3000
           [ $1 = re3m ] && { KEYS="700:key:13;900:key:13;1100:key:13;1300:key:13;1500:key:13;1700:key:13;2400:key:13;2600:key:13;2800:key:13"; PLAY="2300 3200 3800 4400"; ROOMS=""; };;
     dc)   BIN=DinoCrisis; EXE=dc-DINO.exe; DIR="DinoCrisisNative/game-files/Dino Crisis"; ARGS=""
           KEYS="900:key:13;1100:key:13;1400:key:13;1900:click:371,1318"; for f in $(seq 2100 120 9400); do KEYS="$KEYS;${f}:key:13"; done
