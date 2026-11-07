@@ -11,7 +11,7 @@
  *   DSR_ANISO=16|4|1                     renderer.m (texture filtering)
  *   RE_NO_MOVIES=1, GTA_NO_MOVIES=1      the movies skipped (amstream.inc, dshow.c)
  *   DS_ARGS="..."                        the game's command line: Resident Evil 2's display mode (-mode0) and its GOG
- *                                        test options (-life1 -wepall1: Test Aids)
+ *                                        Test Aids (SHC_AIDS=1: re_aids.c; Resident Evil 2 also -wepall)
  *   DS_LOG_FILE=<data>/<BIN>.log
  * The games stay where they were installed from (by default the Expansion Pak SD card): a game whose folder is on a
  * volume that is not mounted says so and does not play. Saves and settings: ~/Games/SurvivalHorrorClassics/<id>.
@@ -302,7 +302,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                                                                                 @[@"1", @"Off (As Released)", @"Textures sampled as the games did"]] saved:saved]];
     [opts addObject:[self opt:@"movies" title:@"Movies" choices:@[@[@"on", @"On", @"The games' movies play"], @[@"off", @"Off", @"Skipped: straight to the game"]] saved:saved]];
     [opts addObject:[self opt:@"aids" title:@"Test Aids" choices:@[@[@"off", @"Off", @"The games as released"],
-                                                                    @[@"on", @"Invincible + All Weapons", @"Resident Evil 2: GOG's test options (-life, -wepall); the other games: not yet"]] saved:saved]];
+                                                                    @[@"on", @"On", @"Health held full (Resident Evil 2, 3, The Mercenaries); every weapon (Resident Evil 2)"]] saved:saved]];
     v.opts = opts;
     __weak Launcher *ws = self;
     v.act = ^(NSInteger h) { [ws hit:h]; };
@@ -381,10 +381,11 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     NSMutableDictionary *env = [NSMutableDictionary dictionary]; for (Opt *o in v.opts) env[o.key] = o.value;
     NSMutableArray *args = [NSMutableArray array];
     if (!strcmp(ver->id, "re2") || !strcmp(ver->id, "re2c")) [args addObject:@"-mode0"];                    /* 640x480 (GOG's mode 1 draws 320x240) */
-    if ([env[@"aids"] isEqual:@"on"] && (!strcmp(ver->id, "re2") || !strcmp(ver->id, "re2c"))) [args addObjectsFromArray:@[@"-life1", @"-wepall1"]];
+    if ([env[@"aids"] isEqual:@"on"] && (!strcmp(ver->id, "re2") || !strcmp(ver->id, "re2c"))) [args addObject:@"-wepall"];   /* GOG's own: every weapon */
     NSMutableDictionary *genv = [@{@"DS_NO_LAUNCHER": @"1", @"DS_DISPLAY": env[@"display"], @"DS_NOTCH": env[@"notch"] ?: @"below", @"DSR_VSYNC": env[@"vsync"],
                                    @"DSR_ANISO": env[@"aniso"], @"DS_LOG_FILE": log, @"DS_ARGS": [args componentsJoinedByString:@" "]} mutableCopy];
     if ([env[@"movies"] isEqual:@"off"]) { genv[@"RE_NO_MOVIES"] = @"1"; genv[@"GTA_NO_MOVIES"] = @"1"; }
+    if ([env[@"aids"] isEqual:@"on"]) genv[@"SHC_AIDS"] = @"1";                                         /* re_aids.c: health held at its most */
     if (getenv("SHC_LAUNCHER_DRY")) {
         for (NSString *k in [genv.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [genv[k] UTF8String]);
         printf("'%s' --exe '%s' --game '%s' --data '%s'\n", bin.UTF8String, exe.UTF8String, [e[@"game"] UTF8String], data.UTF8String); fflush(stdout); exit(0);
