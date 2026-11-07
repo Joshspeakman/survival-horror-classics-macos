@@ -78,7 +78,7 @@ done
 STAGE="$(mktemp -d "$APPS/.shc.XXXXXX" 2>/dev/null || { mkdir -p "$APPS"; mktemp -d "$APPS/.shc.XXXXXX"; })/$NAME.app"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/art"
 OLD="$A/Contents/Resources/games.plist"
-clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m"
+clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -framework CoreImage -framework GameController -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m"
 U_BUILT="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 G="$STAGE/Contents/Resources/games.plist"; plutil -create xml1 "$G"
 INSTALLED=""
@@ -103,6 +103,20 @@ for g in $ALL; do
   ico="$(ls "$G_GAME"/goggame-*.ico "$G_GAME"/app/goggame-*.ico 2>/dev/null | head -1 || true)"
   if [ -n "$ico" ]; then sips -s format png "$ico" --out "$STAGE/Contents/Resources/art/$g.png" >/dev/null 2>&1 || true
   elif [ -f "$A/Contents/Resources/art/$g.png" ]; then cp "$A/Contents/Resources/art/$g.png" "$STAGE/Contents/Resources/art/"; fi
+  # the launch window's backdrop and card picture: the game's own title screen, captured from it here (a few seconds in
+  # test mode: a background window, muted); GOG's store banner from the game's folder (app/webcache.zip) as a fallback
+  ART="$STAGE/Contents/Resources/art"
+  if [ -d "$G_GAME" ] && [ -x "$STAGE/Contents/MacOS/$(echo "$G_VERS" | cut -d' ' -f1 | cut -d: -f2)" ]; then
+    case "$g" in re2) frames="600 800 1000"; args=-mode0;; re1) frames="760 800 840"; args="";; re3) frames="1180 1230 1280"; args="";; *) frames="1500 1700 1900"; args="";; esac
+    ART_FRAMES="$frames" "$HERE/recomp/tools/capture_art.sh" "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$ART" "$g" "$G_GAME" -- $args || true
+    wc="$G_GAME/app/webcache.zip"
+    if [ -f "$wc" ]; then
+      T="$(mktemp -d)"; unzip -q -o "$wc" -d "$T" 2>/dev/null || true
+      b="$(ls -S "$T"/*.jpg 2>/dev/null | grep -v logo | head -1 || true)"; [ -n "$b" ] && cp "$b" "$ART/$g-banner.jpg"
+      rm -rf "$T"
+    fi
+  fi
+  for f in "$g-title.png" "$g-banner.jpg"; do [ -f "$ART/$f" ] || [ ! -f "$A/Contents/Resources/art/$f" ] || cp "$A/Contents/Resources/art/$f" "$ART/"; done
 done
 # the app's icon: Resident Evil's card art, else the first there is
 for g in re1 re2 re3 dc; do
