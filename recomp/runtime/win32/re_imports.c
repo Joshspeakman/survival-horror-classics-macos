@@ -84,7 +84,10 @@ int w32_pad_state(float ax[6], uint32_t *buttons, int *pov);
 IMPL(winmm, joyGetDevCapsA)                       /* (id, JOYCAPSA *, size) */
 {
     float ax[6]; uint32_t b; int pov;
-    if (ARG(0) != 0 || !w32_pad_state(ax, &b, &pov)) RET(167, 3);       /* JOYERR_UNPLUGGED */
+    { static int n; if (getenv("W32_JOYLOG") && n++ < 8) fprintf(stderr, "w32: joyGetDevCapsA(%u, size %u): pad %d\n", ARG(0), ARG(2), w32_pad_state(ax, &b, &pov)); }
+    if (ARG(0) != 0 || getenv("W32_NO_PAD")) RET(167, 3);              /* JOYERR_UNPLUGGED */
+    /* joystick 0 is always there (idle until a controller connects): the games look once, at start, often before macOS
+     * has found the controller; this way one turned on later still plays */
     uint32_t p = ARG(1), n = ARG(2) < 404 ? ARG(2) : 404; memset(GP(p), 0, n);
     rt_w16(G_MEM, p, 0x045e); rt_w16(G_MEM, p + 2, 0x02ea); if (n >= 36) snprintf((char *)GP(p + 4), 32, "Controller");
     uint32_t v[] = {0, 65535, 0, 65535, 0, 65535, 16, 10, 1000, 0, 65535, 0, 65535, 0, 65535, 0x1 | 0x2 | 0x4 | 0x10 | 0x20, 6, 6, 16};   /* X Y Z, buttons, period, R U V, caps (Z R U V POV), axes, buttons */
@@ -94,7 +97,9 @@ IMPL(winmm, joyGetDevCapsA)                       /* (id, JOYCAPSA *, size) */
 IMPL(winmm, joyGetPosEx)                          /* (id, JOYINFOEX *): axes 0..65535, buttons, the hat in hundredths of a degree */
 {
     float ax[6]; uint32_t b; int pov;
-    if (ARG(0) != 0 || !w32_pad_state(ax, &b, &pov)) RET(167, 2);
+    { static int n; if (getenv("W32_JOYLOG") && n++ < 8) fprintf(stderr, "w32: joyGetPosEx(%u, flags %x): pad %d\n", ARG(0), rt_r32(G_MEM, ARG(1) + 4), w32_pad_state(ax, &b, &pov)); }
+    if (ARG(0) != 0 || getenv("W32_NO_PAD")) RET(167, 2);
+    if (!w32_pad_state(ax, &b, &pov)) { memset(ax, 0, sizeof ax); b = 0; pov = -1; }   /* none yet: centred, nothing pressed */
     uint32_t p = ARG(1);
     for (int k = 0; k < 6; k++) { float x = ax[k] < -1 ? -1 : ax[k] > 1 ? 1 : ax[k]; rt_w32(G_MEM, p + 8 + 4u * (uint32_t)k, (uint32_t)((x + 1) * 32767.5f)); }
     uint32_t bb = b & 0xfffu; if (b & (1u << 12)) pov = 0; else if (b & (1u << 13)) pov = 9000; else if (b & (1u << 14)) pov = 18000; else if (b & (1u << 15)) pov = 27000;

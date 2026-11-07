@@ -732,6 +732,12 @@ static void gta_pad_start(void)
         }
         if (test_mode && fake_pad_set) { connected = 1; memset(ax, 0, sizeof ax); b = fake_pad[0];   /* "pad:" (DS_CMDFILE) */
                                          ax[0] = fake_pad_ax[0]; ax[1] = fake_pad_ax[1]; ax[2] = ax[3] = fake_pad_ax[2]; ax[5] = ax[4] = fake_pad_ax[3]; }
+#ifdef RE_EDITION
+        /* the d-pad also as the left stick (the games read the stick's axes: Resident Evil 2's menus, every game's walk) */
+        if (fabsf(ax[0]) < 0.2f && fabsf(ax[1]) < 0.2f) {
+            if (b & 1u << 12) ax[1] = -1; if (b & 1u << 14) ax[1] = 1; if (b & 1u << 15) ax[0] = -1; if (b & 1u << 13) ax[0] = 1;
+        }
+#endif
         w32_di_pad(connected, ax, b, pov);
         if (menu != menu_was) { gta_pad_key(0x1b, menu); menu_was = menu; }
     });

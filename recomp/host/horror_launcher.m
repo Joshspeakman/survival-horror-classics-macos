@@ -21,6 +21,7 @@
  * SHC_LAUNCHER_OPEN=1 the options open); SHC_LAUNCHER_DRY=1 prints what Play would run. */
 #import <Cocoa/Cocoa.h>
 #import <CoreImage/CoreImage.h>
+#import <GameController/GameController.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -56,7 +57,7 @@ enum { NG = 4 };
 enum { HIT_NONE = -1, HIT_PLAY = 1, HIT_QUIT, HIT_OPTIONS, HIT_SAVES, HIT_FILES, HIT_UPDATES, HIT_CARD = 100, HIT_VER = 200, HIT_ROW = 300 };
 @interface HView : NSView { @public NSInteger ver[NG]; }
 @property NSInteger game, hover; @property BOOL open; @property NSArray<Opt *> *opts;
-@property NSDictionary *installed; @property NSMutableDictionary *art, *backdrop, *blurred; @property CGFloat glow, fade; @property NSInteger prevGame; @property NSString *status;
+@property NSDictionary *installed; @property NSMutableDictionary *art, *backdrop, *soft, *blurred; @property CGFloat glow, fade; @property NSInteger prevGame; @property NSString *status;
 @property (copy) void (^act)(NSInteger hit);
 @end
 
@@ -82,13 +83,15 @@ static void draw_fill(NSImage *img, NSRect r, CGFloat alpha)
     [img drawInRect:r fromRect:NSMakeRect((s.width - w) / 2, (s.height - h) / 2, w, h) operation:NSCompositingOperationSourceOver fraction:alpha respectFlipped:YES hints:nil];
 }
 /* the frosted copy of a backdrop: blurred and a little darker */
-static NSImage *frost(NSImage *img)
+static NSImage *frost(NSImage *img, CGFloat soft)
 {
     CGImageRef cg = [img CGImageForProposedRect:NULL context:nil hints:nil]; if (!cg) return nil;
     CIImage *in = [CIImage imageWithCGImage:cg]; CGRect ext = in.extent;
-    CIImage *b = [[in imageByClampingToExtent] imageByApplyingGaussianBlurWithSigma:MAX(ext.size.width, ext.size.height) / 80];
+    CIImage *b = [[in imageByClampingToExtent] imageByApplyingGaussianBlurWithSigma:MAX(ext.size.width, ext.size.height) / soft];
     b = [[b imageByApplyingFilter:@"CIColorControls" withInputParameters:@{@"inputSaturation": @1.15, @"inputBrightness": @-0.06}] imageByCroppingToRect:ext];
-    NSCIImageRep *rep = [NSCIImageRep imageRepWithCIImage:b]; NSImage *o = [[NSImage alloc] initWithSize:rep.size]; [o addRepresentation:rep];
+    static CIContext *cx; if (!cx) cx = [CIContext contextWithOptions:nil];
+    CGImageRef out = [cx createCGImage:b fromRect:ext]; if (!out) return nil;          /* a bitmap, the right way up */
+    NSImage *o = [[NSImage alloc] initWithCGImage:out size:img.size]; CGImageRelease(out);
     return o;
 }
 @implementation HView
@@ -100,6 +103,7 @@ static NSImage *frost(NSImage *img)
     [NSGraphicsContext saveGraphicsState]; [p addClip];
     NSImage *bl = self.blurred[@(GAMES[self.game].id)];
     if (bl) draw_fill(bl, self.bounds, 1); else { [rgb(0.08, 0.07, 0.08, 1) setFill]; NSRectFill(r); }
+    [rgb(0.02, 0.015, 0.02, 0.58) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);   /* smoked glass: readable on light art too */
     [tint ?: rgb(1, 1, 1, 0.07) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);
     NSGradient *hi = [[NSGradient alloc] initWithStartingColor:rgb(1, 1, 1, 0.12) endingColor:rgb(1, 1, 1, 0)];
     [hi drawInRect:NSMakeRect(r.origin.x, r.origin.y, r.size.width, MIN(40, r.size.height)) angle:90];
@@ -136,11 +140,32 @@ static NSImage *frost(NSImage *img)
 }
 - (void)mouseMoved:(NSEvent *)e { NSInteger h = [self hitAt:[self convertPoint:e.locationInWindow fromView:nil]]; if (h != self.hover) { self.hover = h; self.needsDisplay = YES; } }
 - (void)mouseDown:(NSEvent *)e { NSInteger h = [self hitAt:[self convertPoint:e.locationInWindow fromView:nil]]; if (h != HIT_NONE && self.act) self.act(h); }
+/* one step of navigation, from the keyboard or a controller: dx/dy a direction, or a button */
+enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS, NAV_PLAY };
+- (void)nav:(int)n
+{
+    if (!self.act) return;
+    if (self.open) {                                                      /* the options panel: a row cursor */
+        NSInteger rows = (NSInteger)self.opts.count, r = self.hover >= HIT_ROW && self.hover < HIT_ROW + rows ? self.hover - HIT_ROW : -1;
+        if (n == NAV_UP || n == NAV_DOWN) { r = r < 0 ? 0 : (r + (n == NAV_DOWN ? 1 : rows - 1)) % rows; self.hover = HIT_ROW + r; self.needsDisplay = YES; }
+        else if ((n == NAV_OK || n == NAV_RIGHT) && r >= 0) self.act(HIT_ROW + r);
+        else if (n == NAV_LEFT && r >= 0) { Opt *o = self.opts[r]; NSInteger c = (NSInteger)o.choices.count; if (c > 1) { o.index = (o.index + c - 2) % c; self.act(HIT_ROW + r); } }
+        else if (n == NAV_BACK || n == NAV_OPTIONS) { self.hover = HIT_NONE; self.act(HIT_OPTIONS); }
+        return;
+    }
+    if (n == NAV_LEFT || n == NAV_RIGHT) self.act(HIT_CARD + (self.game + (n == NAV_LEFT ? NG - 1 : 1)) % NG);
+    else if ((n == NAV_UP || n == NAV_DOWN) && GAMES[self.game].nv > 1) self.act(HIT_VER + (self->ver[self.game] + (n == NAV_DOWN ? 1 : GAMES[self.game].nv - 1)) % GAMES[self.game].nv);
+    else if (n == NAV_OK || n == NAV_PLAY) self.act(HIT_PLAY);
+    else if (n == NAV_OPTIONS) { self.act(HIT_OPTIONS); if (self.open) { self.hover = HIT_ROW; self.needsDisplay = YES; } }
+    else if (n == NAV_BACK) self.act(HIT_QUIT);
+}
 - (void)keyDown:(NSEvent *)e
 {
     unichar ch = e.charactersIgnoringModifiers.length ? [e.charactersIgnoringModifiers characterAtIndex:0] : 0;
     if (ch == 27) { if (self.act) self.act(self.open ? HIT_OPTIONS : HIT_QUIT); return; }
     if (ch == '\r' || ch == 3) { if (self.act && !self.open) self.act(HIT_PLAY); return; }
+    if (self.open && (ch == NSUpArrowFunctionKey || ch == NSDownArrowFunctionKey || ch == NSLeftArrowFunctionKey || ch == NSRightArrowFunctionKey || ch == ' ')) {
+        [self nav:ch == NSUpArrowFunctionKey ? NAV_UP : ch == NSDownArrowFunctionKey ? NAV_DOWN : ch == NSLeftArrowFunctionKey ? NAV_LEFT : ch == ' ' ? NAV_OK : NAV_RIGHT]; return; }
     if (!self.open && (ch == NSLeftArrowFunctionKey || ch == NSRightArrowFunctionKey)) { if (self.act) self.act(HIT_CARD + (self.game + (ch == NSLeftArrowFunctionKey ? NG - 1 : 1)) % NG); return; }
     if (!self.open && (ch == NSUpArrowFunctionKey || ch == NSDownArrowFunctionKey) && GAMES[self.game].nv > 1) { if (self.act) self.act(HIT_VER + (self->ver[self.game] + 1) % GAMES[self.game].nv); return; }
     [super keyDown:e];
@@ -150,10 +175,10 @@ static NSImage *frost(NSImage *img)
     NSRect b = self.bounds;
     [rgb(0.035, 0.03, 0.035, 1) setFill]; NSRectFill(b);
     /* the chosen game's own title screen, crossfading from the last one, darkened toward the foot */
-    NSImage *now = self.backdrop[@(GAMES[self.game].id)], *was = self.fade < 1 ? self.backdrop[@(GAMES[self.prevGame].id)] : nil;
+    NSImage *now = self.soft[@(GAMES[self.game].id)] ?: self.backdrop[@(GAMES[self.game].id)], *was = self.fade < 1 ? (self.soft[@(GAMES[self.prevGame].id)] ?: self.backdrop[@(GAMES[self.prevGame].id)]) : nil;
     if (was && was != now) draw_fill(was, b, 1 - self.fade);
     draw_fill(now, b, was ? self.fade : 1);
-    NSGradient *shade = [[NSGradient alloc] initWithColorsAndLocations:rgb(0, 0, 0, 0.45), 0.0, rgb(0, 0, 0, 0.25), 0.35, rgb(0, 0, 0, 0.78), 1.0, nil];
+    NSGradient *shade = [[NSGradient alloc] initWithColorsAndLocations:rgb(0, 0, 0, 0.62), 0.0, rgb(0, 0, 0, 0.42), 0.35, rgb(0, 0, 0, 0.85), 1.0, nil];
     [shade drawInRect:b angle:-90];
     NSGradient *vig = [[NSGradient alloc] initWithStartingColor:rgb(0, 0, 0, 0) endingColor:rgb(0, 0, 0, 0.55)];
     [vig drawInRect:b relativeCenterPosition:NSZeroPoint];
@@ -254,14 +279,14 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:self.prefsPath] ?: @{};
     HView *v = [[HView alloc] initWithFrame:NSMakeRect(0, 0, 960, 610)]; self.view = v; v.hover = HIT_NONE;
     v.installed = [NSDictionary dictionaryWithContentsOfFile:[res stringByAppendingPathComponent:@"games.plist"]] ?: @{};
-    v.art = [NSMutableDictionary dictionary]; v.backdrop = [NSMutableDictionary dictionary]; v.blurred = [NSMutableDictionary dictionary]; v.fade = 1;
+    v.art = [NSMutableDictionary dictionary]; v.backdrop = [NSMutableDictionary dictionary]; v.soft = [NSMutableDictionary dictionary]; v.blurred = [NSMutableDictionary dictionary]; v.fade = 1;
     for (NSInteger k = 0; k < NG; k++) {
         NSImage *img = [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s.png", GAMES[k].id]]];
         if (img) v.art[@(GAMES[k].id)] = img;
         /* the backdrop: the game's title screen (captured at install), else GOG's banner */
         NSImage *bd = [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s-title.png", GAMES[k].id]]]
                    ?: [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s-banner.jpg", GAMES[k].id]]];
-        if (bd) { v.backdrop[@(GAMES[k].id)] = bd; NSImage *f = frost(bd); if (f) v.blurred[@(GAMES[k].id)] = f; }
+        if (bd) { v.backdrop[@(GAMES[k].id)] = bd; NSImage *f = frost(bd, 70), *g = frost(bd, 320); if (f) v.blurred[@(GAMES[k].id)] = f; if (g) v.soft[@(GAMES[k].id)] = g; }
         v->ver[k] = [saved[[NSString stringWithFormat:@"ver_%s", GAMES[k].id]] integerValue];
     }
     v.game = [saved[@"game"] integerValue] % NG;
@@ -292,7 +317,21 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     w.contentView = v; [w center]; w.releasedWhenClosed = NO; self.window = w;
     [w makeKeyAndOrderFront:nil]; [w makeFirstResponder:v]; [NSApp activateIgnoringOtherApps:YES];
     __block double t = 0;
+    /* a controller: d-pad or left stick to move (held: repeats), A / Start to play (A changes an option), B back or quit,
+     * Y the options */
+    __block int held = 0; __block double next = 0; __block uint32_t was = 0;
+    [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
     self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 30 repeats:YES block:^(NSTimer *tm) { t += 1.0 / 30; v.glow = 0.5 + 0.5 * sin(t * 1.3);
+        GCExtendedGamepad *g = (GCController.current ?: GCController.controllers.firstObject).extendedGamepad;
+        if (g && NSApp.active && self.window.isKeyWindow) {
+            float x = g.leftThumbstick.xAxis.value, y = g.leftThumbstick.yAxis.value;
+            int dir = g.dpad.left.pressed || x < -0.6f ? NAV_LEFT : g.dpad.right.pressed || x > 0.6f ? NAV_RIGHT
+                    : g.dpad.up.pressed || y > 0.6f ? NAV_UP : g.dpad.down.pressed || y < -0.6f ? NAV_DOWN : 0;
+            if (dir != held) { held = dir; next = t + 0.38; if (dir) [v nav:dir]; }
+            else if (dir && t >= next) { next = t + 0.14; [v nav:dir]; }
+            uint32_t now = (g.buttonA.pressed ? 1u : 0) | (g.buttonB.pressed ? 2u : 0) | (g.buttonY.pressed ? 4u : 0) | (g.buttonMenu.pressed ? 8u : 0), down = now & ~was; was = now;
+            if (down & 1) [v nav:NAV_OK]; else if (down & 2) [v nav:NAV_BACK]; else if (down & 4) [v nav:NAV_OPTIONS]; else if (down & 8) [v nav:v.open ? NAV_BACK : NAV_PLAY];
+        } else { held = 0; was = 0; }
         if (v.fade < 1) { v.fade = MIN(1, v.fade + 1.0 / 30 / 0.4); v.needsDisplay = YES; } else [v setNeedsDisplayInRect:NSInsetRect([v cardRect:v.game], -260, -140)]; }];
     if (getenv("SHC_LAUNCHER_PLAY")) [self hit:HIT_PLAY];
 }
