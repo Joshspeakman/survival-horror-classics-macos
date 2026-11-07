@@ -90,6 +90,9 @@ IMPL(ole32, CoCreateInstance)
     uint32_t w32_dpnet_create(uint32_t clsid_first_dword);
     uint32_t obj = w32_dpnet_create(rt_r32(G_MEM, clsid));           /* DirectPlay 8 client, server, address */
     if (obj) { if (out) rt_w32(G_MEM, out, obj); RET(0, 5); }
+    uint32_t w32_amstream_create(uint32_t clsid_first_dword);
+    obj = w32_amstream_create(rt_r32(G_MEM, clsid));                  /* multimedia streams: movies into DirectDraw surfaces (ddraw.c) */
+    if (obj) { if (out) rt_w32(G_MEM, out, obj); RET(0, 5); }
     uint32_t w32_dshow_create(uint32_t clsid_first_dword);
     obj = w32_dshow_create(rt_r32(G_MEM, clsid));                     /* DirectShow filter graph (music) */
     if (obj) { if (out) rt_w32(G_MEM, out, obj); RET(0, 5); }
