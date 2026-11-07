@@ -85,6 +85,9 @@ void rt_hook(Ctx *c, uint32_t addr)
                 uint32_t n = atoi(getenv("DS_HOOKTRACE")) >= 3 ? 0xe0 : 80;   /* 3: a longer dump */
                 fprintf(stderr, "   arg%d:", k); for (uint32_t j = 0; j < n; j++) fprintf(stderr, " %02x", G_MEM[p + j]); fprintf(stderr, "\n");
             }
+        if (getenv("DS_HOOKTRACE") && atoi(getenv("DS_HOOKTRACE")) >= 2 && c->eax >= 0x10000 && c->eax < 0x20000000u) {   /* and 64 bytes at eax */
+            fprintf(stderr, "   [eax]:"); for (uint32_t j = 0; j < 64; j++) fprintf(stderr, " %02x", G_MEM[c->eax + j]); fprintf(stderr, "\n");
+        }
     }
 }
 
@@ -111,6 +114,13 @@ int rt_override(Ctx *c, uint32_t addr)
 #endif
 #ifdef RE1_EDITION
     { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
+#endif
+#if defined(RE2_EDITION) && !defined(RE2_CLAIRE)
+    if (addr == 0x004124e0u) {                            /* Marni's error report (printf-like): to the log, then as the game does */
+        char m[300]; uint32_t f = rt_r32(G_MEM, c->esp + 4); if (f >= 0x400000u && f < 0x10000000u) snprintf(m, sizeof m, "%s", (const char *)GP(f)); else snprintf(m, sizeof m, "(%x)", f);
+        fprintf(stderr, "marni: %s [%x %x %x]\n", m, rt_r32(G_MEM, c->esp + 8), rt_r32(G_MEM, c->esp + 12), rt_r32(G_MEM, c->esp + 16));
+        return 0;
+    }
 #endif
     switch (addr) {
 #ifdef DS2_BROKEN_WORLD
