@@ -52,6 +52,8 @@
 #endif
 #define RE_STAGE 0x00a61fa6u
 #define RE_ROOM 0x00a61fa8u
+#define RE_CAMERA 0x00a61faau                      /* the camera (cut): a door sets it from its own data; a new game
+                                                       leaves 0xb (its first room's), which other rooms may not have */
 #ifdef RE3_MERCE                                    /* a door to another stage loads that stage's data first (0x42c3a2) */
 #define RE_STAGE_LOAD 0x004689b0u
 #else
@@ -78,6 +80,9 @@ int re_hook(Ctx *c, uint32_t addr)
             G_MEM[RE_STAGE] = (uint8_t)(stage - 1); G_MEM[RE_ROOM] = (uint8_t)room;
 #else
             rt_w16(G_MEM, RE_STAGE, stage - 1); rt_w16(G_MEM, RE_ROOM, room);
+#endif
+#ifdef RE_CAMERA
+            rt_w16(G_MEM, RE_CAMERA, 0);                /* the room's first camera */
 #endif
 #ifdef RE_STAGE_LOAD
             if (other) {                                /* as a door to another stage does: its data, then the room */
