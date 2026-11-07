@@ -137,15 +137,23 @@ static void dev_desc(uint8_t *b, uint32_t size, int hal)
 static const uint8_t GUID_HAL[16] = {0xe0, 0x3d, 0xe6, 0x84, 0xaa, 0x46, 0xcf, 0x11, 0x81, 0x6f, 0x00, 0x00, 0xc0, 0x20, 0x15, 0x6e};
 static const uint8_t GUID_RGB[16] = {0x60, 0x5c, 0x66, 0xa4, 0x73, 0x26, 0xcf, 0x11, 0xa3, 0x1a, 0x00, 0xaa, 0x00, 0xb9, 0x33, 0x56};
 static uint32_t desc_size_for(int ver) { return ver >= 3 ? 252 : ver == 2 ? 204 : 172; }
+static const uint8_t GUID_RAMP[16] = {0x20, 0x6b, 0x08, 0xf2, 0x9f, 0x25, 0xcf, 0x11, 0xa3, 0x1a, 0x00, 0xaa, 0x00, 0xb9, 0x33, 0x56};
+static const uint8_t GUID_MMX[16] = {0xa1, 0x49, 0x19, 0x88, 0xf3, 0xd6, 0xd0, 0x11, 0x89, 0xab, 0x00, 0xa0, 0xc9, 0x05, 0x41, 0x29};
+/* The devices of DirectX 5-6 in their order: Ramp, RGB and MMX emulation, then the HAL. Every one draws on the GPU here;
+ * the order matters because Resident Evil 2 picks by position: GOG's settings (Display Driver 0x13) name the fourth. */
 static void enum_devices(Ctx *c, uint32_t cb, uint32_t ctx, int ver)
 {
+    static const struct { const uint8_t *guid; const char *desc, *name; int hal, model; } dev[4] = {
+        {GUID_RAMP, "Microsoft Direct3D Mono(Ramp) Software Emulation", "Ramp Emulation", 0, 1},
+        {GUID_RGB, "Microsoft Direct3D RGB Software Emulation", "RGB Emulation", 0, 2},
+        {GUID_MMX, "Microsoft Direct3D MMX Software Emulation", "MMX Emulation", 0, 2},
+        {GUID_HAL, "Microsoft Direct3D Hardware acceleration through Direct3D HAL", "Direct3D HAL", 1, 2} };
     uint32_t b = scratch(16 + 64 + 64 + 252 * 2); uint32_t size = desc_size_for(ver);
-    for (int pass = 0; pass < 2; pass++) {                          /* RGB emulation, then the HAL (what the games pick) */
-        int hal = pass == 1;
-        memcpy(GP(b), hal ? GUID_HAL : GUID_RGB, 16);
-        snprintf((char *)GP(b + 16), 64, "%s", hal ? "Microsoft Direct3D Hardware acceleration through Direct3D HAL" : "Microsoft Direct3D RGB Emulation");
-        snprintf((char *)GP(b + 80), 64, "%s", hal ? "Direct3D HAL" : "RGB Emulation");
-        dev_desc(GP(b + 144), size, hal); dev_desc(GP(b + 144 + 252), size, 1);
+    for (int k = 0; k < 4; k++) {
+        memcpy(GP(b), dev[k].guid, 16);
+        snprintf((char *)GP(b + 16), 64, "%s", dev[k].desc); snprintf((char *)GP(b + 80), 64, "%s", dev[k].name);
+        dev_desc(GP(b + 144), size, dev[k].hal); dev_desc(GP(b + 144 + 252), size, 1);
+        U32(GP(b + 144 + 252), 8) = (uint32_t)dev[k].model;
         uint32_t a[6] = {b, b + 16, b + 80, b + 144, b + 144 + 252, ctx};
         if (w32_callback(c, cb, 6, a) == 0) break;
     }
@@ -296,6 +304,15 @@ static void vp_clear(DVp *v, uint32_t n, uint32_t rects, uint32_t flags, uint32_
     uint32_t *p = cmd_begin(DSR_CLEAR, 20 + 16 * n);
     p[0] = flags; p[1] = color; memcpy(&p[2], &z, 4); p[3] = stencil; p[4] = n; if (n) memcpy(p + 5, GP(rects), 16 * n);
     cmd_end();
+    /* a background material with a texture (D3DMATERIAL.hTexture): clearing the target fills the viewport with that
+     * texture, stretched over it. Resident Evil 2's rooms are drawn so, its pre-rendered picture as the background. */
+    DMat *m = v->bg && v->bg < 1024 ? mat_handles[v->bg] : 0; DSurface *t = m ? tex_of_handle(U32(m->m, 72)) : 0;
+    { static int n; if (log_on > 0 && (flags & 1) && n++ % 300 == 0) { dsr_log("viewport clear: background material %u (%s) texture handle %u -> %s", v->bg, m ? "found" : "none", m ? U32(m->m, 72) : 0, t ? "texture" : "none"); } }
+    if ((flags & 1) && t && v->dev->rt) {
+        const uint8_t *q = v->have2 ? v->v2 : v->v1; int32_t dr[4], sr[4] = {0, 0, (int32_t)U32(t->desc, SD_WIDTH), (int32_t)U32(t->desc, SD_HEIGHT)};
+        dr[0] = (int32_t)U32(q, 4); dr[1] = (int32_t)U32(q, 8); dr[2] = dr[0] + (int32_t)U32(q, 12); dr[3] = dr[1] + (int32_t)U32(q, 16);
+        if (dr[2] > dr[0] && dr[3] > dr[1]) emit_blt(v->dev->rt, dr, t, sr, 0, 0);
+    }
     if (v->dev->old && v->dev->old->cur && v->dev->old->cur != v) vp_apply(v->dev->old->cur);
 }
 M(vp_Clear, 4) DVp *me = obj(ARG(0), O_VP); if (!me) RET(DDERR_INVALIDPARAMS, 4);
@@ -342,7 +359,7 @@ M(d3d3_CreateVertexBuffer, 5) rt_w32(G_MEM, ARG(2), vb_create(ARG(1))); RET(DD_O
 /* Direct3D 1: a device is the render target surface's interface (QueryInterface with the device's GUID) */
 uint32_t d3d1_device_qi(Ctx *c, DSurface *s, uint32_t iid_ptr)
 {
-    if (memcmp(GP(iid_ptr), GUID_HAL, 16) && memcmp(GP(iid_ptr), GUID_RGB, 16)) return 0;
+    if (memcmp(GP(iid_ptr), GUID_HAL, 16) && memcmp(GP(iid_ptr), GUID_RGB, 16) && memcmp(GP(iid_ptr), GUID_MMX, 16) && memcmp(GP(iid_ptr), GUID_RAMP, 16)) return 0;
     return old_device_create(c, s->dd, s, O_DEV1, 1);
 }
 
