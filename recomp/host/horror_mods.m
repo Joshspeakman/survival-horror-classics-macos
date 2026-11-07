@@ -542,7 +542,8 @@ static void fetch_json(NSString *url, void (^done)(id))
  * question); changed() runs whenever the list changes (the launcher's tile) */
 void hmods_show(NSWindow *parent, NSString *title, NSString *game, int gamebanana, NSString *gameDir, NSString *prefer, void (^changed)(void))
 {
-    if (current) { [current.panel makeKeyAndOrderFront:nil]; return; }
+    if (current && [current.game isEqualToString:game]) { [current.panel makeKeyAndOrderFront:nil]; return; }
+    if (current) { [current.browser close]; [current.panel close]; current = nil; }   /* another game's: that one closes */
     SHMods *m = [SHMods new]; m.title = title; m.game = game; m.gb = gamebanana; m.gameDir = gameDir; m.prefer = prefer; m.changed = changed;
     current = m; [m show:parent];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ (void)layout_for(gameDir); });   /* ready before the first install */
