@@ -92,6 +92,12 @@ void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov)
     pad.connected = connected; memcpy(pad.ax, axes, sizeof pad.ax); pad.buttons = buttons; pad.pov = pov;
     pthread_mutex_unlock(&di_lock);
 }
+/* the pad as winmm's joystick reads it (re_imports.c joyGetPosEx): 0 when none is connected */
+int w32_pad_state(float ax[6], uint32_t *buttons, int *pov)
+{
+    pthread_mutex_lock(&di_lock); int on = pad.connected; memcpy(ax, pad.ax, sizeof pad.ax); *buttons = pad.buttons; *pov = pad.pov; pthread_mutex_unlock(&di_lock);
+    return on && !getenv("W32_NO_PAD");
+}
 static void put_guid(uint32_t at, uint32_t d1, uint16_t d2, uint16_t d3, const char *d4)
 {
     rt_w32(G_MEM, at, d1); rt_w16(G_MEM, at + 4, d2); rt_w16(G_MEM, at + 6, d3); memcpy(GP(at + 8), d4, 8);
