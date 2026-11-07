@@ -94,7 +94,8 @@ typedef struct DDevice {
 } DDevice;
 enum { O_DD = 1, O_D3D, O_SURF, O_GAMMA, O_DEV, O_VB };
 /* older interfaces (ddraw_old.inc), after Direct3D 9's types (16..): each is a vtable over the same objects */
-enum { O_S1 = 32, O_S2, O_S3, O_S4, O_T1, O_T2, O_DD1, O_DD2, O_DD4, O_D3D1, O_D3D2, O_D3D3, O_DEV1, O_DEV2, O_DEV3, O_VP, O_MAT, O_LIGHT, O_EXB, O_MAT1, O_CLIP };
+enum { O_S1 = 32, O_S2, O_S3, O_S4, O_T1, O_T2, O_DD1, O_DD2, O_DD4, O_D3D1, O_D3D2, O_D3D3, O_DEV1, O_DEV2, O_DEV3, O_VP, O_MAT, O_LIGHT, O_EXB, O_MAT1, O_CLIP,
+       O_AMS, O_AMV, O_AMA, O_AMSMP };   /* amstream.inc: movies into surfaces */
 typedef struct { int type; void *p; } Obj;
 static Obj objs[65536]; static uint32_t nobjs = 1;
 static pthread_mutex_t obj_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1121,6 +1122,7 @@ static uint32_t build_vtable(const char *iface, const Fn *fns, int n)
     return t;
 }
 #include "ddraw_old.inc"
+static void ams_vtables(void);
 static void init_vtables(void)
 {
     static int done; if (done) return; done = 1;
@@ -1157,10 +1159,12 @@ static void init_vtables(void)
     vt[O_SURF] = build_vtable("IDirectDrawSurface7", surf, 49); vt[O_GAMMA] = build_vtable("IDirectDrawGammaControl", gamma, 5);
     vt[O_DEV] = build_vtable("IDirect3DDevice7", dev, 49); vt[O_VB] = build_vtable("IDirect3DVertexBuffer7", vb, 9);
     old_vtables(dd, surf, dev);
+    ams_vtables();
 }
 
 /* for the host backend: the current display mode (the game's coordinate space) */
 static DDraw *the_dd;
+#include "amstream.inc"
 uint32_t dsr_d3d9_w, dsr_d3d9_h;               /* set by d3d9.c: its back buffer is the game's coordinate space */
 void dsr_mode_size(uint32_t *w, uint32_t *h)
 {
