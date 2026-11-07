@@ -24,7 +24,8 @@
 
 /* Room jump (SHC_ROOM=<stage><room>, as the room files are named: 101 = ROOM1010.RDT, stage 1 room 01): the first room
  * a new game loads is that one instead. Resident Evil 2: a hook just before the room loader reads the stage and room
- * (LeonU 0x4e1ecd, ClaireU 0x4e212d), which it turns into the file name (Pl0\\Rdu\\roomSRRP.rdt). */
+ * (LeonU 0x4e1ecd, ClaireU 0x4e212d), which it turns into the file name (Pl0\\Rdu\\roomSRRP.rdt); Resident Evil 3 the same
+ * before it names the room in its archives (0x4684f8; The Mercenaries 0x4685d8). */
 #if defined(RE2_EDITION) && defined(RE2_CLAIRE)
 #define RE_ROOM_HOOK 0x004e212du
 #define RE_STAGE 0x00999194u
@@ -33,18 +34,39 @@
 #define RE_ROOM_HOOK 0x004e1ecdu
 #define RE_STAGE 0x00999114u
 #define RE_ROOM 0x00999116u
+#elif defined(RE3_EDITION)                         /* the room's name in the ROFS archives: Bio19/Data_j/rdt/RSRR.rdt */
+#ifdef RE3_MERCE
+#define RE_ROOM_HOOK 0x004685d8u
+#else
+#define RE_ROOM_HOOK 0x004684f8u
+#endif
+#define RE_STAGE 0x00a61fa6u
+#define RE_ROOM 0x00a61fa8u
+#ifdef RE3_MERCE                                    /* a door to another stage loads that stage's data first (0x42c3a2) */
+#define RE_STAGE_LOAD 0x004689b0u
+#else
+#define RE_STAGE_LOAD 0x004688d0u
+#endif
 #endif
 int re_hook(Ctx *c, uint32_t addr)
 {
-    (void)c;
 #ifdef RE_ROOM_HOOK
-    static int done;
-    if (addr == RE_ROOM_HOOK && !done) {
-        const char *e = getenv("SHC_ROOM"); done = 1;
+    static int loads, at = -1;                      /* SHC_ROOM_AT=<n>: at the n-th room load (default 1) */
+    if (addr == RE_ROOM_HOOK && at < 0) { const char *a = getenv("SHC_ROOM_AT"); at = a && atoi(a) > 0 ? atoi(a) : 1; }
+    if (addr == RE_ROOM_HOOK && ++loads == at) {
+        const char *e = getenv("SHC_ROOM");
         unsigned stage = 0, room = 0;
         if (e && strlen(e) >= 3 && sscanf(e, "%1x%2x", &stage, &room) == 2 && stage >= 1) {
             fprintf(stderr, "re: room jump: stage %u room %02x (was %u %02x)\n", stage, room, rt_r16(G_MEM, RE_STAGE) + 1, rt_r16(G_MEM, RE_ROOM));
+            int other = rt_r16(G_MEM, RE_STAGE) != stage - 1;
             rt_w16(G_MEM, RE_STAGE, stage - 1); rt_w16(G_MEM, RE_ROOM, room);
+#ifdef RE_STAGE_LOAD
+            if (other) {                                /* as a door to another stage does: its data, then the room */
+                Ctx save = *c; c->esp -= 4; rt_w32(G_MEM, c->esp, 0xffeff000u); rt_call(c, RE_STAGE_LOAD);
+                uint32_t keep = c->esp; *c = save; (void)keep;
+            }
+#endif
+            (void)other;
         }
         return 0;
     }

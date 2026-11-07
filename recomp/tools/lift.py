@@ -1514,7 +1514,8 @@ RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')
 # Resident Evil's cooperative tasks switch stacks by hand (save esp, load another task's, ret into it): the runtime
 # runs each task on a host thread of its own and hands over at these four points (runtime/win32/re1_tasks.c)
 RE2_OVERRIDES = {0x004124e0: 'Marni error report (logged)'}
-RE_HOOKS = {'re2': {0x004e1ecd: 'room jump (Test Aids, re_aids.c)'}, 're2c': {0x004e212d: 'room jump (Test Aids, re_aids.c)'}}
+RE_HOOKS = {'re2': {0x004e1ecd: 'room jump (Test Aids, re_aids.c)'}, 're2c': {0x004e212d: 'room jump (Test Aids, re_aids.c)'},
+            're3': {0x004684f8: 'room jump (Test Aids, re_aids.c)'}, 're3m': {0x004685d8: 'room jump (Test Aids, re_aids.c)'}}
 RE1_OVERRIDES = {0x0047575c: 'task start', 0x0047577c: 'task yield', 0x0047579c: 'task resume', 0x004757a8: 'task end'}   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
 
 def main():
