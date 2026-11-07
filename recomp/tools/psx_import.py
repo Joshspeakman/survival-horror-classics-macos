@@ -2,7 +2,7 @@
 """psx_import.py: PlayStation content from the player's own discs, as mods (docs/PLAYSTATION-IMPORT.md). This Mac only;
 nothing from a disc is part of the project.
 
-  psx_import.py voices <re1|re2|re3|dc> <disc .cue> <game folder> <mod folder> [--report <file>]
+  psx_import.py voices <re1|re2|dc> <disc .cue>[,<disc 2 .cue>] <game folder> <mod folder> [--report <file>]
       The disc's voice lines (XA, 37.8 kHz) in place of the PC's (22 kHz). Each XA channel of the disc's voice files
       is decoded whole (ffmpeg): a channel holds many lines one after another, which the game finds by position. Each
       PC clip is then looked for in every channel by the shape of its loudness over time (a sliding comparison, by
@@ -21,10 +21,16 @@ import psx_disc
 FFMPEG = next((p for p in ('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg') if os.path.exists(p)), 'ffmpeg')
 ENV_HZ = 100                                    # loudness envelope: 10 ms steps
 
-# per game: the disc's voice files, and the PC's voice clips (folders below the game folder, file pattern)
+# per game: the disc's voice files, the PC's voice clips (folders below the game folder, searched below too, and their
+# extension) and how a replacement is stored: 'wav' (RIFF WAVE, 16-bit 44.1 kHz, under the PC clip's name) or 'sap'
+# (Resident Evil 2: an 8-byte header, 01 00 00 00 00 00 00 00, before the RIFF WAVE)
 GAMES = {
     're1': {'disc': lambda p: p.upper().startswith('PSX/VOICE/') and p.upper().endswith('.XAS'),
-            'pc': [('USA/Voice', '.wav')]},
+            'pc': [('USA/Voice', '.wav')], 'store': 'wav'},
+    're2': {'disc': lambda p: '/VOICE/' in p.upper() and p.upper().endswith('.XAS'),
+            'pc': [('Pl0/Voice', '.sap'), ('Pl1/Voice', '.sap')], 'store': 'sap'},
+    'dc':  {'disc': lambda p: p.upper().startswith('PSX/DATA_XA/') and p.upper().endswith('.XAS'),
+            'pc': [('Sound/VOICE', '.dat')], 'store': 'wav'},
 }
 
 def say(*a): print(*a, flush=True)
@@ -49,8 +55,20 @@ def decode_xa(sectors, rate=44100):
         return np.frombuffer(r.stdout, dtype='<i2').astype(np.float32) / 32768.0
     finally: os.unlink(name)
 
+def read_pc(path):
+    """a PC clip (RIFF WAVE in any format ffmpeg reads, or Resident Evil 2's .SAP around one) -> (mono float, rate)"""
+    data = open(path, 'rb').read()
+    if data[:4] != b'RIFF' and data[8:12] == b'RIFF': data = data[8:]                    # .SAP
+    rate = struct.unpack_from('<I', data, 24)[0] if data[:4] == b'RIFF' and len(data) >= 28 else 22050
+    if data[:4] == b'RIFF' and struct.unpack_from('<H', data, 20)[0] == 1:
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as t: t.write(data); name = t.name
+        try: return read_wav(name)
+        finally: os.unlink(name)
+    r = subprocess.run([FFMPEG, '-v', 'error', '-f', 'wav', '-i', 'pipe:0', '-ac', '1', '-f', 's16le', '-'], input=data, capture_output=True)
+    return np.frombuffer(r.stdout, dtype='<i2').astype(np.float32) / 32768.0, rate
+
 def read_wav(path):
-    """a PC clip -> (mono float samples, rate)"""
+    """a PCM WAV -> (mono float samples, rate)"""
     with wave.open(path, 'rb') as w:
         n, ch, width, rate = w.getnframes(), w.getnchannels(), w.getsampwidth(), w.getframerate()
         raw = w.readframes(n)
@@ -80,11 +98,14 @@ def ncc(long, short):
     var = np.maximum(win2 - win ** 2 / m, 1e-12)
     return dot / (np.sqrt(var) * ss)
 
-def write_wav(path, a, rate=44100):
+def write_wav(path, a, rate=44100, store='wav'):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     pcm = (np.clip(a, -1, 1) * 32767).astype('<i2')
-    with wave.open(path, 'wb') as w:
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as t: name = t.name
+    with wave.open(name, 'wb') as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm.tobytes())
+    body = open(name, 'rb').read(); os.unlink(name)
+    with open(path, 'wb') as f: f.write((b'\x01\0\0\0\0\0\0\0' if store == 'sap' else b'') + body)
 
 def find_ci(root, rel):
     cur = root
@@ -101,21 +122,25 @@ def voices(game, cue, game_dir, mod, report=None):
     pcs = []
     for folder, ext in g['pc']:
         d = find_ci(game_dir, folder)
-        for n in sorted(os.listdir(d or '.')) if d else []:
-            if n.lower().endswith(ext):
-                a, rate = read_wav(os.path.join(d, n))
-                pcs.append({'rel': f'{folder}/{n}', 'a': a, 'rate': rate, 'dur': len(a) / rate, 'env': envelope(a, rate)})
+        for root, _, names in os.walk(d) if d else []:
+            for n in sorted(names):
+                if not n.lower().endswith(ext): continue
+                rel = os.path.relpath(os.path.join(root, n), game_dir).replace(os.sep, '/')
+                a, rate = read_pc(os.path.join(root, n))
+                if len(a): pcs.append({'rel': rel, 'a': a, 'rate': rate, 'dur': len(a) / rate, 'env': envelope(a, rate)})
     say(f'{len(pcs)} PC voice clips')
     # the disc's channels, each decoded whole
-    disc = psx_disc.Disc(cue); chans = []
-    try:
-        for path, lba, size, xa in psx_disc.walk(disc):
-            if not g['disc'](path): continue
-            for ch, secs in sorted(xa_channels(disc, lba, size).items()):
-                a = decode_xa(secs)
-                if len(a) >= 4410: chans.append({'src': f'{path}#{ch}', 'a': a, 'env': envelope(a, 44100)})
-            say(f'{path}: {sum(1 for c in chans if c["src"].startswith(path))} channels')
-    finally: disc.close()
+    chans = []
+    for cue_one in cue.split(','):
+        disc = psx_disc.Disc(cue_one)
+        try:
+            for path, lba, size, xa in psx_disc.walk(disc):
+                if not g['disc'](path): continue
+                for ch, secs in sorted(xa_channels(disc, lba, size).items()):
+                    a = decode_xa(secs)
+                    if len(a) >= 4410: chans.append({'src': f'{os.path.basename(cue_one)}:{path}#{ch}', 'a': a, 'env': envelope(a, 44100)})
+                say(f'{path}: {sum(1 for c in chans if path in c["src"])} channels')
+        finally: disc.close()
     say(f'{sum(len(c["a"]) for c in chans) / 44100 / 60:.1f} minutes of disc voice audio')
     # each PC clip: the best few places in any channel by loudness (10 ms), each confirmed on the waveform itself (the
     # disc's audio there, cut down to the PC's rate, against the PC clip): the best above 0.9 is the line, placed to
@@ -142,7 +167,7 @@ def voices(game, cue, game_dir, mod, report=None):
         if start < 0: seg = np.concatenate([np.zeros(-start, np.float32), seg])
         if len(seg) < n: seg = np.concatenate([seg, np.zeros(n - len(seg), np.float32)])
         seg = seg[:n] * (rms(p['a']) / max(rms(seg[:n]), 1e-6))           # at the PC clip's loudness: the game's mix
-        write_wav(os.path.join(mod, *p['rel'].lower().split('/')), seg)
+        write_wav(os.path.join(mod, *p['rel'].lower().split('/')), seg, store=g['store'])
         matched.append((corr, p['rel'], c['src'], start / 44.1))
     scores = [m[0] for m in matched]
     say(f'matched {len(matched)} of {len(pcs)} PC clips; agreement: lowest {min(scores, default=0):.3f}, '
