@@ -349,7 +349,10 @@ IMPL(kernel32, CreateFileA)
     File *f = calloc(1, sizeof *f); f->fd = fd; f->is_dir = isdir; snprintf(f->path, sizeof f->path, "%s", p); snprintf(f->win, sizeof f->win, "%s", GS(ARG(0)));
     w32_set_last_error(c, (exists && (disp == 2 || disp == 4)) ? 183 : 0);
     uint32_t h = h_new(H_FILE, f);
-    if (getenv("W32_FILELOG")) fprintf(stderr, "w32: CreateFileA(%s) -> %x fd %d (%s)\n", GS(ARG(0)), h, fd, p);
+    if (getenv("W32_FILELOG")) {
+        fprintf(stderr, "w32: CreateFileA(%s) -> %x fd %d (%s) from", GS(ARG(0)), h, fd, p);
+        for (uint32_t k = 0, n = 0; k < 0x800 && n < 16; k += 4) { uint32_t r = rt_r32(G_MEM, c->esp + k); if (r >= 0x401000u && r < 0x700000u) { fprintf(stderr, " %08x", r); n++; } }
+        fprintf(stderr, "\n"); }
     RET(h, 7);
 }
 typedef struct Mapping Mapping;

@@ -62,6 +62,9 @@ void rt_hook(Ctx *c, uint32_t addr)
 #ifdef GTA_EDITION
     { int gta3_hook(Ctx *, uint32_t); if (gta3_hook(c, addr)) return; }   /* gta3_mode.c */
 #endif
+#ifdef RE_EDITION
+    { int re_hook(Ctx *, uint32_t); if (re_hook(c, addr)) return; }   /* re_aids.c: Test Aids */
+#endif
     switch (addr) {
     case DS2_MOOD_READ: mood_read(c); break;
     default:   /* development trace hooks (tools/lift.py DS_TRACE_HOOKS) */
@@ -116,7 +119,8 @@ int rt_override(Ctx *c, uint32_t addr)
     { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
 #endif
 #if defined(RE2_EDITION) && !defined(RE2_CLAIRE)
-    if (addr == 0x004124e0u) {                            /* Marni's error report (printf-like): to the log, then as the game does */
+    static int marni_log = -1; if (marni_log < 0) marni_log = getenv("W32_MARNILOG") != 0;
+    if (addr == 0x004124e0u && marni_log) {             /* development (W32_MARNILOG=1): Marni's error reports, then as the game does */
         char m[300]; uint32_t f = rt_r32(G_MEM, c->esp + 4); if (f >= 0x400000u && f < 0x10000000u) snprintf(m, sizeof m, "%s", (const char *)GP(f)); else snprintf(m, sizeof m, "(%x)", f);
         fprintf(stderr, "marni: %s [%x %x %x]\n", m, rt_r32(G_MEM, c->esp + 8), rt_r32(G_MEM, c->esp + 12), rt_r32(G_MEM, c->esp + 16));
         return 0;
