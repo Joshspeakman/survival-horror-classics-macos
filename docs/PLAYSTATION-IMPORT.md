@@ -1,5 +1,28 @@
 # Plan: PlayStation content from your own discs
 
+**Status (2026-11-07):** done and in the Mods window as **Restore from Disc…** (`recomp/tools/psx_import.py restore`,
+`psx_disc.py`):
+
+- **Voices, all four games.** Lines confirmed on the waveform: Resident Evil 487 of 563, Resident Evil 2 569 of 599,
+  Resident Evil 3 358 of 441, Dino Crisis 554 of 676.
+- **Movies, Resident Evil.** 21 movies, from the Ultimate Director's Cut (uncut, colour) and the original release.
+
+Decided after comparing:
+
+- **Movies elsewhere stay the PC's.** Resident Evil 2's run at 30 fps on PC against 15 on the disc. Resident Evil 3's
+  PC movies are the disc's own frames. Dino Crisis's are 640×480 on PC.
+
+Not done yet:
+
+- **Music.** It needs a sequencer and SPU renderer for the PlayStation's sequences and sample banks.
+- **Sound effects.**
+
+Found on the way and fixed:
+
+- Resident Evil's sounds were never loaded (`mmioSeek`).
+- Resident Evil's movies never played (no MCI device).
+- Resident Evil 2 couldn't take PCM `.SAP` audio (ACM).
+
 Goal: from a disc image of your own PlayStation copy of a game, pull in what the PlayStation version does better than the
 GOG PC release, and install it as mods in the launcher's Mods window. Each kind is its own mod ("PlayStation music",
 "PlayStation voices", ...), so it can be switched on or off and ordered like any other mod. Nothing in the game folders

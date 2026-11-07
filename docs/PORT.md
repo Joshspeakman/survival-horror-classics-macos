@@ -79,16 +79,40 @@ Evil, Resident Evil 2 and Dino Crisis open loose files with `CreateFileA` under 
 for each one in the mods before the game folder, any case (`files.c`, as for the GTA port). Writes still go to the
 overlay in the data folder.
 
-Resident Evil 3 reads everything through four functions on its archive reader (the object at 0x5349dc): open(name),
-seek, read and close, at 0x507b00/20/40/60 (The Mercenaries 0x507b70/90/b0/d0). They are cdecl, return in eax, and
-the game's own handles are 0. These functions are taken over (`re_mods.c`, `lift.py` RE3_OVERRIDES). A name the
-enabled mods have (`/data/pld/pl00.pld`, below an optional `bio19/`) opens the mod's file with a handle of 0x4d4f0000
-+ slot, which seek, read and close then serve as plain bytes, as the game's reader returns an entry once unpacked.
+Resident Evil 3 reads everything through its archive reader (the object at 0x5349dc). The reader's own methods are
+open(name) 0x4214c0, close 0x414f10, read 0x414f70 and seek 0x414fd0, the same in both programs. They are thiscall
+(the reader in ecx, arguments popped by the method), and the game's own handles are 0. File loaders reach them
+through cdecl wrappers (0x507b00/20/40/60; The Mercenaries 0x507b70/90/b0/d0), voice streams through the sound
+object (0x5349e0, its stream open 0x506e70).
+
+The methods are taken over (`re_mods.c`, `lift.py` RE3_OVERRIDES). A name the enabled mods have
+(`/data/pld/pl00.pld`, `/data_a/voice/m101a010.wav`, below an optional `bio19/`) opens the mod's file with a handle of
+0x4d4f0000 + slot. Seek, read and close then serve it as plain bytes, as the reader returns an entry once unpacked.
 Everything else goes to the game's reader.
+
+`W32_ROFSDUMP=<folder>` with `W32_ROFSDUMP_LIST=<names>` saves listed files unpacked by the game's own reader;
+Restore from Disc uses it for the PC voices. `W32_ROFSVOICE=<name>` starts a voice line as a scene would.
 
 The installer reads each `Rofs<n>.dat` directory to know where a bare file goes. The header holds the folder name
 (`DATA`, `PLD`), then at 8 × its offset comes the directory: a count, then per file its offset / 8, size and name. A
 new game's requests: `W32_ROFSLOG=1`.
+
+## Sound and movies: what each game needed
+
+- **Resident Evil's sounds** load through `mmio` (its wave reader seeks back to find the `data` chunk): `mmioSeek` and
+  `mmioSetInfo` are real (`fnv_imports.c`). They were stubs before, so every sound was an empty 20-byte buffer.
+- **Resident Evil's movies** play through MCI's AVI device ("avivideo"). `winmm.c` has one on the host's player:
+  - `MCI_OPEN` of the device, then of the movie as a child window;
+  - `MCI_STATUS` of that window;
+  - `MCI_PLAY` with `MCI_NOTIFY` (`MM_MCINOTIFY` posted to the game's window at the end);
+  - `MCI_STOP` / `MCI_CLOSE` when skipped.
+
+  The movie played is `<file>.mpg`: a mod's first, then the installer's MPEG-1 copy. Before this, each movie ended in
+  the game's "Failed to initialize the video sequence.(13)", which test mode closes unseen.
+- **Resident Evil 2** opens an ACM stream for every `.SAP`. PCM sources are converted at their own rate
+  (`df_imports.c`), so a mod's `.SAP` can hold plain PCM.
+- **Movie lookups** (`amstream.inc`, `dshow.c`, the MCI device) try `<file>.mpg` through the file layer, so mods can
+  supply movies.
 
 ## Logs (development)
 
