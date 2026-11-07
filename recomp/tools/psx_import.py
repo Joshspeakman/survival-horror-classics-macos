@@ -21,6 +21,13 @@ nothing from a disc is part of the project.
       original release for the staff rolls it lacks). Each pairing is checked frame by frame against the PC's movie
       (the same scene: thumbnails at a quarter, half and three quarters through); one that differs is left out.
 
+  psx_import.py restore <re1|re2|re3|dc> <disc folder or .cue/.chd/.iso, comma-separated> <game folder> <mods folder>
+                        [--app <the Survival Horror Classics app>]
+      Everything above for one game, from whichever of its discs are given (each known by its serial), into the launcher's
+      mods (<mods folder>/<game>/, its index.plist): "PlayStation voices" and, for Resident Evil, "PlayStation movies",
+      on, at the top of the list (a restore again replaces them). Resident Evil 3's PC voices are packed in its archives:
+      they are unpacked by the game's own reader, the app's ResidentEvil3 run in test mode (--app).
+
 Needs: ffmpeg (Homebrew), numpy (the project's recomp/.venv). Run with recomp/.venv/bin/python.
 """
 import os, struct, subprocess, sys, tempfile, wave
@@ -35,7 +42,7 @@ ENV_HZ = 100                                    # loudness envelope: 10 ms steps
 # extension) and how a replacement is stored: 'wav' (RIFF WAVE, 16-bit 44.1 kHz, under the PC clip's name) or 'sap'
 # (Resident Evil 2: an 8-byte header, 01 00 00 00 00 00 00 00, before the RIFF WAVE)
 GAMES = {
-    're1': {'disc': lambda p: p.upper().startswith('PSX/VOICE/') and p.upper().endswith('.XAS'),
+    're1': {'disc': lambda p: p.upper().split('/')[0] in ('PSX', 'PSXUSA') and '/VOICE/' in p.upper() and p.upper().endswith('.XAS'),
             'pc': [('USA/Voice', '.wav')], 'store': 'wav'},
     're2': {'disc': lambda p: '/VOICE/' in p.upper() and p.upper().endswith('.XAS'),
             'pc': [('Pl0/Voice', '.sap'), ('Pl1/Voice', '.sap')], 'store': 'sap'},
@@ -225,6 +232,14 @@ def frames(path, fmt=None, fps=4):
     r = subprocess.run(args, capture_output=True); n = len(r.stdout) // 768
     return np.frombuffer(r.stdout[:n * 768], np.uint8).astype(np.float32).reshape(n, 768)
 
+def colour(path, fmt=None):
+    """how colourful a movie is: the mean chroma distance from grey (0 for a black-and-white one), from 2 frames a second"""
+    args = [FFMPEG, '-v', 'error'] + (['-f', fmt] if fmt else []) + ['-i', path, '-vf', 'fps=2,scale=32:24,format=rgb24', '-f', 'rawvideo', '-']
+    r = subprocess.run(args, capture_output=True); n = len(r.stdout) // 3
+    if not n: return 0.0
+    px = np.frombuffer(r.stdout[:n * 3], np.uint8).astype(np.float32).reshape(n, 3)
+    return float(np.abs(px - px.mean(1, keepdims=True)).mean())
+
 def same_scene(a, b, fps=4, max_shift=3.0):
     """how alike two movies look: the mean frame correlation at the best offset within +-max_shift seconds"""
     if not len(a) or not len(b): return 0.0
@@ -270,6 +285,8 @@ def movies(game, cues, game_dir, mod, report=None):
             try:
                 pc_path = os.path.join(d, name); dpc = duration(pc_path); dps = (size // 2048) / 150.0
                 score = same_scene(frames(pc_path), frames(raw, 'psxstr'))
+                if colour(pc_path) > 6 and colour(raw, 'psxstr') < 2:          # a black-and-white cut of a colour movie
+                    lines.append(f'  -    {name}: {path} is in black and white: kept'); continue
                 if score < 0.6:
                     lines.append(f'  -    {name}: {os.path.basename(cues.split(",")[discs.index(dd)])} {path} looks different ({score:.2f}): kept'); continue
                 out = os.path.join(mod, *g['pc'].lower().split('/'), name.lower() + '.mpg'); os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -284,7 +301,136 @@ def movies(game, cues, game_dir, mod, report=None):
     for l in lines: say(l)
     if report: open(report, 'w').write('\n'.join(lines) + '\n')
 
+# the discs, by the serial in SYSTEM.CNF: (game, which release)
+SERIALS = {'SLUS-00170': ('re1', 'original'), 'SLUS-00551': ('re1', "Director's Cut"), 'SLUS-00747': ('re1', "Director's Cut Dual Shock"),
+           'SLUS-00421': ('re2', 'Leon disc'), 'SLUS-00592': ('re2', 'Claire disc'),
+           'SLUS-00748': ('re2', 'Dual Shock Leon disc'), 'SLUS-00756': ('re2', 'Dual Shock Claire disc'),
+           'SLUS-00923': ('re3', 'original'), 'SLUS-00922': ('dc', 'original')}
+TITLES = {'re1': 'Resident Evil', 're2': 'Resident Evil 2', 're3': 'Resident Evil 3', 'dc': 'Dino Crisis'}
+
+def find_discs(spec):
+    """disc images below a folder (or listed): [(path, serial, release, game)]"""
+    paths = []
+    for one in spec.split(','):
+        if os.path.isdir(one):
+            names = sorted(os.listdir(one))
+            cues = [n for n in names if n.lower().endswith(('.cue', '.chd', '.iso'))]
+            covered = set()
+            for n in cues:
+                if n.lower().endswith('.cue'):
+                    for line in open(os.path.join(one, n), encoding='latin1'):
+                        m = line.strip().split('"')
+                        if line.strip().upper().startswith('FILE') and len(m) > 1: covered.add(m[1].lower())
+            paths += [os.path.join(one, n) for n in cues]
+            paths += [os.path.join(one, n) for n in names if n.lower().endswith('.bin') and n.lower() not in covered]
+        elif os.path.exists(one): paths.append(one)
+    out = []
+    for p in paths:
+        try:
+            d = psx_disc.Disc(p)
+            try: serial, _ = psx_disc.system_cnf(d, psx_disc.walk(d))
+            finally: d.close()
+        except SystemExit: continue
+        except Exception: continue
+        g = SERIALS.get(serial)
+        if g: out.append((p, serial, g[1], g[0]))
+    return out
+
+def xa_count(path):
+    d = psx_disc.Disc(path)
+    try: return sum(1 for f in psx_disc.walk(d) if f[3]), sum(f[2] for f in psx_disc.walk(d) if f[0].upper().endswith('PJ.STR'))
+    finally: d.close()
+
+def index_put(mods_root, game, entries):
+    """the launcher's list for the game: entries (by folder) replaced or added, at the top"""
+    import plistlib, datetime
+    path = os.path.join(mods_root, game, 'index.plist')
+    try: cur = plistlib.load(open(path, 'rb'))
+    except Exception: cur = []
+    folders = {e['folder'] for e in entries}
+    cur = [m for m in cur if m.get('folder') not in folders]
+    now = datetime.datetime.now()
+    for e in entries: e.setdefault('added', now)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    plistlib.dump(entries + cur, open(path, 'wb'))
+
+def unpack_re3_voices(app, game_dir, out):
+    """Resident Evil 3's voices as its own reader unpacks them (re_mods.c W32_ROFSDUMP): the app's ResidentEvil3, test mode"""
+    rofs = find_ci(game_dir, 'Rofs14.dat') or ''
+    names = []
+    d = open(rofs, 'rb').read(0x40000) if rofs else b''
+    if d:
+        p = 0x14
+        while d[p] == 0: p += 1
+        e = d.index(b'\0', p); base = d[p:e].decode(); p = e + 1; off = struct.unpack_from('<I', d, p)[0]; p += 8; e = d.index(b'\0', p); sub = d[p:e].decode()
+        q = off * 8; n = struct.unpack_from('<I', d, q)[0]; q += 4
+        for _ in range(n): q += 8; e = d.index(b'\0', q); names.append(f'/{base.lower()}/{sub.lower()}/{d[q:e].decode()}'); q = e + 1
+    if not names: say('Resident Evil 3: its voice archive (Rofs14.dat) was not found'); return False
+    macos = os.path.join(app, 'Contents', 'MacOS'); res = os.path.join(app, 'Contents', 'Resources')
+    binary, exe = os.path.join(macos, 'ResidentEvil3'), os.path.join(res, 're3-ResidentEvil3.exe')
+    if not (os.path.exists(binary) and os.path.exists(exe)): say('Resident Evil 3 is not in the app: its voices cannot be unpacked'); return False
+    work = tempfile.mkdtemp(prefix='re3-voices-'); lst = os.path.join(work, 'list.txt'); open(lst, 'w').write('\n'.join(names) + '\n')
+    env = dict(os.environ, DS_TEST='1', DS_NO_LAUNCHER='1', W32_AUDIO_MUTE='1', RE_NO_MOVIES='1', W32_ROFSDUMP=out, W32_ROFSDUMP_LIST=lst)
+    say('Unpacking Resident Evil 3\'s voices with the game\'s own reader…')
+    proc = subprocess.Popen([binary, '--exe', exe, '--game', game_dir, '--data', os.path.join(work, 'data')], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors='replace')
+    ok = False
+    try:
+        import time; t0 = time.time()
+        for line in proc.stderr:
+            if 're: archive dump:' in line: ok = True; break
+            if time.time() - t0 > 120: break
+    finally:
+        proc.kill(); proc.wait()
+    return ok and os.path.isdir(out)
+
+def restore(game, spec, game_dir, mods_root, app=None):
+    discs = [d for d in find_discs(spec) if d[3] == game]
+    if not discs: say(f'No {TITLES[game]} disc found there (BIN/CUE, CHD or ISO of the PlayStation release).'); return 1
+    for p, serial, rel, _ in discs: say(f'Found {TITLES[game]} ({rel}, {serial}): {os.path.basename(p)}')
+    cues = [p for p, *_ in discs]
+    raw = [p for p in cues if psx_disc.Disc(p).raw]
+    if not raw: say('These images keep only data files (2048-byte .iso): the voices and movies need a BIN/CUE or CHD.'); return 1
+    game_dir_pc = game_dir; entries = []; folder_v = os.path.join(mods_root, game, 'playstation-voices')
+    import shutil
+    if game == 're3':
+        pcv = tempfile.mkdtemp(prefix='re3-pcvoices-')
+        if not app or not unpack_re3_voices(app, game_dir, pcv): return 1
+        game_dir_pc = pcv
+    # voices: the discs' (Resident Evil: the original release's, else any)
+    vdiscs = raw
+    if game == 're1': vdiscs = [p for p, s, *_ in discs if s == 'SLUS-00170' and p in raw] or raw[:1]
+    tmp = folder_v + '.new'; shutil.rmtree(tmp, ignore_errors=True)
+    n, total = voices(game, ','.join(vdiscs), game_dir_pc, tmp)
+    if n:
+        shutil.rmtree(folder_v, ignore_errors=True); os.replace(tmp, folder_v)
+        entries.append({'name': 'PlayStation voices (your disc)', 'folder': 'playstation-voices', 'kind': 'files', 'enabled': True, 'game': game,
+                        'source': ', '.join(os.path.basename(p) for p in vdiscs),
+                        'note': f'{n} of {total} voice lines from your PlayStation disc ({"18.9" if game == "dc" else "37.8"} kHz XA, '
+                                f'{"no 8-bit hiss" if game == "dc" else "the full top end"}), at the PC lines\' timing and loudness'})
+    else: shutil.rmtree(tmp, ignore_errors=True)
+    # movies (Resident Evil): the uncut colour ones first (the largest opening), then the rest
+    if game in MOVIES:
+        order = sorted(raw, key=lambda p: -xa_count(p)[1])
+        folder_m = os.path.join(mods_root, game, 'playstation-movies'); tmp = folder_m + '.new'; shutil.rmtree(tmp, ignore_errors=True)
+        say('Converting the movies…')
+        movies(game, ','.join(order), game_dir, tmp)
+        nm = sum(1 for _, _, fs in os.walk(tmp) for f in fs if f.endswith('.mpg')) if os.path.isdir(tmp) else 0
+        if nm:
+            shutil.rmtree(folder_m, ignore_errors=True); os.replace(tmp, folder_m)
+            entries.append({'name': 'PlayStation movies (your disc)', 'folder': 'playstation-movies', 'kind': 'files', 'enabled': True, 'game': game,
+                            'source': ', '.join(os.path.basename(p) for p in order),
+                            'note': f'{nm} movies from your PlayStation discs (15 fps, 37.8 kHz sound; the uncut colour cuts where a disc has them)'})
+        else: shutil.rmtree(tmp, ignore_errors=True)
+    if not entries: say('Nothing from these discs matched the game.'); return 1
+    index_put(mods_root, game, entries)
+    say('Restored from your disc: ' + ', '.join(e['name'] for e in entries) + ' (on, at the top of the list).')
+    return 0
+
 def main(argv):
+    if len(argv) >= 5 and argv[0] == 'restore' and argv[1] in GAMES:
+        app = argv[argv.index('--app') + 1] if '--app' in argv else None
+        sys.exit(restore(argv[1], argv[2], argv[3], argv[4], app))
     if len(argv) >= 5 and argv[0] == 'movies' and argv[1] in MOVIES:
         rep = argv[argv.index('--report') + 1] if '--report' in argv else None
         movies(argv[1], argv[2], argv[3], argv[4], rep)
