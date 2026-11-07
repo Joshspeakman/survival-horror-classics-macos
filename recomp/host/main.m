@@ -117,6 +117,9 @@ static void *render_thread(void *arg)
                     {   // DS_SHOT=<path>,<frame>: save that frame as a PNG (development)
                         static long shot_at = -2; static char shot_path[1024];
                         if (shot_at == -2) { const char *e = test_mode ? getenv("DS_SHOT") : 0; shot_at = -1;   /* test mode only: it writes anywhere */ if (e) { const char *cm = strrchr(e, ','); if (cm) { snprintf(shot_path, sizeof shot_path, "%.*s", (int)(cm - e), e); shot_at = atol(cm + 1); } } }
+#ifdef RE_EDITION
+                        { extern void re_aids_tick(void); re_aids_tick(); }   /* Test Aids (re_aids.c) */
+#endif
                         const char *sp = test_mode ? script_tick(fno) : 0;
                         if (sp) { snprintf(shot_path, sizeof shot_path, "%s", sp); shot_at = fno; }
                         if ((long)fno == shot_at) {
@@ -217,7 +220,8 @@ static void parse_script(void)
         if (tok[0] == '@') a->frame = 0xffffffffu;
         if (ok >= 2) {
             snprintf(a->kind, sizeof a->kind, "%s", kind);
-            if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek")) snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
+            if (!strcmp(kind, "shot") || !strcmp(kind, "type") || !strcmp(kind, "peek") || !strcmp(kind, "poke") || !strcmp(kind, "pin") || !strcmp(kind, "unpin") || !strcmp(kind, "tp") || !strcmp(kind, "dump") || !strcmp(kind, "gta") || !strcmp(kind, "pad"))
+                snprintf(a->path, sizeof a->path, "%s", rest); else sscanf(rest, "%d,%d", &a->x, &a->y);
             nacts++;
         }
         tok = strtok_r(0, ";", &save);
@@ -322,12 +326,14 @@ static const char *script_tick(uint32_t fno)       /* returns a screenshot path 
 #endif
         else if (!strcmp(a->kind, "dump") && fno == a->frame) {   /* dump:addr,len,file: game memory into a file (finding variables) */
             unsigned ad = 0, n = 0; char fp[400] = ""; extern uint8_t *G_MEM;
-            if (sscanf(a->path, "%x,%x,%399s", &ad, &n, fp) == 3 && ad >= 0x10000u && n <= 0x1000000u && ad + n < 0x40000000u) {
-                FILE *o = fopen(fp, "wb"); if (o) { fwrite(G_MEM + ad, 1, n, o); fclose(o); } }
+            if (sscanf(a->path, "%x,%x,%399[^\n]", &ad, &n, fp) == 3 && ad >= 0x10000u && n <= 0x1000000u && ad + n < 0x40000000u) {
+                FILE *o = fopen(fp, "wb"); extern int vm_committed(uint32_t, uint32_t); static const uint8_t zero[0x1000];
+                if (o) { for (uint32_t p = ad; p < ad + n; ) { uint32_t m = 0x1000 - (p & 0xfff); if (m > ad + n - p) m = ad + n - p;   /* pages not committed read as zeros */
+                    fwrite(vm_committed(p, 1) ? G_MEM + p : zero, 1, m, o); p += m; } fclose(o); } }
         }
         else if (!strcmp(a->kind, "peek") && fno == a->frame) {
             extern uint8_t *G_MEM; char *e = a->path; uint32_t at = (uint32_t)strtoul(e, &e, 16), v = 0;
-            for (;;) { if (at < 0x10000u) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
+            for (;;) { extern int vm_committed(uint32_t, uint32_t); if (at < 0x10000u || at >= 0x40000000u || !vm_committed(at, 4)) { v = 0; break; } memcpy(&v, G_MEM + at, 4); if (*e != ',') break; at = v + (uint32_t)strtoul(e + 1, &e, 16); }
             fprintf(stderr, "host: peek %s = 0x%08x (byte 0x%02x)\n", a->path, v, v & 0xff);
         }
         else if (!strcmp(a->kind, "wheel") && fno >= a->frame && fno < a->frame + (uint32_t)abs(a->x)) w32_di_mouse_wheel(a->x > 0 ? 120 : -120), post(0x20a, ((uint32_t)(int16_t)(a->x > 0 ? 120 : -120) << 16), pos_lp());   /* x notches */
