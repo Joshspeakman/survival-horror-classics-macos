@@ -191,7 +191,6 @@ IMPL(winmm, joyGetDevCapsA) { RET(167, 3); }                       /* JOYERR_UNP
 IMPL(winmm, joyGetPosEx) { RET(167, 2); }
 #endif
 IMPL(winmm, mixerGetDevCapsA) { RET(2, 3); }
-IMPL(winmm, mmioSeek) { RET(0xffffffffu, 3); }
 
 /* ---- DirectPlay: DirectPlayCreate (1) and DirectPlayEnumerateA (4) are probed, not used for play ---- */
 IMPL(dplayx, ord1) { if (ARG(1)) rt_w32(G_MEM, ARG(1), 0); RET(0x80004005u, 3); }   /* (guid, out, outer): DPERR_GENERIC */
