@@ -412,6 +412,9 @@ static DSurface *new_surface(DDraw *dd, const uint8_t *sd, uint32_t w, uint32_t 
     }
     U32(s->desc, SD_PF + PF_SIZE) = 32;
     s->pk = pixel_kind(s->desc);
+    if (U32(sd, SD_FLAGS) & 0x10000u) {                  /* DDSD_CKSRCBLT: the source colour key given at creation (Resident Evil's masks) */
+        s->has_ck = 1; s->ck[0] = U32(sd, 64); s->ck[1] = U32(sd, 68) >= s->ck[0] ? U32(sd, 68) : s->ck[0];
+    }
     s->pitch = (int32_t)(((w * (bpp_of(s->desc) / 8)) + 3) & ~3u); U32(s->desc, SD_PITCH) = (uint32_t)s->pitch;
     U32(s->desc, SD_SURFACE) = 0;
     uint32_t bytes = (uint32_t)s->pitch * h + 16;

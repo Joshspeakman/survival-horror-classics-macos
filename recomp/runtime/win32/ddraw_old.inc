@@ -102,6 +102,19 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
 {
     if (!nv) return;
     pre_draw(d, fvf & ~0x20u, flags);
+    {   /* development (DSR_DRAWSTATE=1): each new combination of a draw's texture and its blending and keying state */
+        static int on = -1; static uint64_t seen[256]; static int ns;
+        if (on < 0) on = getenv("DSR_DRAWSTATE") != 0;
+        DSurface *t = d->tex[0]; DOld *o = d->old;
+        if (on && ns < 256) {
+            uint64_t k = (uint64_t)(t ? t->pk : 9) | (uint64_t)(t ? t->has_ck : 0) << 4 | (uint64_t)(o ? o->ck_enable : 0) << 5 | (uint64_t)(d->rs[27] & 1) << 6 |
+                         (uint64_t)(d->rs[15] & 1) << 7 | (uint64_t)(o ? o->mapblend : 0) << 8 | (uint64_t)(d->rs[19] & 15) << 12 | (uint64_t)(d->rs[20] & 15) << 16 | (uint64_t)fvf << 20;
+            int have = 0; for (int j = 0; j < ns; j++) if (seen[j] == k) have = 1;
+            if (!have) { seen[ns++] = k; fprintf(stderr, "dsr: draw state: tex %s %ux%u pk %d key %d (%08x) | ck enable %u blend %u (%u/%u) atest %u ref %u fn %u | mapblend %u | fvf %#x prim %u n %u\n",
+                t ? "yes" : "none", t ? U32(t->desc, SD_WIDTH) : 0, t ? U32(t->desc, SD_HEIGHT) : 0, t ? t->pk : -1, t ? t->has_ck : 0, t ? t->ck[0] : 0,
+                o ? o->ck_enable : 0, d->rs[27], d->rs[19], d->rs[20], o ? o->atest : d->rs[15], o ? o->aref : d->rs[24], o ? o->afunc : d->rs[25], o ? o->mapblend : 0, fvf, prim, nv); }
+        }
+    }
     if (fvf & 0x20) {
         uint32_t out_fvf = fvf & ~0x20u, so = fvf_stride(out_fvf), si = so + 4;
         uint8_t *t = malloc((size_t)so * nv); if (!t) return;
@@ -352,6 +365,7 @@ static uint32_t old_device_create(Ctx *c, DDraw *dd, DSurface *rt, int type, int
 {
     uint32_t g7 = device_create(dd, rt); DDevice *d = obj(g7, O_DEV);
     DOld *o = calloc(1, sizeof *o); d->old = o; o->ver = ver; o->mapblend = 2; o->afunc = 8; o->lit = -1;
+    o->ck_enable = ver == 1;                             /* Direct3D 1: a texture's colour key always applies (no COLORKEYENABLE yet) */
     o->g_dev = make_iface(type, d);
     if (!(dd->coop & 0x1000u) && !getenv("W32_NO_FPUSETUP")) rt_fcw_set(c, (c->fcw & ~0xf3fu) | 0x3fu);   /* as Direct3D: single precision unless FPUPRESERVE */
     /* Direct3D 2/3's defaults where they differ from 7's: no lighting of their pre-lit vertices, point filtering */
