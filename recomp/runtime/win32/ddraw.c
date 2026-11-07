@@ -11,6 +11,7 @@
 #include <stdarg.h>
 #include "platform.h"
 #include <unistd.h>
+#include <sys/stat.h>
 #include "../../../src/dsr/dsr_proto.h"
 #include "../../../src/dsr/dsr_shm.h"
 

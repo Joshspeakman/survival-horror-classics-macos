@@ -9,6 +9,7 @@
 #include "w32.h"
 #include "../host_audio.h"
 #include <pthread.h>
+#include <sys/stat.h>
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3_ex.h"
 
@@ -104,9 +105,12 @@ static uint32_t render_file(Graph *gr, uint32_t wname)
     char host[2048]; if (w32_host_path(a, host, sizeof host, 0)) return VFW_E_NOT_FOUND;
     close_stream(gr);
     const char *dot = strrchr(a, '.');
-    {   /* a movie the installer converted (Resident Evil 2's Indeo AVIs, named .bin): its MPEG-1 copy, "<file>.mpg" */
-        char conv[2100]; snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb");
-        if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); dot = ".mpg"; }
+    {   /* a movie the installer converted (Resident Evil 2's Indeo AVIs, named .bin): its MPEG-1 copy, "<file>.mpg" (a
+         * mod's first: the PlayStation movies from the player's disc) */
+        char wconv[1100], hconv[2048]; struct stat cst; snprintf(wconv, sizeof wconv, "%s.mpg", a);
+        if (!w32_host_path(wconv, hconv, sizeof hconv, 0) && !stat(hconv, &cst)) { snprintf(host, sizeof host, "%s", hconv); dot = ".mpg"; }
+        else { char conv[2100]; snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb");
+               if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); dot = ".mpg"; } }
     }
     if (dot && (!strcasecmp(dot, ".mpg") || !strcasecmp(dot, ".mpeg") || !strcasecmp(dot, ".avi") || !strcasecmp(dot, ".wmv"))) {
         if (getenv("W32_AUDIOLOG")) fprintf(stderr, "dshow: RenderFile %s -> a video\n", a);

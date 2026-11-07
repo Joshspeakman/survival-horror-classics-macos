@@ -110,7 +110,11 @@ MA(ams_OpenFile, 3)
     char a[1024]; int k = 0; for (; k < 1023 && rt_r16(G_MEM, ARG(1) + 2u * (uint32_t)k); k++) a[k] = (char)rt_r16(G_MEM, ARG(1) + 2u * (uint32_t)k); a[k] = 0;
     if (getenv("RE_NO_MOVIES") && strcmp(getenv("RE_NO_MOVIES"), "0")) { ams_log("OpenFile %s: movies off", a); RET(0x80070002u, 3); }   /* the launcher's Movies: Off */
     char host[2048], conv[2100]; if (w32_host_path(a, host, sizeof host, 0)) { ams_log("OpenFile %s: not found", a); RET(0x80070002u, 3); }
-    snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb"); if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); }   /* the installer's MPEG-1 copy */
+    {   /* "<name>.mpg": a mod's (the PlayStation movies from the player's disc) or the installer's MPEG-1 copy */
+        char wconv[1100], hconv[2048]; struct stat cst; snprintf(wconv, sizeof wconv, "%s.mpg", a);
+        if (!w32_host_path(wconv, hconv, sizeof hconv, 0) && !stat(hconv, &cst)) snprintf(host, sizeof host, "%s", hconv);
+        else { snprintf(conv, sizeof conv, "%s.mpg", host); FILE *f = fopen(conv, "rb"); if (f) { fclose(f); snprintf(host, sizeof host, "%s", conv); } }
+    }
     ams_close(me);
     me->pv = ams_open_one(host); me->pa = ams_open_one(host);
     if (!me->pv) { ams_log("OpenFile %s: not a movie pl_mpeg reads", a); if (me->pa) plm_destroy(me->pa); me->pa = 0; RET(0x80040265u, 3); }   /* VFW_E_UNSUPPORTED_STREAM */
