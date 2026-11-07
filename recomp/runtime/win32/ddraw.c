@@ -450,6 +450,8 @@ static uint32_t surface_create(DDraw *dd, const uint8_t *sd, DSurface **out)
             if (fl & DDSD_MIPMAPCOUNT) levels = U32(sd, SD_MIPMAPS);
             else { uint32_t m = w > h ? w : h; levels = 1; while (m > 1) { m >>= 1; levels++; } }
         }
+        if (!(caps & DDSCAPS_SYSTEMMEMORY)) caps |= DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM;   /* as DirectDraw reports a texture it placed in video memory
+                                                                   (Resident Evil 2's renderer draws its backgrounds only from textures that say so) */
         s = new_surface(dd, sd, w, h, caps, caps2, 3, 0, 0, levels);
         U32(s->desc, SD_FLAGS) |= (caps & DDSCAPS_MIPMAP) ? DDSD_MIPMAPCOUNT : 0; U32(s->desc, SD_MIPMAPS) = levels;
         DSurface *prev = s;

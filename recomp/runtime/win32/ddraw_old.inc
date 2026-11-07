@@ -109,8 +109,11 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
         if (on && ns < 256) {
             uint64_t k = (uint64_t)(t ? t->pk : 9) | (uint64_t)(t ? t->has_ck : 0) << 4 | (uint64_t)(o ? o->ck_enable : 0) << 5 | (uint64_t)(d->rs[27] & 1) << 6 |
                          (uint64_t)(d->rs[15] & 1) << 7 | (uint64_t)(o ? o->mapblend : 0) << 8 | (uint64_t)(d->rs[19] & 15) << 12 | (uint64_t)(d->rs[20] & 15) << 16 | (uint64_t)fvf << 20;
+            uint32_t dif = 0;
+            if (fvf & 0x40) { uint32_t off = ((fvf & 0xe) == 4 ? 16 : 12) + ((fvf & 0x10) ? 12 : 0) + ((fvf & 0x20) ? 4 : 0); memcpy(&dif, v + off, 4); }
+            if (atoi(getenv("DSR_DRAWSTATE")) >= 2) k ^= (uint64_t)(dif >> 28) << 60 ^ (uint64_t)(t ? U32(t->desc, SD_WIDTH) : 0) << 50;   /* 2: the vertex alpha and texture size too */
             int have = 0; for (int j = 0; j < ns; j++) if (seen[j] == k) have = 1;
-            if (!have) { seen[ns++] = k; fprintf(stderr, "dsr: draw state: tex %s %ux%u pk %d key %d (%08x) | ck enable %u blend %u (%u/%u) atest %u ref %u fn %u | mapblend %u | fvf %#x prim %u n %u\n",
+            if (!have) { seen[ns++] = k; fprintf(stderr, "dsr: draw state: diffuse %08x tex %s %ux%u pk %d key %d (%08x) | ck enable %u blend %u (%u/%u) atest %u ref %u fn %u | mapblend %u | fvf %#x prim %u n %u\n", dif,
                 t ? "yes" : "none", t ? U32(t->desc, SD_WIDTH) : 0, t ? U32(t->desc, SD_HEIGHT) : 0, t ? t->pk : -1, t ? t->has_ck : 0, t ? t->ck[0] : 0,
                 o ? o->ck_enable : 0, d->rs[27], d->rs[19], d->rs[20], o ? o->atest : d->rs[15], o ? o->aref : d->rs[24], o ? o->afunc : d->rs[25], o ? o->mapblend : 0, fvf, prim, nv); }
         }
@@ -435,6 +438,9 @@ MD(dev3_EnumTextureFormats, 3) enum_tex_formats(c, ARG(1), ARG(2), 0); RET(DD_OK
 static void old_render_state(DDevice *me, uint32_t s, uint32_t v)
 {
     DOld *o = me->old;
+    { static int lg = -1; if (lg < 0) lg = getenv("DSR_RSLOG") != 0;                /* development: each new (state, value) */
+      static uint64_t seen[512]; static int ns; uint64_t k = (uint64_t)s << 32 | v; int have = 0;
+      if (lg) { for (int i = 0; i < ns; i++) if (seen[i] == k) { have = 1; break; } if (!have && ns < 512) { seen[ns++] = k; fprintf(stderr, "dsr: render state %u = %#x\n", s, v); } } }
     switch (s) {
     case 1: o->legacy_tex = 1; set_tex(me, 0, tex_of_handle(v)); me->rs[1] = v; update_blend(me); return;    /* TEXTUREHANDLE */
     case 21: o->legacy_tex = 1; o->mapblend = v; me->rs[21] = v; update_blend(me); return;                     /* TEXTUREMAPBLEND */

@@ -1513,6 +1513,7 @@ def find_except_handler4(path):
 RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')
 # Resident Evil's cooperative tasks switch stacks by hand (save esp, load another task's, ret into it): the runtime
 # runs each task on a host thread of its own and hands over at these four points (runtime/win32/re1_tasks.c)
+RE2_OVERRIDES = {0x004124e0: 'Marni error report (logged)'}
 RE1_OVERRIDES = {0x0047575c: 'task start', 0x0047577c: 'task yield', 0x0047579c: 'task resume', 0x004757a8: 'task end'}   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
 
 def main():
@@ -1534,7 +1535,7 @@ def main():
     if not a.tag:
         from editions import identify, PROFILES
         edition = a.game if a.game in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa') + RE_GAMES else identify(a.exe, prepared=True)
-        if edition in RE_GAMES: L.hooks, L.overrides = {}, dict(RE1_OVERRIDES) if edition == 're1' else {}   # the GOG Resident Evil / Dino Crisis programs
+        if edition in RE_GAMES: L.hooks, L.overrides = {}, dict(RE1_OVERRIDES) if edition == 're1' else dict(RE2_OVERRIDES) if edition == 're2' else {}   # the GOG Resident Evil / Dino Crisis programs
         if edition in ('fnv', 'sims', 'df1', 'df2', 'gta3', 'gtavc', 'gtasa'):      # Fallout: New Vegas, The Sims, Delta Force, GTA III: none of the DS2 hooks apply
             L.hooks = df_table(DF_HOOKS, edition) if edition in ('df1', 'df2') else dict(GTA3_HOOKS) if edition == 'gta3' else dict(GTASA_HOOKS) if edition == 'gtasa' else dict(GTAVC_HOOKS) if edition == 'gtavc' else {}
             L.overrides = df_table(DF_OVERRIDES, edition) if edition in ('df1', 'df2') else dict(GTA3_OVERRIDES) if edition == 'gta3' else dict(GTAVC_OVERRIDES) if edition == 'gtavc' else {}
