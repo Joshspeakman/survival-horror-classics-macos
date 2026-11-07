@@ -42,6 +42,9 @@ static void canon(const char *dll, const char *fn, char *out, size_t cap)
         for (; *s && *s != '@' && j < sizeof f - 1; s++) f[j++] = *s;
         f[j] = 0;
     }
+    if (!strcmp(d, "dshow")) strcpy(d, "ole32");             /* GOG's dshow.dll (Resident Evil 2/3, Dino Crisis) re-exports COM's entry points */
+    if (!strcmp(d, "dsound") && !strcmp(f, "ord1")) strcpy(f, "DirectSoundCreate");        /* dsound.dll's export numbers */
+    if (!strcmp(d, "dsound") && !strcmp(f, "ord2")) strcpy(f, "DirectSoundEnumerateA");
     snprintf(out, cap, "%s!%s", d, f);
 }
 /* an IAT slot: the thunk of import k, or for a data import (msvcrt.c w32_data_import) the variable's address */
@@ -247,7 +250,9 @@ int w32_load(const char *exe_path)
         uint32_t va = *(uint32_t *)(s + 12), vs = *(uint32_t *)(s + 8), rs = *(uint32_t *)(s + 16), ra = *(uint32_t *)(s + 20);
         if (!ra) continue;                       /* Watcom's .bss: a raw size but no file data */
         if (!vs) vs = rs;                        /* Watcom leaves VirtualSize 0 */
-        memcpy(G_MEM + w32_image_base + va, d + ra, rs < vs ? rs : vs);
+        {   /* the raw data as far as the section's last page (Windows maps whole pages): GOG's code caves after the
+             * Resident Evil games' .text VirtualSize */
+            uint32_t pg = (vs + 0xfffu) & ~0xfffu; memcpy(G_MEM + w32_image_base + va, d + ra, rs < pg ? rs : pg); }
         if ((*(uint32_t *)(s + 36) & 0x20000000u) && memcmp(s, ".bind", 5) && getenv("W32_SMCLOG")) {   /* code: kept for w32_smc_check */
             extern uint8_t *w32_code_copy[8]; extern uint32_t w32_code_va[8], w32_code_n[8]; extern int w32_code_k;
             if (w32_code_k < 8) { uint32_t n = rs < vs ? rs : vs; w32_code_copy[w32_code_k] = malloc(n); memcpy(w32_code_copy[w32_code_k], d + ra, n);

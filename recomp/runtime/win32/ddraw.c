@@ -71,7 +71,7 @@ static const SnapRec *snap_next(const SnapRec *r, const char *tag) { return scan
 
 /* ---- objects ---- */
 typedef struct DSurface DSurface;
-typedef struct DDraw { uint32_t g_dd, g_d3d; int ref; uint32_t hwnd, coop, mode_w, mode_h, mode_bpp; DSurface *primary; } DDraw;
+typedef struct DDraw { uint32_t g_dd, g_d3d; int ref; uint32_t hwnd, coop, mode_w, mode_h, mode_bpp; DSurface *primary; uint32_t g_old[8]; } DDraw;
 struct DSurface {
     uint32_t g_surf, g_gamma; int ref; DDraw *dd;
     uint8_t desc[SD_BYTES];                     /* as the game sees it (lpSurface 0) */
@@ -79,13 +79,22 @@ struct DSurface {
     uint32_t id; DSurface *attached[4]; int nattached; DSurface *owner;
     int locked; uint32_t lock_flags; int32_t lock_rect[4]; int lock_has_rect;
     int is_rt, gpu_dirty, upload_over;
+    uint32_t g_ver[8];                          /* older interface versions (ddraw_old.inc), made when asked for */
+    int pk;                                     /* the guest's pixel layout: PK_* (16-bit ones are 32-bit on the GPU) */
+    int has_ck; uint32_t ck[2];                 /* the source colour key (low, high): those pixels upload with alpha 0 */
+    uint32_t handle;                            /* Direct3D 1-5 texture handle (0: none yet) */
+    uint32_t hdc;                               /* GetDC's DC (gdi32.c, over the guest pixels) until ReleaseDC */
 };
+enum { PK_32 = 0, PK_565, PK_555, PK_1555, PK_4444, PK_8 };
 typedef struct DVB { uint32_t g; int ref; uint32_t desc[4]; uint32_t stride, mem; } DVB;
 typedef struct DDevice {
     uint32_t g; int ref; DDraw *dd; DSurface *rt;
     uint32_t rs[256], tss[8][32]; float xf[32][16]; uint8_t vp[24]; DSurface *tex[8]; uint8_t material[68];
+    struct DOld *old;                           /* Direct3D 1-3's own state (ddraw_old.inc), 0 for a Direct3D 7 device */
 } DDevice;
 enum { O_DD = 1, O_D3D, O_SURF, O_GAMMA, O_DEV, O_VB };
+/* older interfaces (ddraw_old.inc), after Direct3D 9's types (16..): each is a vtable over the same objects */
+enum { O_S1 = 32, O_S2, O_S3, O_S4, O_T1, O_T2, O_DD1, O_DD2, O_DD4, O_D3D1, O_D3D2, O_D3D3, O_DEV1, O_DEV2, O_DEV3, O_VP, O_MAT, O_LIGHT, O_EXB, O_MAT1, O_CLIP };
 typedef struct { int type; void *p; } Obj;
 static Obj objs[65536]; static uint32_t nobjs = 1;
 static pthread_mutex_t obj_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -108,8 +117,17 @@ void *obj(uint32_t g, int type)
 {
     if (!g) return 0;
     uint32_t k = rt_r32(G_MEM, g + 4);
-    return (k < 65536 && objs[k].type == type) ? objs[k].p : 0;
+    if (k >= 65536) return 0;
+    int t = objs[k].type;
+    if (t == type) return objs[k].p;
+    /* every version of an interface reaches the same object: a method shared by the versions takes any of them */
+    if (type == O_SURF && t >= O_S1 && t <= O_T2) return objs[k].p;
+    if (type == O_DD && t >= O_DD1 && t <= O_DD4) return objs[k].p;
+    if (type == O_D3D && t >= O_D3D1 && t <= O_D3D3) return objs[k].p;
+    if (type == O_DEV && t >= O_DEV1 && t <= O_DEV3) return objs[k].p;
+    return 0;
 }
+int obj_type(uint32_t g) { uint32_t k = g ? rt_r32(G_MEM, g + 4) : 0; return k && k < 65536 ? objs[k].type : 0; }
 void obj_drop(uint32_t g)                        /* an interface's object is gone */
 {
     uint32_t k = g ? rt_r32(G_MEM, g + 4) : 0;
@@ -320,13 +338,59 @@ static void scratch_free(uint32_t a) { heap_free(w32_process_heap, a); }
 
 /* ================= surfaces ================= */
 static uint32_t bpp_of(const uint8_t *d) { return U32(d, SD_PF + PF_BITS); }      /* dwZBufferBitDepth shares the offset */
+static int pixel_kind(const uint8_t *d)
+{
+    uint32_t bits = U32(d, SD_PF + PF_BITS), r = U32(d, SD_PF + PF_R), a = (U32(d, SD_PF + PF_FLAGS) & DDPF_ALPHAPIXELS) ? U32(d, SD_PF + PF_A) : 0;
+    if (bits == 16) return r == 0xf800 ? PK_565 : r == 0x0f00 ? PK_4444 : a ? PK_1555 : PK_555;
+    if (bits == 8) return PK_8;
+    return PK_32;
+}
 static uint32_t fmt_code(const uint8_t *d)
 {
     uint32_t fl = U32(d, SD_PF + PF_FLAGS);
     if (fl & DDPF_ZBUFFER) return 3;
     if (U32(d, SD_PF + PF_BITS) == 32) return (fl & DDPF_ALPHAPIXELS) ? 1 : 2;
+    if (U32(d, SD_PF + PF_BITS) == 16 || U32(d, SD_PF + PF_BITS) == 8) return 1;   /* converted to 32 bits with alpha as it uploads */
     dsr_log("UNSUPPORTED pixel format: flags %08x bits %u", fl, U32(d, SD_PF + PF_BITS)); return 0;
 }
+/* 16-bit pixels <-> the GPU's BGRA (alpha 0 where the colour key matches, else the format's alpha or opaque) */
+static uint32_t px_to_bgra(uint32_t v, int pk)
+{
+    switch (pk) {
+    case PK_565: return 0xff000000u | ((v >> 11 & 31) * 255 / 31) << 16 | ((v >> 5 & 63) * 255 / 63) << 8 | (v & 31) * 255 / 31;
+    case PK_555: return 0xff000000u | ((v >> 10 & 31) * 255 / 31) << 16 | ((v >> 5 & 31) * 255 / 31) << 8 | (v & 31) * 255 / 31;
+    case PK_1555: return (v & 0x8000 ? 0xff000000u : 0) | ((v >> 10 & 31) * 255 / 31) << 16 | ((v >> 5 & 31) * 255 / 31) << 8 | (v & 31) * 255 / 31;
+    case PK_4444: return (v >> 12 & 15) * 17u << 24 | (v >> 8 & 15) * 17u << 16 | (v >> 4 & 15) * 17u << 8 | (v & 15) * 17u;
+    case PK_8: return 0xff000000u | v * 0x010101u;
+    default: return v;
+    }
+}
+static uint32_t bgra_to_px(uint32_t c, int pk)
+{
+    uint32_t r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255, a = c >> 24;
+    switch (pk) {
+    case PK_565: return (r >> 3) << 11 | (g >> 2) << 5 | b >> 3;
+    case PK_555: return (r >> 3) << 10 | (g >> 3) << 5 | b >> 3;
+    case PK_1555: return (a >= 128 ? 0x8000u : 0) | (r >> 3) << 10 | (g >> 3) << 5 | b >> 3;
+    case PK_4444: return (a >> 4) << 12 | (r >> 4) << 8 | (g >> 4) << 4 | b >> 4;
+    case PK_8: return (r * 77 + g * 151 + b * 28) >> 8;
+    default: return c;
+    }
+}
+/* one row of the guest's pixels as the GPU takes them: 16- and 8-bit converted; a keyed surface's key pixels clear */
+static void row_up(const DSurface *s, const uint8_t *src, uint32_t *dst, uint32_t n)
+{
+    uint32_t bpp = bpp_of(s->desc) / 8;
+    for (uint32_t x = 0; x < n; x++) {
+        uint32_t v = bpp == 2 ? (uint32_t)(src[2 * x] | src[2 * x + 1] << 8) : bpp == 1 ? src[x] : (uint32_t)(src[4 * x] | src[4 * x + 1] << 8 | src[4 * x + 2] << 16 | (uint32_t)src[4 * x + 3] << 24);
+        if (s->has_ck) {
+            uint32_t m = bpp == 4 ? 0xffffffu : 0xffffffffu, k = v & m;
+            if (k >= (s->ck[0] & m) && k <= (s->ck[1] & m)) { dst[x] = 0; continue; }
+            dst[x] = bpp == 4 ? (v | 0xff000000u) : px_to_bgra(v, s->pk);
+        } else dst[x] = bpp == 4 ? v : px_to_bgra(v, s->pk);
+    }
+}
+static int needs_convert(const DSurface *s) { return bpp_of(s->desc) != 32 || s->has_ck; }
 static void default_format(uint8_t *pf) { memset(pf, 0, 32); U32(pf, PF_SIZE) = 32; U32(pf, PF_FLAGS) = DDPF_RGB; U32(pf, PF_BITS) = 32; U32(pf, PF_R) = 0xff0000; U32(pf, PF_G) = 0xff00; U32(pf, PF_B) = 0xff; }
 static DSurface *new_surface(DDraw *dd, const uint8_t *sd, uint32_t w, uint32_t h, uint32_t caps, uint32_t caps2, uint32_t kind, DSurface *parent, uint32_t level, uint32_t levels)
 {
@@ -336,11 +400,17 @@ static DSurface *new_surface(DDraw *dd, const uint8_t *sd, uint32_t w, uint32_t 
     memcpy(s->desc, sd, SD_BYTES); U32(s->desc, SD_SIZE) = SD_BYTES;
     U32(s->desc, SD_FLAGS) |= DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT | DDSD_PITCH;
     U32(s->desc, SD_WIDTH) = w; U32(s->desc, SD_HEIGHT) = h; U32(s->desc, SD_CAPS) = caps; U32(s->desc, SD_CAPS2) = caps2;
-    if (!(U32(sd, SD_FLAGS) & DDSD_PIXELFORMAT) && !(caps & DDSCAPS_ZBUFFER)) default_format(s->desc + SD_PF);
+    if (!(U32(sd, SD_FLAGS) & DDSD_PIXELFORMAT) && !(caps & DDSCAPS_ZBUFFER)) {
+        default_format(s->desc + SD_PF);
+        if (dd && dd->mode_bpp == 16) {                 /* the display mode's format: 16-bit modes are RGB 565 */
+            uint8_t *pf = s->desc + SD_PF; U32(pf, PF_BITS) = 16; U32(pf, PF_R) = 0xf800; U32(pf, PF_G) = 0x7e0; U32(pf, PF_B) = 0x1f; U32(pf, PF_A) = 0;
+        }
+    }
     if ((caps & DDSCAPS_ZBUFFER) && !(U32(sd, SD_FLAGS) & DDSD_PIXELFORMAT)) {
         uint8_t *pf = s->desc + SD_PF; memset(pf, 0, 32); U32(pf, PF_SIZE) = 32; U32(pf, PF_FLAGS) = DDPF_ZBUFFER; U32(pf, PF_BITS) = 32; U32(pf, PF_G) = 0xffffffffu;
     }
     U32(s->desc, SD_PF + PF_SIZE) = 32;
+    s->pk = pixel_kind(s->desc);
     s->pitch = (int32_t)(((w * (bpp_of(s->desc) / 8)) + 3) & ~3u); U32(s->desc, SD_PITCH) = (uint32_t)s->pitch;
     U32(s->desc, SD_SURFACE) = 0;
     uint32_t bytes = (uint32_t)s->pitch * h + 16;
@@ -400,19 +470,49 @@ static void surface_destroy(DSurface *s)
     uint32_t *p = cmd_begin(DSR_SURFACE_DESTROY, 4); p[0] = s->id; cmd_end();
     uint32_t bytes = (uint32_t)s->pitch * U32(s->desc, SD_HEIGHT) + 16;
     if (bytes >= 0x10000) vm_free(s->mem, 0, 0x8000); else heap_free(w32_process_heap, s->mem);
-    obj_drop(s->g_surf); obj_drop(s->g_gamma); surface_id_free(s->id);
+    obj_drop(s->g_surf); obj_drop(s->g_gamma); for (int k = 0; k < 8; k++) obj_drop(s->g_ver[k]);
+    { void tex_handle_drop(DSurface *); tex_handle_drop(s); }
+    surface_id_free(s->id);
     free(s);
 }
 static uint32_t surf_addref(DSurface *s) { return (uint32_t)__atomic_add_fetch(&s->ref, 1, __ATOMIC_SEQ_CST); }
 static void surf_release(DSurface *s) { if (__atomic_sub_fetch(&s->ref, 1, __ATOMIC_SEQ_CST) == 0) surface_destroy(s); }
+/* The interface versions (ddraw_old.inc): DirectDraw 1-3 surfaces and IDirectDraw/IDirectDraw2 take the 108-byte
+ * DDSURFACEDESC and a 4-byte DDSCAPS; a surface handed back is the version of the interface that asked. */
+static uint32_t sd_bytes_for(uint32_t g) { int t = obj_type(g); return (t >= O_S1 && t <= O_S3) || t == O_DD1 || t == O_DD2 || t == O_DEV2 ? 108 : SD_BYTES; }
+static uint32_t caps_bytes_for(uint32_t g) { int t = obj_type(g); return t >= O_S1 && t <= O_S3 ? 4 : 16; }
+static uint32_t surf_iface(DSurface *s, int type)
+{
+    if (type < O_S1 || type > O_T2) return s->g_surf;
+    uint32_t *g = &s->g_ver[type - O_S1];
+    if (!*g) *g = make_iface(type, s);
+    return *g;
+}
+static uint32_t surf_iface_for(DSurface *s, uint32_t caller)       /* the version a caller's surfaces come back as */
+{
+    int t = obj_type(caller);
+    switch (t) { case O_DD1: case O_DD2: return surf_iface(s, O_S1); case O_DD4: return surf_iface(s, O_S4);
+                 case O_S1: case O_S2: case O_S3: case O_S4: return surf_iface(s, t); default: return s->g_surf; }
+}
 
 #define M(name, n) static void name(Ctx *c) { enum { nargs_ = n };
 #define END }
 /* IUnknown */
 M(s_QueryInterface, 3) ME(DSurface, O_SURF)
-    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2);
-    if (iid == 0x00000000u || iid == 0x06675a80u) { rt_w32(G_MEM, out, me->g_surf); surf_addref(me); RET(DD_OK, 3); }
-    if (iid == 0x69c11c3eu) { rt_w32(G_MEM, out, me->g_gamma); surf_addref(me); RET(DD_OK, 3); }
+    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2), g = 0;
+    switch (iid) {
+    case 0x00000000u: g = ARG(0); break;                                    /* IUnknown: this one */
+    case 0x06675a80u: g = me->g_surf; break;                                /* IDirectDrawSurface7 */
+    case 0x69c11c3eu: g = me->g_gamma; break;                               /* IDirectDrawGammaControl */
+    case 0x6c14db81u: g = surf_iface(me, O_S1); break;                      /* IDirectDrawSurface */
+    case 0x57805885u: g = surf_iface(me, O_S2); break;                      /* IDirectDrawSurface2 */
+    case 0xda044e00u: g = surf_iface(me, O_S3); break;                      /* IDirectDrawSurface3 */
+    case 0x0b2b8630u: g = surf_iface(me, O_S4); break;                      /* IDirectDrawSurface4 */
+    case 0x2cdcd9e0u: g = surf_iface(me, O_T1); break;                      /* IDirect3DTexture */
+    case 0x93281502u: g = surf_iface(me, O_T2); break;                      /* IDirect3DTexture2 */
+    default: { uint32_t d3d1_device_qi(Ctx *c, DSurface *s, uint32_t iid_ptr); g = d3d1_device_qi(c, me, ARG(1)); if (g) { rt_w32(G_MEM, out, g); RET(DD_OK, 3); } }
+    }
+    if (g) { rt_w32(G_MEM, out, g); surf_addref(me); RET(DD_OK, 3); }
     rt_w32(G_MEM, out, 0); dsr_log("surface QI: no interface %08x", iid); RET(E_NOINTERFACE, 3);
 END
 M(s_AddRef, 1) ME(DSurface, O_SURF) RET(surf_addref(me), 1); END
@@ -432,18 +532,18 @@ M(s_DeleteAttachedSurface, 3) ME(DSurface, O_SURF)
 END
 M(s_GetAttachedSurface, 3) ME(DSurface, O_SURF)
     uint32_t caps = ARG(1), out = ARG(2);
-    uint32_t want = rt_r32(G_MEM, caps) & ~(uint32_t)(DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM), want2 = rt_r32(G_MEM, caps + 4);
+    uint32_t want = rt_r32(G_MEM, caps) & ~(uint32_t)(DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM), want2 = caps_bytes_for(ARG(0)) > 4 ? rt_r32(G_MEM, caps + 4) : 0;
     for (int k = 0; k < me->nattached; k++) {
         DSurface *t = me->attached[k];
-        if ((U32(t->desc, SD_CAPS) & want) == want && (U32(t->desc, SD_CAPS2) & want2) == want2) { rt_w32(G_MEM, out, t->g_surf); surf_addref(t); RET(DD_OK, 3); }
+        if ((U32(t->desc, SD_CAPS) & want) == want && (U32(t->desc, SD_CAPS2) & want2) == want2) { rt_w32(G_MEM, out, surf_iface_for(t, ARG(0))); surf_addref(t); RET(DD_OK, 3); }
     }
     rt_w32(G_MEM, out, 0); RET(DDH(255), 3);
 END
 M(s_EnumAttachedSurfaces, 3) ME(DSurface, O_SURF)
-    uint32_t ctx = ARG(1), cb = ARG(2), d = scratch(SD_BYTES);
+    uint32_t ctx = ARG(1), cb = ARG(2), d = scratch(SD_BYTES), n = sd_bytes_for(ARG(0));
     for (int k = 0; k < me->nattached; k++) {
-        memcpy(GP(d), me->attached[k]->desc, SD_BYTES); surf_addref(me->attached[k]);
-        uint32_t a[3] = {me->attached[k]->g_surf, d, ctx};
+        memcpy(GP(d), me->attached[k]->desc, n); rt_w32(G_MEM, d, n); surf_addref(me->attached[k]);
+        uint32_t a[3] = {surf_iface_for(me->attached[k], ARG(0)), d, ctx};
         if (w32_callback(c, cb, 3, a) == 0) break;                  /* DDENUMRET_CANCEL */
     }
     scratch_free(d); RET(DD_OK, 3);
@@ -465,7 +565,7 @@ static void emit_blt(DSurface *d, const int32_t *dr, DSurface *src, const int32_
 M(s_Blt, 6) ME(DSurface, O_SURF)
     uint32_t dr = ARG(1), flags = ARG(4), fx = ARG(5); DSurface *src = obj(ARG(2), O_SURF); int32_t a[4], b[4];
     rect_or_full(me, dr, a);
-    if (flags & DDBLT_COLORFILL) emit_blt(me, a, 0, 0, flags, fx ? rt_r32(G_MEM, fx + 80) : 0);
+    if (flags & DDBLT_COLORFILL) { uint32_t v = fx ? rt_r32(G_MEM, fx + 80) : 0; emit_blt(me, a, 0, 0, flags, bpp_of(me->desc) == 32 ? v : px_to_bgra(v & 0xffff, me->pk)); }
     else if (flags & DDBLT_DEPTHFILL) emit_blt(me, a, 0, 0, flags, fx ? rt_r32(G_MEM, fx + 80) : 0);
     else if (src) {
         rect_or_full(src, ARG(3), b); emit_blt(me, a, src, b, flags, 0);
@@ -517,6 +617,23 @@ M(s_Flip, 3) ME(DSurface, O_SURF)
     present(c, back);
     RET(DD_OK, 3);
 END
+/* the guest's pixels in rectangle u up to the GPU, in bands of at most 8 MB (a big texture fits the ring) */
+static void upload_rect(DSurface *me, const int32_t *u)
+{
+    uint32_t bpp = bpp_of(me->desc) / 8, conv = needs_convert(me), w = (uint32_t)(u[2] - u[0]);
+    uint32_t rowb = w * (conv ? 4 : bpp), band = rowb ? (8u << 20) / rowb : 1; if (!band) band = 1;
+    for (int32_t y0 = u[1]; y0 < u[3]; y0 += (int32_t)band) {
+        int32_t y1 = y0 + (int32_t)band < u[3] ? y0 + (int32_t)band : u[3];
+        uint32_t *p = cmd_begin(me->upload_over ? DSR_UPLOAD_OVER : DSR_SURFACE_UPLOAD, 24 + rowb * (uint32_t)(y1 - y0));
+        p[0] = me->id; p[1] = (uint32_t)u[0]; p[2] = (uint32_t)y0; p[3] = w; p[4] = (uint32_t)(y1 - y0); p[5] = rowb;
+        uint8_t *dst = (uint8_t *)(p + 6);
+        for (int32_t y = y0; y < y1; y++, dst += rowb) {
+            const uint8_t *src = G_MEM + me->mem + (uint32_t)y * (uint32_t)me->pitch + (uint32_t)u[0] * bpp;
+            if (conv) row_up(me, src, (uint32_t *)dst, w); else memcpy(dst, src, rowb);
+        }
+        cmd_end();
+    }
+}
 /* lock */
 M(s_Lock, 5) ME(DSurface, O_SURF)
     uint32_t r = ARG(1), sd = ARG(2), flags = ARG(3), bpp = bpp_of(me->desc) / 8; int32_t rr[4];
@@ -526,8 +643,8 @@ M(s_Lock, 5) ME(DSurface, O_SURF)
             RET(DDH(150), 5);                         /* DDERR_INVALIDRECT */
     }
     if (sd) {
-        uint32_t sz = rt_r32(G_MEM, sd);
-        memcpy(GP(sd), me->desc, SD_BYTES); rt_w32(G_MEM, sd, sz ? sz : SD_BYTES);
+        uint32_t sz = rt_r32(G_MEM, sd), n = sd_bytes_for(ARG(0));
+        memcpy(GP(sd), me->desc, n); rt_w32(G_MEM, sd, sz ? sz : n);
         rt_w32(G_MEM, sd + SD_FLAGS, U32(me->desc, SD_FLAGS) | DDSD_LPSURFACE | DDSD_PITCH); rt_w32(G_MEM, sd + SD_PITCH, (uint32_t)me->pitch);
         rt_w32(G_MEM, sd + SD_SURFACE, me->mem + (r ? (uint32_t)rr[1] * (uint32_t)me->pitch + (uint32_t)rr[0] * bpp : 0));
     }
@@ -538,12 +655,21 @@ M(s_Lock, 5) ME(DSurface, O_SURF)
     if ((me->is_rt || (me->gpu_dirty && (caps & DDSCAPS_TEXTURE))) && !(flags & DDLOCK_WRITEONLY) && !(caps & DDSCAPS_ZBUFFER)) {
         DSurface *src = (caps & DDSCAPS_PRIMARYSURFACE) && me->nattached ? me->attached[0] : me;
         int32_t a[4]; if (r) memcpy(a, rr, 16); else { a[0] = 0; a[1] = 0; a[2] = (int32_t)U32(me->desc, SD_WIDTH); a[3] = (int32_t)U32(me->desc, SD_HEIGHT); }
-        cmd_readback(src->id, a, G_MEM + me->mem + (uint32_t)a[1] * (uint32_t)me->pitch + (uint32_t)a[0] * bpp, (uint32_t)me->pitch, bpp);
+        if (bpp == 4) cmd_readback(src->id, a, G_MEM + me->mem + (uint32_t)a[1] * (uint32_t)me->pitch + (uint32_t)a[0] * bpp, (uint32_t)me->pitch, bpp);
+        else {                                          /* 16-bit: the GPU's 32-bit pixels converted back */
+            uint32_t w = (uint32_t)(a[2] - a[0]), h = (uint32_t)(a[3] - a[1]); uint32_t *t = malloc((size_t)w * h * 4);
+            if (t && cmd_readback(src->id, a, (uint8_t *)t, w * 4, 4))
+                for (uint32_t y = 0; y < h; y++) {
+                    uint8_t *d = G_MEM + me->mem + (uint32_t)(a[1] + (int32_t)y) * (uint32_t)me->pitch + (uint32_t)a[0] * bpp;
+                    for (uint32_t x = 0; x < w; x++) { uint32_t v = bgra_to_px(t[y * w + x], me->pk); if (bpp == 2) { d[2 * x] = (uint8_t)v; d[2 * x + 1] = (uint8_t)(v >> 8); } else d[x] = (uint8_t)v; }
+                }
+            free(t);
+        }
     }
     if (me->gpu_dirty && !(caps & (DDSCAPS_TEXTURE | DDSCAPS_PRIMARYSURFACE | DDSCAPS_BACKBUFFER | DDSCAPS_ZBUFFER))) {
         uint32_t x0, x1, y0, y1;
         if (r) { x0 = (uint32_t)rr[0]; x1 = (uint32_t)rr[2]; y0 = (uint32_t)rr[1]; y1 = (uint32_t)rr[3]; } else { x0 = 0; x1 = U32(me->desc, SD_WIDTH); y0 = 0; y1 = U32(me->desc, SD_HEIGHT); }
-        for (uint32_t y = y0; y < y1; y++) memset(G_MEM + me->mem + y * (uint32_t)me->pitch + x0 * 4, 0, (x1 - x0) * 4);
+        for (uint32_t y = y0; y < y1; y++) memset(G_MEM + me->mem + y * (uint32_t)me->pitch + x0 * bpp, 0, (x1 - x0) * bpp);
         me->upload_over = 1;
     }
     RET(DD_OK, 5);
@@ -552,25 +678,63 @@ M(s_Unlock, 2) ME(DSurface, O_SURF)
     if (!me->locked) RET(DDH(584), 2);
     me->locked--;
     if (!(me->lock_flags & DDLOCK_READONLY) && !(U32(me->desc, SD_CAPS) & DDSCAPS_ZBUFFER)) {
-        int32_t u[4]; uint32_t bpp = bpp_of(me->desc) / 8;
+        int32_t u[4];
         if (me->lock_has_rect) memcpy(u, me->lock_rect, 16); else { u[0] = 0; u[1] = 0; u[2] = (int32_t)U32(me->desc, SD_WIDTH); u[3] = (int32_t)U32(me->desc, SD_HEIGHT); }
-        uint32_t rowb = (uint32_t)(u[2] - u[0]) * bpp, band = rowb ? (8u << 20) / rowb : 1; if (!band) band = 1;
-        for (int32_t y0 = u[1]; y0 < u[3]; y0 += (int32_t)band) {     /* in bands of at most 8 MB: a big texture fits the ring */
-            int32_t y1 = y0 + (int32_t)band < u[3] ? y0 + (int32_t)band : u[3];
-            uint32_t *p = cmd_begin(me->upload_over ? DSR_UPLOAD_OVER : DSR_SURFACE_UPLOAD, 24 + rowb * (uint32_t)(y1 - y0));
-            p[0] = me->id; p[1] = (uint32_t)u[0]; p[2] = (uint32_t)y0; p[3] = (uint32_t)(u[2] - u[0]); p[4] = (uint32_t)(y1 - y0); p[5] = rowb;
-            uint8_t *dst = (uint8_t *)(p + 6);
-            for (int32_t y = y0; y < y1; y++, dst += rowb) memcpy(dst, G_MEM + me->mem + (uint32_t)y * (uint32_t)me->pitch + (uint32_t)u[0] * bpp, rowb);
-            cmd_end();
-        }
+        upload_rect(me, u);
     }
     RET(DD_OK, 2);
 END
-/* descriptions & misc */
-M(s_GetSurfaceDesc, 2) ME(DSurface, O_SURF)
-    uint32_t sd = ARG(1), sz = rt_r32(G_MEM, sd); memcpy(GP(sd), me->desc, SD_BYTES); rt_w32(G_MEM, sd, sz); rt_w32(G_MEM, sd + SD_SURFACE, 0); RET(DD_OK, 2);
+/* GetDC / ReleaseDC: GDI on the guest copy of the pixels (gdi32.c draws in any 8-32-bit layout); what the GPU drew is
+ * read back first, and the result goes up again on release (Resident Evil 3 copies its texture pages in this way) */
+uint32_t w32_gdi_dc_for_memory(uint32_t bits, int w, int h, int pitch, int bpp, const uint32_t masks[4]);
+void w32_gdi_dc_free(uint32_t hdc);
+M(s_GetDC, 2) ME(DSurface, O_SURF)
+    if (me->hdc) RET(DDH(570), 2);                                        /* DDERR_DCALREADYCREATED */
+    uint32_t caps = U32(me->desc, SD_CAPS), bpp = bpp_of(me->desc) / 8, w = U32(me->desc, SD_WIDTH), h = U32(me->desc, SD_HEIGHT);
+    if (caps & DDSCAPS_ZBUFFER) RET(DDH(581), 2);
+    if (me->is_rt || me->gpu_dirty) {
+        DSurface *src = (caps & DDSCAPS_PRIMARYSURFACE) && me->nattached ? me->attached[0] : me; int32_t a[4] = {0, 0, (int32_t)w, (int32_t)h};
+        if (bpp == 4) cmd_readback(src->id, a, G_MEM + me->mem, (uint32_t)me->pitch, 4);
+        else { uint32_t *t = malloc((size_t)w * h * 4);
+               if (t && cmd_readback(src->id, a, (uint8_t *)t, w * 4, 4))
+                   for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
+                       uint32_t v = bgra_to_px(t[y * w + x], me->pk); uint8_t *d = G_MEM + me->mem + y * (uint32_t)me->pitch + x * bpp;
+                       d[0] = (uint8_t)v; if (bpp == 2) d[1] = (uint8_t)(v >> 8); }
+               free(t); }
+        me->gpu_dirty = 0;
+    }
+    uint32_t m[4] = {U32(me->desc, SD_PF + PF_R), U32(me->desc, SD_PF + PF_G), U32(me->desc, SD_PF + PF_B),
+                     (U32(me->desc, SD_PF + PF_FLAGS) & DDPF_ALPHAPIXELS) ? U32(me->desc, SD_PF + PF_A) : 0};
+    me->hdc = w32_gdi_dc_for_memory(me->mem, (int)w, (int)h, me->pitch, (int)bpp * 8, m);
+    rt_w32(G_MEM, ARG(1), me->hdc); RET(me->hdc ? DD_OK : DDH(581), 2);
 END
-M(s_GetCaps, 2) ME(DSurface, O_SURF) memcpy(GP(ARG(1)), me->desc + SD_CAPS, 16); RET(DD_OK, 2); END
+M(s_ReleaseDC, 2) ME(DSurface, O_SURF)
+    if (!me->hdc) RET(DDH(587), 2);                                        /* DDERR_NODC */
+    w32_gdi_dc_free(me->hdc); me->hdc = 0; me->upload_over = 0;
+    int32_t u[4] = {0, 0, (int32_t)U32(me->desc, SD_WIDTH), (int32_t)U32(me->desc, SD_HEIGHT)}; upload_rect(me, u);
+    RET(DD_OK, 2);
+END
+/* descriptions & misc */
+/* SetColorKey: the source key (DDCKEY_SRCBLT 8) changes what the surface's pixels upload as, so the whole surface goes
+ * up again from its CPU copy; other keys are kept for GetColorKey only */
+M(s_SetColorKey, 3) ME(DSurface, O_SURF)
+    uint32_t fl = ARG(1), k = ARG(2);
+    if (!(fl & 8)) { dsr_log("SetColorKey flags %08x (not a source key: ignored)", fl); RET(DD_OK, 3); }
+    int had = me->has_ck; uint32_t old0 = me->ck[0], old1 = me->ck[1];
+    if (k) { me->has_ck = 1; me->ck[0] = rt_r32(G_MEM, k); me->ck[1] = (fl & 1) ? rt_r32(G_MEM, k + 4) : me->ck[0]; } else me->has_ck = 0;
+    if ((had != me->has_ck || old0 != me->ck[0] || old1 != me->ck[1]) && !me->gpu_dirty && !(U32(me->desc, SD_CAPS) & DDSCAPS_ZBUFFER)) {
+        int32_t u[4] = {0, 0, (int32_t)U32(me->desc, SD_WIDTH), (int32_t)U32(me->desc, SD_HEIGHT)}; upload_rect(me, u);
+    }
+    RET(DD_OK, 3);
+END
+M(s_GetColorKey, 3) ME(DSurface, O_SURF)
+    if (!(ARG(1) & 8) || !me->has_ck) RET(DDH(215), 3);
+    rt_w32(G_MEM, ARG(2), me->ck[0]); rt_w32(G_MEM, ARG(2) + 4, me->ck[1]); RET(DD_OK, 3);
+END
+M(s_GetSurfaceDesc, 2) ME(DSurface, O_SURF)
+    uint32_t sd = ARG(1), sz = rt_r32(G_MEM, sd); memcpy(GP(sd), me->desc, sd_bytes_for(ARG(0))); rt_w32(G_MEM, sd, sz); rt_w32(G_MEM, sd + SD_SURFACE, 0); RET(DD_OK, 2);
+END
+M(s_GetCaps, 2) ME(DSurface, O_SURF) memcpy(GP(ARG(1)), me->desc + SD_CAPS, caps_bytes_for(ARG(0))); RET(DD_OK, 2); END
 M(s_GetPixelFormat, 2) ME(DSurface, O_SURF) memcpy(GP(ARG(1)), me->desc + SD_PF, 32); RET(DD_OK, 2); END
 M(s_GetDDInterface, 2) ME(DSurface, O_SURF) rt_w32(G_MEM, ARG(1), me->dd->g_dd); me->dd->ref++; RET(DD_OK, 2); END
 M(s_GetUniquenessValue, 2) rt_w32(G_MEM, ARG(1), 1); RET(DD_OK, 2); END
@@ -578,16 +742,15 @@ M(s_GetPriority, 2) rt_w32(G_MEM, ARG(1), 0); RET(DD_OK, 2); END
 M(s_GetLOD, 2) rt_w32(G_MEM, ARG(1), 0); RET(DD_OK, 2); END
 M(s_GetClipper, 2) rt_w32(G_MEM, ARG(1), 0); RET(DDH(205), 2); END
 M(s_GetPalette, 2) rt_w32(G_MEM, ARG(1), 0); RET(DDH(125), 2); END
-M(s_SetColorKey, 3) dsr_log("SetColorKey flags %08x (ignored)", ARG(1)); RET(DD_OK, 3); END
 #define OK_M(name, n) M(name, n) RET(DD_OK, n); END
 #define ERR_M(name, n, e) M(name, n) RET(e, n); END
 #define UNIMPL_M(name, n) M(name, n) fprintf(stderr, "dsr: UNIMPLEMENTED %s\n", #name); RET(DDERR_UNSUPPORTED, n); END
 OK_M(s_IsLost, 1) OK_M(s_Restore, 1) OK_M(s_GetBltStatus, 2) OK_M(s_GetFlipStatus, 2) OK_M(s_SetClipper, 2) OK_M(s_SetPalette, 2)
 OK_M(s_EnumOverlayZOrders, 4) OK_M(s_PageLock, 2) OK_M(s_PageUnlock, 2) OK_M(s_ChangeUniquenessValue, 1) OK_M(s_SetPriority, 2) OK_M(s_SetLOD, 2)
-ERR_M(s_GetColorKey, 3, DDH(215)) ERR_M(s_GetOverlayPosition, 3, DDH(580)) ERR_M(s_SetOverlayPosition, 3, DDH(580))
+ERR_M(s_GetOverlayPosition, 3, DDH(580)) ERR_M(s_SetOverlayPosition, 3, DDH(580))
 ERR_M(s_AddOverlayDirtyRect, 2, DDH(580)) ERR_M(s_UpdateOverlay, 6, DDH(580)) ERR_M(s_UpdateOverlayDisplay, 2, DDH(580))
 ERR_M(s_UpdateOverlayZOrder, 3, DDH(580)) ERR_M(s_Initialize, 3, DDH(5)) ERR_M(s_GetPrivateData, 4, DDH(255)) ERR_M(s_FreePrivateData, 2, DDH(255))
-UNIMPL_M(s_BltBatch, 4) UNIMPL_M(s_GetDC, 2) UNIMPL_M(s_ReleaseDC, 2) UNIMPL_M(s_SetSurfaceDesc, 3) UNIMPL_M(s_SetPrivateData, 5)
+UNIMPL_M(s_BltBatch, 4) UNIMPL_M(s_SetSurfaceDesc, 3) UNIMPL_M(s_SetPrivateData, 5)
 /* gamma */
 static uint16_t gamma_ramp[3][256]; static int gamma_set;
 M(g_QueryInterface, 3) ME(DSurface, O_GAMMA)
@@ -609,17 +772,18 @@ END
 
 /* ================= IDirectDraw7 ================= */
 M(dd_QueryInterface, 3) ME(DDraw, O_DD)
-    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2);
+    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2), dd_old_qi(DDraw *dd, uint32_t iid);
     if (iid == 0x00000000u || iid == 0x15e65ec0u) { rt_w32(G_MEM, out, me->g_dd); me->ref++; RET(DD_OK, 3); }
     if (iid == 0xf5049e77u) { rt_w32(G_MEM, out, me->g_d3d); me->ref++; RET(DD_OK, 3); }
-    dsr_log("ddraw7 QI: unsupported interface %08x", iid); rt_w32(G_MEM, out, 0); RET(E_NOINTERFACE, 3);
+    uint32_t g = dd_old_qi(me, iid); if (g) { rt_w32(G_MEM, out, g); me->ref++; RET(DD_OK, 3); }
+    dsr_log("ddraw QI: unsupported interface %08x", iid); rt_w32(G_MEM, out, 0); RET(E_NOINTERFACE, 3);
 END
 M(dd_AddRef, 1) ME(DDraw, O_DD) RET((uint32_t)++me->ref, 1); END
 M(dd_Release, 1) ME(DDraw, O_DD) RET((uint32_t)--me->ref, 1); END
 M(dd_CreateSurface, 4) ME(DDraw, O_DD)
-    DSurface *s; uint8_t sd[SD_BYTES]; memcpy(sd, GP(ARG(1)), SD_BYTES);
+    DSurface *s; uint8_t sd[SD_BYTES]; memset(sd, 0, SD_BYTES); memcpy(sd, GP(ARG(1)), sd_bytes_for(ARG(0)));
     uint32_t hr = surface_create(me, sd, &s);
-    rt_w32(G_MEM, ARG(2), hr ? 0 : s->g_surf); RET(hr, 4);
+    rt_w32(G_MEM, ARG(2), hr ? 0 : surf_iface_for(s, ARG(0))); RET(hr, 4);
 END
 /* Display modes from this Mac's screen: the standard sizes that fit, the screen's own size in points and, on Retina screens, its full pixel size. Each depth's record comes from the snapshot as a template. */
 extern int w32_screen_w, w32_screen_h; extern double w32_screen_scale;
@@ -638,8 +802,8 @@ static int mode_list(uint32_t (*out)[2])
     return m;
 }
 M(dd_EnumDisplayModes, 5) ME(DDraw, O_DD)
-    uint32_t filter = ARG(2), ctx = ARG(3), cb = ARG(4), d = scratch(SD_BYTES); uint8_t f[SD_BYTES];
-    if (filter) memcpy(f, GP(filter), SD_BYTES);
+    uint32_t filter = ARG(2), ctx = ARG(3), cb = ARG(4), d = scratch(SD_BYTES), nsd = sd_bytes_for(ARG(0)); uint8_t f[SD_BYTES];
+    if (filter) { memset(f, 0, SD_BYTES); memcpy(f, GP(filter), nsd); }
     uint32_t modes[32][2]; int nm = mode_list(modes), stop = 0;
     static const uint32_t depths[] = {32, 16, 8};
     for (int di = 0; di < 3 && !stop; di++) {
@@ -654,7 +818,7 @@ M(dd_EnumDisplayModes, 5) ME(DDraw, O_DD)
             if (filter && (U32(f, SD_FLAGS) & DDSD_WIDTH) && U32(f, SD_WIDTH) != w) continue;
             if (filter && (U32(f, SD_FLAGS) & DDSD_HEIGHT) && U32(f, SD_HEIGHT) != h) continue;
             if (filter && (U32(f, SD_FLAGS) & DDSD_PIXELFORMAT) && U32(f, SD_PF + PF_BITS) != depths[di]) continue;
-            memcpy(GP(d), m, SD_BYTES);
+            memcpy(GP(d), m, nsd); rt_w32(G_MEM, d, nsd);
             uint32_t a[2] = {d, ctx}; const SnapRec save = cur_rec;
             uint32_t ret = w32_callback(c, cb, 2, a);
             cur_rec = save;
@@ -672,7 +836,7 @@ M(dd_GetCaps, 3)
 END
 M(dd_GetDisplayMode, 2) ME(DDraw, O_DD)
     uint32_t sd = ARG(1); const SnapRec *r = snap_first("CURM");
-    if (r) { uint32_t sz = rt_r32(G_MEM, sd); memcpy(GP(sd), r->data, sz < r->size ? sz : r->size); }
+    if (r) { uint32_t sz = rt_r32(G_MEM, sd), n = sd_bytes_for(ARG(0)); if (sz > n || !sz) sz = n; memcpy(GP(sd), r->data, sz < r->size ? sz : r->size); }
     rt_w32(G_MEM, sd + SD_WIDTH, me->mode_w); rt_w32(G_MEM, sd + SD_HEIGHT, me->mode_h); rt_w32(G_MEM, sd + SD_PF + PF_BITS, me->mode_bpp);
     rt_w32(G_MEM, sd + SD_PITCH, me->mode_w * me->mode_bpp / 8);
     RET(DD_OK, 2);
@@ -680,7 +844,7 @@ END
 M(dd_GetFourCCCodes, 3) rt_w32(G_MEM, ARG(1), 0); RET(DD_OK, 3); END
 M(dd_GetGDISurface, 2) ME(DDraw, O_DD)
     if (!me->primary) { rt_w32(G_MEM, ARG(1), 0); RET(DDH(255), 2); }
-    rt_w32(G_MEM, ARG(1), me->primary->g_surf); surf_addref(me->primary); RET(DD_OK, 2);
+    rt_w32(G_MEM, ARG(1), surf_iface_for(me->primary, ARG(0))); surf_addref(me->primary); RET(DD_OK, 2);
 END
 M(dd_GetMonitorFrequency, 2) rt_w32(G_MEM, ARG(1), 60); RET(DD_OK, 2); END
 M(dd_GetScanLine, 2) rt_w32(G_MEM, ARG(1), 0); RET(DD_OK, 2); END
@@ -721,9 +885,10 @@ UNIMPL_M(dd_GetSurfaceFromDC, 3) UNIMPL_M(dd_StartModeTest, 4) UNIMPL_M(dd_Evalu
 
 /* ================= IDirect3D7 ================= */
 M(d3d_QueryInterface, 3) ME(DDraw, O_D3D)
-    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2);
+    uint32_t iid = rt_r32(G_MEM, ARG(1)), out = ARG(2), dd_old_qi(DDraw *dd, uint32_t iid);
     if (iid == 0x00000000u || iid == 0x15e65ec0u) { rt_w32(G_MEM, out, me->g_dd); me->ref++; RET(DD_OK, 3); }
     if (iid == 0xf5049e77u) { rt_w32(G_MEM, out, me->g_d3d); me->ref++; RET(DD_OK, 3); }
+    uint32_t g = dd_old_qi(me, iid); if (g) { rt_w32(G_MEM, out, g); me->ref++; RET(DD_OK, 3); }
     rt_w32(G_MEM, out, 0); RET(E_NOINTERFACE, 3);
 END
 M(d3d_AddRef, 1) ME(DDraw, O_D3D) RET((uint32_t)++me->ref, 1); END
@@ -941,6 +1106,7 @@ static uint32_t build_vtable(const char *iface, const Fn *fns, int n)
     for (int k = 0; k < n; k++) { char nm[96]; snprintf(nm, sizeof nm, "ddraw!%s.%d", iface, k); rt_w32(G_MEM, t + 4u * (uint32_t)k, w32_thunk_register(nm, fns[k])); }
     return t;
 }
+#include "ddraw_old.inc"
 static void init_vtables(void)
 {
     static int done; if (done) return; done = 1;
@@ -976,6 +1142,7 @@ static void init_vtables(void)
     vt[O_DD] = build_vtable("IDirectDraw7", dd, 30); vt[O_D3D] = build_vtable("IDirect3D7", d3d, 8);
     vt[O_SURF] = build_vtable("IDirectDrawSurface7", surf, 49); vt[O_GAMMA] = build_vtable("IDirectDrawGammaControl", gamma, 5);
     vt[O_DEV] = build_vtable("IDirect3DDevice7", dev, 49); vt[O_VB] = build_vtable("IDirect3DVertexBuffer7", vb, 9);
+    old_vtables(dd, surf, dev);
 }
 
 /* for the host backend: the current display mode (the game's coordinate space) */
@@ -987,16 +1154,21 @@ void dsr_mode_size(uint32_t *w, uint32_t *h)
     *w = the_dd ? the_dd->mode_w : (uint32_t)w32_screen_w; *h = the_dd ? the_dd->mode_h : (uint32_t)w32_screen_h;
 }
 
+static DDraw *dd_new(void)
+{
+    init_vtables();
+    DDraw *dd = calloc(1, sizeof *dd); dd->ref = 1;
+    dd->mode_w = (uint32_t)w32_screen_w; dd->mode_h = (uint32_t)w32_screen_h; dd->mode_bpp = 32;
+    dd->g_dd = make_iface(O_DD, dd); dd->g_d3d = make_iface(O_D3D, dd); the_dd = dd;
+    return dd;
+}
 /* ---- exports ---- */
 IMPL(ddraw, DirectDrawCreateEx)
 {
     uint32_t out = ARG(1), iid = rt_r32(G_MEM, ARG(2));
     dsr_log("DirectDrawCreateEx");
     if (iid != 0x15e65ec0u) RET(DDERR_INVALIDPARAMS, 4);
-    init_vtables();
-    DDraw *dd = calloc(1, sizeof *dd); dd->ref = 1;
-    dd->mode_w = (uint32_t)w32_screen_w; dd->mode_h = (uint32_t)w32_screen_h; dd->mode_bpp = 32;
-    dd->g_dd = make_iface(O_DD, dd); dd->g_d3d = make_iface(O_D3D, dd); the_dd = dd;
+    DDraw *dd = dd_new();
     rt_w32(G_MEM, out, dd->g_dd); RET(DD_OK, 4);
 }
 /* the same two devices Wine reports: the display, and the named adapter (whose GUID the game passes back) */

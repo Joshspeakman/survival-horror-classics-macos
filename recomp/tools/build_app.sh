@@ -11,6 +11,12 @@ NAME=DungeonSiegeNative; EDITION_FLAGS=()
 [[ -f "$OUT/gta3.exe" ]] && { NAME=GTA3; EDITION_FLAGS=(-DGTA3_EDITION); }
 [[ -f "$OUT/gta-vc.exe" ]] && { NAME=GTAVC; EDITION_FLAGS=(-DGTAVC_EDITION); }
 [[ -f "$OUT/gta_sa.exe" ]] && { NAME=GTASA; EDITION_FLAGS=(-DGTASA_EDITION); }
+[[ -f "$OUT/ResidentEvil.exe" ]] && { NAME=ResidentEvil; EDITION_FLAGS=(-DRE1_EDITION); }
+[[ -f "$OUT/LeonU.exe" ]] && { NAME=ResidentEvil2Leon; EDITION_FLAGS=(-DRE2_EDITION); }
+[[ -f "$OUT/ClaireU.exe" ]] && { NAME=ResidentEvil2Claire; EDITION_FLAGS=(-DRE2_EDITION -DRE2_CLAIRE); }
+[[ -f "$OUT/ResidentEvil3.exe" ]] && { NAME=ResidentEvil3; EDITION_FLAGS=(-DRE3_EDITION); }
+[[ -f "$OUT/RE3_MERCE.exe" ]] && { NAME=ResidentEvil3Mercenaries; EDITION_FLAGS=(-DRE3_EDITION -DRE3_MERCE); }
+[[ -f "$OUT/DINO.exe" ]] && { NAME=DinoCrisis; EDITION_FLAGS=(-DDC_EDITION); }
 SAN=(); [[ -n "${DF_SANITIZE:-}" ]] && SAN=(-fsanitize="$DF_SANITIZE" -fno-omit-frame-pointer)   # development (build_runtime.sh)
 mkdir -p "$APP" "$OUT/obj/host"
 BUILD="$(git -C "$HERE" describe --always --dirty 2>/dev/null || echo unknown)"

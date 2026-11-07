@@ -239,7 +239,10 @@ vertex QOut vs_quad(uint vid [[vertex_id]], constant QUni &q [[buffer(0)]])
 }
 fragment float4 fs_quad(QOut in [[stage_in]], constant QUni &q [[buffer(0)]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]])
 {
-    return q.mode.x ? q.color : t.sample(s, in.uv);
+    if (q.mode.x) return q.color;
+    float4 c = t.sample(s, in.uv);
+    if (q.mode.y && c.a < 0.5) discard_fragment();      // a colour-keyed copy (DirectDraw's source key: alpha 0 where the key was)
+    return c;
 }
 // Depth clear helper: writes a constant depth.
 struct ZOut { float4 pos [[position]]; };

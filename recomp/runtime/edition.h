@@ -1,6 +1,9 @@
 /* Address-specific hooks and user-data names must follow the compiled executable. */
 #ifndef DS2_EDITION_H
 #define DS2_EDITION_H
+#if defined(RE1_EDITION) || defined(RE2_EDITION) || defined(RE3_EDITION) || defined(DC_EDITION)
+#define RE_EDITION 1    /* the GOG releases of Resident Evil 1-3 and Dino Crisis: DirectDraw / Direct3D 1-6 games */
+#endif
 #if defined(GTA3_EDITION) || defined(GTAVC_EDITION) || defined(GTASA_EDITION)
 #define GTA_EDITION 1   /* what the three Grand Theft Auto games share (launcher, window, video mode) */
 #endif
@@ -33,6 +36,54 @@
 #define GAME_EXE "gta_sa.exe"
 #define GAME_DIR_WIN "C:\\Games\\GTA San Andreas"
 #endif
+#define DS2_LIGHT_LOOP 0xffffff00u
+#define DS2_LIGHT_AFTER 0xffffff01u
+#define DS2_LIGHT_ZERO 0u
+#define DS2_LIGHT_ONE 0u
+#define DS2_LIGHT_SCALE 0u
+#define DS2_MAT3 0xffffff02u
+#define DS2_MAT3_FN fnv_no_mat3
+#define DS2_MOOD_READ 0xffffff03u
+#define DS2_SKRIT_MANAGER 0u
+#elif defined(RE_EDITION)
+/* Resident Evil (1997), Resident Evil 2 (1999), Resident Evil 3: Nemesis (2000) and Dino Crisis (2000): the GOG
+ * releases' own executables (no wrapper, no copy protection). GOG's ddraw.dll, dinput.dll and dshow.dll shims are not
+ * recompiled: the runtime is their DirectDraw, Direct3D, DirectInput and movie player. RE2 and RE3 have two programs
+ * each (Leon / Claire; the game / The Mercenaries), built as separate editions of one game. */
+#if defined(RE1_EDITION)
+#define DS2_IMAGE_END 0x04db2000u                    /* .data2: a 64 MB block of zeros */
+#define DS2_TITLE "Resident Evil"
+#define DS2_DOCUMENTS "Resident Evil"
+#define GAME_EXE "ResidentEvil.exe"
+#define GAME_DIR_WIN "C:\\GOG Games\\Resident Evil"
+#elif defined(RE2_EDITION)
+#define DS2_IMAGE_END 0x009ab000u
+#define DS2_TITLE "Resident Evil 2"
+#define DS2_DOCUMENTS "Resident Evil 2"
+#ifdef RE2_CLAIRE
+#define GAME_EXE "ClaireU.exe"
+#else
+#define GAME_EXE "LeonU.exe"
+#endif
+#define GAME_DIR_WIN "C:\\GOG Games\\Resident Evil 2"
+#elif defined(RE3_EDITION)
+#define DS2_IMAGE_END 0x00a67000u
+#define DS2_TITLE "Resident Evil 3: Nemesis"
+#define DS2_DOCUMENTS "Resident Evil 3"
+#ifdef RE3_MERCE
+#define GAME_EXE "RE3_MERCE.exe"
+#else
+#define GAME_EXE "ResidentEvil3.exe"
+#endif
+#define GAME_DIR_WIN "C:\\GOG Games\\Resident Evil 3"
+#else
+#define DS2_IMAGE_END 0x00715000u
+#define DS2_TITLE "Dino Crisis"
+#define DS2_DOCUMENTS "Dino Crisis"
+#define GAME_EXE "DINO.exe"
+#define GAME_DIR_WIN "C:\\GOG Games\\Dino Crisis"
+#endif
+#define DS2_INI "bio.ini"
 #define DS2_LIGHT_LOOP 0xffffff00u
 #define DS2_LIGHT_AFTER 0xffffff01u
 #define DS2_LIGHT_ZERO 0u

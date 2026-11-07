@@ -17,6 +17,9 @@ enum { G_DC = 1, G_BITMAP, G_FONT, G_BRUSH, G_PEN, G_STOCK };
 typedef struct GObj {
     int type;
     /* bitmap */ int bw, bh; uint32_t *px;            /* 0x00RRGGBB per pixel, top-down */
+                 /* or the pixels in guest memory (a DIB section; a DirectDraw surface's DC): bits, bits per pixel, row
+                  * pitch (negative: bottom-up), channel masks (r, g, b, a); px is then 0 */
+                 uint32_t gbits; int gbpp, gpitch; uint32_t gmask[4]; int gowned;
     /* font */   HostFont font; int height, weight, italic; char face[64]; int ascent, descent, internal_leading, avg_w, max_w;
     /* dc */     uint32_t bitmap, fontsel, text_color, bk_color; int bk_mode;
     uint32_t color;
@@ -54,7 +57,7 @@ IMPL(gdi32, DeleteObject)
 {
     uint32_t h = ARG(0), k = (h - GBASE) / 4; GObj *o = G(h, 0);
     if (!o) RET(1, 1);
-    if (o->type == G_BITMAP) free(o->px);
+    if (o->type == G_BITMAP) { free(o->px); if (o->gowned && o->gbits) heap_free(w32_process_heap, o->gbits); }
     if (o->type == G_FONT && o->font) {
 #ifdef __APPLE__
         CFRelease(o->font);
@@ -72,6 +75,114 @@ IMPL(gdi32, SelectObject)
     else if (o && o->type == G_FONT) { old = d->fontsel; d->fontsel = h; }
     else old = 0x00b80000u;                                 /* brushes, pens, stock objects: tracked loosely */
     RET(old ? old : 0x00b80000u, 2);
+}
+/* ---- bitmaps whose pixels are in guest memory: DIB sections, DirectDraw surfaces' DCs ---- */
+static int mshift(uint32_t m) { int s = 0; if (!m) return 0; while (!(m & 1)) { m >>= 1; s++; } return s; }
+static int mbits(uint32_t m) { int n = 0; while (m) { n += m & 1; m >>= 1; } return n; }
+static uint32_t chan(uint32_t v, uint32_t m) { if (!m) return 0; int b = mbits(m); uint32_t x = (v & m) >> mshift(m); return b >= 8 ? x >> (b - 8) : (x * 255 + ((1u << b) - 1) / 2) / ((1u << b) - 1); }
+static uint32_t unchan(uint32_t c8, uint32_t m) { if (!m) return 0; int b = mbits(m); uint32_t x = b >= 8 ? c8 << (b - 8) : c8 >> (8 - b); return (x << mshift(m)) & m; }
+static uint8_t *grow(const GObj *b, int y) { return G_MEM + b->gbits + (uint32_t)((b->gpitch >= 0 ? y : b->bh - 1 - y) * abs(b->gpitch)); }
+static uint32_t get_argb(const GObj *b, int x, int y)                  /* 0xAARRGGBB (alpha 0xff where the format has none) */
+{
+    if (!b->gbits) return 0xff000000u | b->px[y * b->bw + x];
+    const uint8_t *r = grow(b, y); uint32_t v;
+    switch (b->gbpp) { case 32: v = r[4 * x] | r[4 * x + 1] << 8 | r[4 * x + 2] << 16 | (uint32_t)r[4 * x + 3] << 24; break;
+                       case 24: v = r[3 * x] | r[3 * x + 1] << 8 | r[3 * x + 2] << 16; break;
+                       case 16: v = r[2 * x] | r[2 * x + 1] << 8; break;
+                       default: v = r[x]; }
+    return (b->gmask[3] ? chan(v, b->gmask[3]) << 24 : 0xff000000u) | chan(v, b->gmask[0]) << 16 | chan(v, b->gmask[1]) << 8 | chan(v, b->gmask[2]);
+}
+static void put_argb(GObj *b, int x, int y, uint32_t c)
+{
+    if (!b->gbits) { b->px[y * b->bw + x] = c & 0xffffff; return; }
+    uint32_t v = unchan(c >> 16 & 255, b->gmask[0]) | unchan(c >> 8 & 255, b->gmask[1]) | unchan(c & 255, b->gmask[2]) | unchan(c >> 24, b->gmask[3]);
+    uint8_t *r = grow(b, y);
+    switch (b->gbpp) { case 32: r[4 * x] = (uint8_t)v; r[4 * x + 1] = (uint8_t)(v >> 8); r[4 * x + 2] = (uint8_t)(v >> 16); r[4 * x + 3] = (uint8_t)(v >> 24); break;
+                       case 24: r[3 * x] = (uint8_t)v; r[3 * x + 1] = (uint8_t)(v >> 8); r[3 * x + 2] = (uint8_t)(v >> 16); break;
+                       case 16: r[2 * x] = (uint8_t)v; r[2 * x + 1] = (uint8_t)(v >> 8); break;
+                       default: r[x] = (uint8_t)v; }
+}
+static int same_layout(const GObj *a, const GObj *b)
+{
+    return a->gbits && b->gbits && a->gbpp == b->gbpp && !memcmp(a->gmask, b->gmask, sizeof a->gmask);
+}
+/* a DC over guest pixels, for ddraw.c (IDirectDrawSurface::GetDC); w32_gdi_dc_free when the surface's DC is released */
+uint32_t w32_gdi_dc_for_memory(uint32_t bits, int w, int h, int pitch, int bpp, const uint32_t masks[4])
+{
+    GObj *b = calloc(1, sizeof *b); b->type = G_BITMAP; b->bw = w; b->bh = h; b->gbits = bits; b->gbpp = bpp; b->gpitch = pitch; memcpy(b->gmask, masks, sizeof b->gmask);
+    GObj *d = calloc(1, sizeof *d); d->type = G_DC; d->text_color = 0; d->bk_color = 0xffffff; d->bk_mode = 2; d->bitmap = g_new(b);
+    return g_new(d);
+}
+void w32_gdi_dc_free(uint32_t hdc)
+{
+    GObj *d = G(hdc, G_DC); if (!d) return;
+    GObj *b = G(d->bitmap, G_BITMAP); if (b) { gtab[(d->bitmap - GBASE) / 4] = 0; free(b); }
+    gtab[(hdc - GBASE) / 4] = 0; free(d);
+}
+IMPL(gdi32, CreateDIBSection)                 /* (dc, BITMAPINFO *, usage, bits **, section, offset) */
+{
+    uint32_t bi = ARG(1), size = rt_r32(G_MEM, bi), comp = rt_r32(G_MEM, bi + 16);
+    int w = (int)rt_r32(G_MEM, bi + 4), h = (int)rt_r32(G_MEM, bi + 8), bpp = rt_r16(G_MEM, bi + 14);
+    if (w <= 0 || !h || w > 16384 || abs(h) > 16384 || (bpp != 16 && bpp != 24 && bpp != 32 && bpp != 8)) { if (ARG(3)) rt_w32(G_MEM, ARG(3), 0); RET(0, 6); }
+    GObj *o = calloc(1, sizeof *o); o->type = G_BITMAP; o->bw = w; o->bh = abs(h); o->gbpp = bpp;
+    int pitch = ((w * bpp + 31) / 32) * 4; o->gpitch = h < 0 ? pitch : -pitch;   /* positive height: bottom-up */
+    if (comp == 3) { for (int k = 0; k < 3; k++) o->gmask[k] = rt_r32(G_MEM, bi + size + 4u * (uint32_t)k); if (size >= 56) o->gmask[3] = rt_r32(G_MEM, bi + 52); }
+    else if (bpp == 16) { o->gmask[0] = 0x7c00; o->gmask[1] = 0x3e0; o->gmask[2] = 0x1f; }
+    else { o->gmask[0] = 0xff0000; o->gmask[1] = 0xff00; o->gmask[2] = 0xff; }
+    o->gbits = heap_alloc(w32_process_heap, 8, (uint32_t)(pitch * o->bh) + 16); o->gowned = 1;
+    if (ARG(3)) rt_w32(G_MEM, ARG(3), o->gbits);
+    RET(g_new(o), 6);
+}
+IMPL(gdi32, GetObjectA)                      /* (object, size, out): a bitmap's BITMAP, or a DIB section's DIBSECTION */
+{
+    GObj *o = G(ARG(0), 0); uint32_t n = ARG(1), p = ARG(2);
+    if (!o || o->type != G_BITMAP) { if (p && n) memset(GP(p), 0, n); RET(0, 3); }
+    if (!p) RET(o->gbits ? 84 : 24, 3);
+    uint8_t b[84]; memset(b, 0, sizeof b); int bpp = o->gbits ? o->gbpp : 32, pitch = o->gbits ? abs(o->gpitch) : o->bw * 4;
+    memcpy(b + 4, &o->bw, 4); memcpy(b + 8, &o->bh, 4); memcpy(b + 12, &pitch, 4); b[16] = 1; b[18] = (uint8_t)bpp; memcpy(b + 20, &o->gbits, 4);
+    if (o->gbits) {                            /* BITMAPINFOHEADER, then the masks */
+        uint32_t hs = 40; int hh = o->gpitch > 0 ? -o->bh : o->bh; uint32_t comp = o->gbpp == 16 || o->gbpp == 32 ? 3 : 0, img = (uint32_t)(pitch * o->bh);
+        memcpy(b + 24, &hs, 4); memcpy(b + 28, &o->bw, 4); memcpy(b + 32, &hh, 4); b[36] = 1; b[38] = (uint8_t)bpp; memcpy(b + 40, &comp, 4); memcpy(b + 44, &img, 4);
+        memcpy(b + 64, o->gmask, 12);
+    }
+    if (n > sizeof b) n = sizeof b; memcpy(GP(p), b, n); RET(n, 3);
+}
+/* copies between DCs' bitmaps: rows as they are where both are guest pixels of one layout (keeps an alpha bit that a
+ * conversion through colour would not), else pixel by pixel through ARGB; SRCCOPY, and the fills BLACKNESS/WHITENESS */
+static void blit(GObj *dd, int x, int y, int w, int h, GObj *sd, int sx, int sy, int sw, int sh, uint32_t rop)
+{
+    GObj *db = dd ? G(dd->bitmap, G_BITMAP) : 0, *sb = sd ? G(sd->bitmap, G_BITMAP) : 0;
+    if (!db || w <= 0 || h <= 0) return;
+    if (rop == 0x42 || rop == 0xff0062) {
+        for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) if (x + i >= 0 && x + i < db->bw && y + j >= 0 && y + j < db->bh) put_argb(db, x + i, y + j, rop == 0x42 ? 0xff000000u : 0xffffffffu);
+        return;
+    }
+    if (!sb || sw <= 0 || sh <= 0) return;
+    if (sw == w && sh == h && same_layout(db, sb) && rop == 0xcc0020) {
+        int bpp = db->gbpp / 8;
+        for (int j = 0; j < h; j++) {
+            int dy = y + j, syy = sy + j; if (dy < 0 || dy >= db->bh || syy < 0 || syy >= sb->bh) continue;
+            int x0 = x, s0 = sx, n = w; if (x0 < 0) { s0 -= x0; n += x0; x0 = 0; } if (s0 < 0) { x0 -= s0; n += s0; s0 = 0; }
+            if (x0 + n > db->bw) n = db->bw - x0; if (s0 + n > sb->bw) n = sb->bw - s0;
+            if (n > 0) memmove(grow(db, dy) + x0 * bpp, grow(sb, syy) + s0 * bpp, (size_t)n * (size_t)bpp);
+        }
+        return;
+    }
+    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+        int dx = x + i, dy = y + j, px = sx + (int)((int64_t)i * sw / w), py = sy + (int)((int64_t)j * sh / h);
+        if (dx < 0 || dx >= db->bw || dy < 0 || dy >= db->bh || px < 0 || px >= sb->bw || py < 0 || py >= sb->bh) continue;
+        put_argb(db, dx, dy, get_argb(sb, px, py));
+    }
+}
+IMPL(gdi32, BitBlt)                          /* (dst, x, y, w, h, src, sx, sy, rop) */
+{
+    blit(dc_of(ARG(0)), (int)ARG(1), (int)ARG(2), (int)ARG(3), (int)ARG(4), dc_of(ARG(5)), (int)ARG(6), (int)ARG(7), (int)ARG(3), (int)ARG(4), ARG(8));
+    RET(1, 9);
+}
+IMPL(gdi32, StretchBlt)                      /* (dst, x, y, w, h, src, sx, sy, sw, sh, rop) */
+{
+    blit(dc_of(ARG(0)), (int)ARG(1), (int)ARG(2), (int)ARG(3), (int)ARG(4), dc_of(ARG(5)), (int)ARG(6), (int)ARG(7), (int)ARG(8), (int)ARG(9), ARG(10));
+    RET(1, 11);
 }
 IMPL(gdi32, SetBkMode) { GObj *d = dc_of(ARG(0)); int o = d ? d->bk_mode : 0; if (d) d->bk_mode = (int)ARG(1); RET((uint32_t)o, 2); }
 IMPL(gdi32, SetTextColor) { GObj *d = dc_of(ARG(0)); uint32_t o = d ? d->text_color : 0; if (d) d->text_color = ARG(1); RET(o, 2); }
@@ -193,7 +304,7 @@ IMPL(gdi32, GetCharWidthA)
 }
 /* draw UTF-16 text at (x, y) = top-left of the text cell, in the DC's text colour (and background when OPAQUE) */
 #ifdef __APPLE__
-static void draw_text(GObj *d, int x, int y, const uint16_t *s, int n)
+static void draw_text_px(GObj *d, int x, int y, const uint16_t *s, int n)
 {
     GObj *bm = G(d->bitmap, G_BITMAP), *f = dc_font(d);
     if (!bm || !f || n <= 0) return;
@@ -222,7 +333,7 @@ static void draw_text(GObj *d, int x, int y, const uint16_t *s, int n)
 }
 #else
 static uint32_t rgb_from_colorref(uint32_t c) { return ((c & 255) << 16) | (c & 0xff00) | ((c >> 16) & 255); }
-static void draw_text(GObj *d, int x, int y, const uint16_t *s, int n) {
+static void draw_text_px(GObj *d, int x, int y, const uint16_t *s, int n) {
     GObj *bm = G(d->bitmap, G_BITMAP), *f = dc_font(d); if (!bm || !f || n <= 0) return;
     double width = 0; for (int i = 0; i < n; ++i) width += advance(f, s[i]);
     uint32_t fg = rgb_from_colorref(d->text_color), bg = rgb_from_colorref(d->bk_color);
@@ -245,11 +356,35 @@ static void draw_text(GObj *d, int x, int y, const uint16_t *s, int n) {
     }
 }
 #endif
+/* text onto guest pixels (a DIB section, a DirectDraw surface's DC): drawn on a host copy, the changed pixels written back */
+static void draw_text(GObj *d, int x, int y, const uint16_t *s, int n)
+{
+    GObj *bm = G(d->bitmap, G_BITMAP); if (!bm) return;
+    if (!bm->gbits) { draw_text_px(d, x, y, s, n); return; }
+    size_t np = (size_t)bm->bw * (size_t)bm->bh; uint32_t *px = malloc(np * 4), *was = malloc(np * 4); if (!px || !was) { free(px); free(was); return; }
+    for (int j = 0; j < bm->bh; j++) for (int i = 0; i < bm->bw; i++) was[(size_t)j * bm->bw + i] = px[(size_t)j * bm->bw + i] = get_argb(bm, i, j) & 0xffffff;
+    bm->px = px; draw_text_px(d, x, y, s, n); bm->px = 0;
+    for (int j = 0; j < bm->bh; j++) for (int i = 0; i < bm->bw; i++) { size_t k = (size_t)j * bm->bw + i; if (px[k] != was[k]) put_argb(bm, i, j, 0xff000000u | px[k]); }
+    free(px); free(was);
+}
 IMPL(gdi32, ExtTextOutA)
 {
     GObj *d = dc_of(ARG(0)); uint32_t s = ARG(5); int n = (int)ARG(6);
     if (d && s && n > 0) { uint16_t w[1024]; if (n > 1024) n = 1024; w32_mb_to_wide(1252, (const uint8_t *)GP(s), n, w, n); draw_text(d, (int)ARG(1), (int)ARG(2), w, n); }
     RET(1, 8);
+}
+IMPL(gdi32, TextOutA)
+{
+    GObj *d = dc_of(ARG(0)); uint32_t s = ARG(3); int n = (int)ARG(4);
+    if (d && s && n > 0) { uint16_t w[1024]; if (n > 1024) n = 1024; w32_mb_to_wide(1252, (const uint8_t *)GP(s), n, w, n); draw_text(d, (int)ARG(1), (int)ARG(2), w, n); }
+    RET(1, 5);
+}
+IMPL(gdi32, GetTextExtentPoint32A)                  /* (dc, text, length, SIZE *) */
+{
+    GObj *d = dc_of(ARG(0)), *f = d ? dc_font(d) : 0; uint32_t s = ARG(1); int n = (int)ARG(2); double w = 0;
+    if (f && s && n > 0) { for (int k = 0; k < n && k < 4096; k++) w += advance(f, G_MEM[s + (uint32_t)k]); }
+    rt_w32(G_MEM, ARG(3), (uint32_t)lround(w)); rt_w32(G_MEM, ARG(3) + 4, f ? (uint32_t)(f->ascent + f->descent) : 16u);
+    RET(1, 4);
 }
 IMPL(gdi32, TextOutW)
 {
@@ -261,7 +396,7 @@ IMPL(gdi32, GetPixel)
 {
     GObj *d = dc_of(ARG(0)); GObj *bm = d ? G(d->bitmap, G_BITMAP) : 0; int x = (int)ARG(1), y = (int)ARG(2);
     if (!bm || x < 0 || y < 0 || x >= bm->bw || y >= bm->bh) RET(0xffffffffu, 3);
-    uint32_t p = bm->px[(size_t)y * bm->bw + x];                                         /* BGRX in memory */
+    uint32_t p = bm->gbits ? get_argb(bm, x, y) : bm->px[(size_t)y * bm->bw + x];       /* BGRX in memory */
     RET(((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16), 3);                      /* COLORREF 0x00BBGGRR */
 }
 IMPL(gdi32, GetDIBits)
@@ -278,7 +413,8 @@ IMPL(gdi32, GetDIBits)
     int stride = ((bm->bw * (bpp / 8)) + 3) & ~3, topdown = h < 0;
     for (uint32_t k = 0; k < lines && start + k < (uint32_t)bm->bh; k++) {
         int row = topdown ? (int)(start + k) : bm->bh - 1 - (int)(start + k);
-        uint8_t *dst = (uint8_t *)GP(bits + k * (uint32_t)stride); const uint32_t *src = bm->px + (size_t)row * bm->bw;
+        uint8_t *dst = (uint8_t *)GP(bits + k * (uint32_t)stride); uint32_t tmp[16384]; const uint32_t *src = bm->px ? bm->px + (size_t)row * bm->bw : tmp;
+        if (!bm->px) for (int x = 0; x < bm->bw && x < 16384; x++) tmp[x] = get_argb(bm, x, row) & 0xffffff;
         for (int x = 0; x < bm->bw; x++) {
             if (bpp == 32) memcpy(dst + 4 * x, &src[x], 4);
             else { dst[3 * x] = (uint8_t)src[x]; dst[3 * x + 1] = (uint8_t)(src[x] >> 8); dst[3 * x + 2] = (uint8_t)(src[x] >> 16); }
