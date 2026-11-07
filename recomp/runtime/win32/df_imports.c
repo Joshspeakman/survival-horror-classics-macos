@@ -245,8 +245,10 @@ IMPL(ibrowse, ibrowse_OnRMouseDown) { RETC(0); }
 IMPL(ibrowse, ibrowse_OnRMouseUp) { RETC(0); }
 IMPL(ibrowse, ibrowse_OnMouseMove) { RETC(0); }
 
-/* ---- msacm32 (Delta Force 2): compressed WAVE data decoded to PCM — IMA ADPCM (0x11) and Microsoft ADPCM (2) ---- */
-typedef struct AcmStream { uint16_t tag, ch, align, spb, bits_out; int16_t coef[32][2]; int ncoef; } AcmStream;
+/* ---- msacm32 (Delta Force 2): compressed WAVE data decoded to PCM — IMA ADPCM (0x11) and Microsoft ADPCM (2); PCM (1)
+ * to 16-bit PCM at its own rate and channels, as Windows' PCM converter does (Resident Evil 2 opens a stream for every
+ * .SAP, whatever it holds: the PlayStation voices are PCM) ---- */
+typedef struct AcmStream { uint16_t tag, ch, align, spb, bits_out, bits_in; int16_t coef[32][2]; int ncoef; } AcmStream;
 static const int ima_step[89] = { 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60,
     66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658,
     724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428,
@@ -302,9 +304,13 @@ IMPL(msacm32, acmStreamOpen)       /* (has *, driver, src fmt, dst fmt, filter, 
         for (int k = 0; k < s->ncoef; k++) { s->coef[k][0] = (int16_t)rt_r16(G_MEM, src + 22 + 4 * k); s->coef[k][1] = (int16_t)rt_r16(G_MEM, src + 24 + 4 * k); } }
     if (s->tag == 0x11 && !s->spb) s->spb = (uint16_t)((s->align - 4 * s->ch) * 8 / (4 * s->ch) + 1);
     if (s->tag == 2 && !s->spb) s->spb = (uint16_t)((s->align - 7 * s->ch) * 8 / (4 * s->ch) + 2);
+    if (s->tag == 1) {                                  /* PCM: one frame a block; same rate and channels only */
+        s->bits_in = rt_r16(G_MEM, src + 14); s->spb = 1; s->align = (uint16_t)(s->ch * s->bits_in / 8);
+        if ((s->bits_in != 8 && s->bits_in != 16) || rt_r32(G_MEM, src + 4) != rt_r32(G_MEM, dst + 4) || rt_r16(G_MEM, dst + 2) != s->ch) s->spb = 0;
+    }
     fprintf(stderr, "w32: acmStreamOpen format %#x, %u ch, block %u (%u samples) -> PCM %u-bit %u ch\n", s->tag, s->ch, s->align, s->spb,
             s->bits_out, rt_r16(G_MEM, dst + 2));
-    if ((s->tag != 0x11 && s->tag != 2) || s->ch < 1 || s->ch > 2 || s->bits_out != 16 || !s->align || s->spb < 2) { free(s); RET(0x200 /* ACMERR_NOTPOSSIBLE */, 8); }
+    if ((s->tag != 0x11 && s->tag != 2 && s->tag != 1) || s->ch < 1 || s->ch > 2 || s->bits_out != 16 || !s->align || s->spb < (s->tag == 1 ? 1 : 2)) { free(s); RET(0x200 /* ACMERR_NOTPOSSIBLE */, 8); }
     if (ARG(7) & 1) { free(s); RET(0, 8); }             /* ACM_STREAMOPENF_QUERY */
     uint32_t h = heap_alloc(w32_process_heap, 8, 8); memcpy(GP(h), &s, sizeof s);
     rt_w32(G_MEM, ARG(0), h); RET(0, 8);
@@ -323,7 +329,13 @@ IMPL(msacm32, acmStreamConvert)    /* (has, ACMSTREAMHEADER *, flags): whole blo
     AcmStream *s = acm_of(ARG(0)); uint32_t h = ARG(1); if (!s) RET(5, 3);
     uint32_t src = rt_r32(G_MEM, h + 12), slen = rt_r32(G_MEM, h + 16), dst = rt_r32(G_MEM, h + 28), dlen = rt_r32(G_MEM, h + 32);
     uint32_t per = (uint32_t)s->spb * s->ch * 2, used = 0, out = 0;
-    while (used + s->align <= slen && out + per <= dlen) {
+    if (s->tag == 1) {                                  /* PCM: copied (16-bit) or widened (8-bit) */
+        uint32_t frames = slen / s->align; if (frames > dlen / per) frames = dlen / per;
+        if (s->bits_in == 16) memmove(GP(dst), GP(src), frames * per);
+        else for (uint32_t k = 0; k < frames * s->ch; k++) { int16_t v = (int16_t)((G_MEM[src + k] - 128) << 8); memcpy(GP(dst + 2 * k), &v, 2); }
+        used = frames * s->align; out = frames * per;
+    }
+    else while (used + s->align <= slen && out + per <= dlen) {
         (s->tag == 0x11 ? ima_block : ms_block)(s, G_MEM + src + used, (int16_t *)GP(dst + out));
         used += s->align; out += per;
     }
