@@ -616,6 +616,12 @@ static FsKey fs_key(DSRRenderer *r, int mprog)
     k.a0 = (int32_t)((r->tss[0][4] & 255) | (r->tss[0][5] & 255) << 8 | (r->tss[0][6] & 255) << 16);   /* alpha */
     k.c1 = (int32_t)((r->tss[1][1] & 255) | (r->tss[1][2] & 255) << 8 | (r->tss[1][3] & 255) << 16);
     k.a1 = (int32_t)((r->tss[1][4] & 255) | (r->tss[1][5] & 255) << 8 | (r->tss[1][6] & 255) << 16);
+    /* the third argument (D3DTSS_COLORARG0 26, ALPHAARG0 27) where the operation reads it: MULTIPLYADD, LERP */
+    for (int st = 0; st < 2; st++) {
+        int32_t *c = st ? &k.c1 : &k.c0, *a = st ? &k.a1 : &k.a0;
+        if ((*c & 255) == 25 || (*c & 255) == 26) *c |= (int32_t)((r->tss[st][26] & 255) << 24);
+        if ((*a & 255) == 25 || (*a & 255) == 26) *a |= (int32_t)((r->tss[st][27] & 255) << 24);
+    }
     k.fl = (t0 != NULL) | (t1 != NULL) << 1 | (t0 && t0->fmt == 2) << 2 | (t1 && t1->fmt == 2) << 3;
     if (!mprog) {
         k.fl |= (r->rs[29] != 0) << 4;                                                       /* D3DRS_SPECULARENABLE */
@@ -637,6 +643,10 @@ static id<MTLFunction> fs_main_for(DSRRenderer *r, int atest, FsKey k)
     uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 54);
     while (r->fsf_k[h] && r->fsf_k[h] != key) h = (h + 1) & 1023;
     if (r->fsf_k[h]) return r->fsf_v[h];
+    { static int sl = -1; if (sl < 0) sl = getenv("DSR_STAGELOG") != 0;   /* development: each new texture-stage setup */
+      if (sl) fprintf(stderr, "dsr: stages c0 %06x a0 %06x c1 %06x a1 %06x fl %#x arg0 %u/%u tci %#x/%#x ttff %#x/%#x tfactor %08x blend %u %u/%u spec %u (frame %d)\n",
+                      k.c0, k.a0, k.c1, k.a1, k.fl, r->tss[0][26], r->tss[1][26], r->tss[0][11], r->tss[1][11], r->tss[0][24], r->tss[1][24],
+                      r->rs[60], r->rs[27], r->rs[19], r->rs[20], r->rs[29], dsr_frame); }
     MTLFunctionConstantValues *fc = [MTLFunctionConstantValues new]; bool at = atest != 0; NSError *err = nil;
     [fc setConstantValue:&at type:MTLDataTypeBool atIndex:0];
     [fc setConstantValue:&k.c0 type:MTLDataTypeInt atIndex:1]; [fc setConstantValue:&k.a0 type:MTLDataTypeInt atIndex:2];

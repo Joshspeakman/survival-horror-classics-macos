@@ -76,6 +76,11 @@ and alpha test (Metal function constants), not by one shader that chooses them f
 choosing was most of the GPU's time. Metal compiles each new combination the first time it is drawn and keeps it, so
 the first minutes after an update can hitch now and then.
 
+Every texture-stage operation the device reports is drawn, including MULTIPLYADD, LERP and the modulate-and-add
+pairs. Vice City and San Andreas paint their cars' reflections with MULTIPLYADD: the car's colour plus the reflection
+times the texture factor (a quarter in Vice City, about a tenth in San Andreas). Before that operation was drawn, the
+reflection replaced the paint and hid the car's colour. GTA III draws its reflections with other operations.
+
 What an M1 Pro holds at 4112×2658 with 4x antialiasing, 16x texture filtering and PS2 lighting, capped at 120, driving:
 
 | | GTA III | Vice City | San Andreas | San Andreas, *Native* (3456 × 2234) |

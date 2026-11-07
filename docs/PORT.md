@@ -27,7 +27,8 @@ hand-written x87 code in GTA III's `_rwcseg` (flagged as data): `tools/pe.py` tr
   GPU drew is a GPU copy (the Trails copy the screen every frame).
 - **Direct3D 9 on Metal** (`src/renderer`): fixed-function lighting (materials, directional/point/spot lights,
   COLORVERTEX and the material sources), generated texture coordinates (the cars' environment maps), table fog,
-  blend operations, the texture stages as shaders specialised per combination (function constants), multisampled
+  blend operations, the texture stages as shaders specialised per combination (function constants; every operation
+  the caps report, MULTIPLYADD and LERP with their third argument), multisampled
   targets kept in tile memory and resolved as each pass ends, depth only in the passes whose draws use it, new targets
   cleared to black, and San Andreas' own vertex shaders
   translated to Metal by MojoShader (`d3d9_shader.c`: peds and CJ skinned on the GPU).
@@ -132,7 +133,8 @@ longer are logged) `PROFILE_WINDOWS=<game.log>` only those frames. That is how S
 For rendering: `D3D9_FRAMELOG=<frame>` (or `D3D9_FRAMELOG_FILE=<path>`: the frame after the file appears) logs one
 frame's render targets, copies, clears and draws, reading small targets back; with `D3D9_PROBE=x,y` it names each
 draw that changes that pixel. `D3D8_COPYLOG=1` logs Direct3D 8 copies; `D3D9_SHADERLOG=2` prints the translated
-shaders; `DSR_SAMPLERLOG=1` each new sampler's filters.
+shaders; `DSR_SAMPLERLOG=1` each new sampler's filters; `DSR_STAGELOG=1` each new texture-stage setup (operations,
+arguments, coordinate generation, texture factor, blending).
 
 Checked this way at 1600×900, 2054×1290 and 4112×2658: all three games from the menus into the opening missions;
 widescreen on and off from each game's menu; resolution, colour depth and antialiasing from San Andreas' menu; 16-bit
