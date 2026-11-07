@@ -42,11 +42,44 @@ Claire** and Resident Evil 3's **game / The Mercenaries**. Then:
 
 - **Options**: Display (full screen with Game Mode, or a window), Around the Notch (below it, or around it), VSync,
   Texture Filtering, Movies, Test Aids.
+- **Mods**: the chosen game's mods (see [Mods](#mods)); the tile says how many are on.
 - **Saves**, **Game Files**, **Updates** (rebuilds the app from the branch it follows), **Quit**, **Play**.
 
 A controller works in the launch window: d-pad or left stick to choose a game (up/down: the version), A or Start to
-play, Y for Options (up/down a row, left/right/A to change it), B to quit or close Options. The keyboard does the same
-with the arrows, Return, Space and Escape.
+play, Y for Options (up/down a row, left/right/A to change it), X for Mods, B to quit or close Options. The keyboard
+does the same with the arrows, Return, Space, M and Escape.
+
+## Mods
+
+The **Mods** tile opens the chosen game's mods (Resident Evil 2's Leon and Claire share one list; so do Resident Evil 3
+and The Mercenaries):
+
+- **Browse GameBanana…** (Resident Evil 1-3): search, or the most downloaded, newest or most liked mods for the game,
+  with their pictures; **Install** downloads one and installs it. Dino Crisis has no GameBanana section.
+- **From File…**, or drop a zip, rar or 7z (or a single file) on the window.
+- Each mod's checkbox turns it on or off; **Up** / **Down** set the order (the first wins where two change the same
+  file); **Remove** sends it to the Trash; **Show Folder** opens it in Finder.
+
+**The game folders are never changed**, so there is nothing to back up. Mods live in
+`~/Games/SurvivalHorrorClassics/mods/<re1|re2|re3|dc>/`, and the game reads an enabled mod's copy of a file in place
+of its own. Switching a mod off or removing it brings the original back. Resident Evil 3's files sit packed inside its
+`Rofs*.dat` archives; its mods are read through the archive reader itself, so those archives stay untouched too.
+
+Mods for these games come in every shape, and installing places each file by the game's own layout:
+
+- A tree like the game's (`Pl0/PLD/PL00.PLD`) goes in as it is.
+- A Classic REbirth-style folder relative to Resident Evil's `USA` folder (`ENEMY/EM1003.EMD`) goes under `USA`.
+- Bare files (`PL00.PLD`) are matched by name to the game's own (Resident Evil 3: to the files in its archives).
+- Resident Evil 2 asks whether a model is for Leon's game (`Pl0`), Claire's (`Pl1`) or both.
+- Readmes and pictures are kept in the mod's `_extras` folder.
+
+What can't run is kept but stays off, with the reason shown:
+
+- **DLL-based mods** (Classic REbirth itself, texture-pack loaders): Windows code; the port has its own renderer.
+- **Classic REbirth texture packs** (folders of PNGs): the port has no texture replacement.
+
+From a terminal: `"Survival Horror Classics Nightly.app/Contents/MacOS/SurvivalHorrorClassics" --install-mod re2
+<archive> [leon|claire|both]`, and `--list-mods <game>`.
 
 ## Controllers
 

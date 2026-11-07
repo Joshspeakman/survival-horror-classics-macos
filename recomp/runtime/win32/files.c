@@ -78,6 +78,8 @@ static void mods_init(void)
     }
     if (nmods) fprintf(stderr, "w32: %d mod%s on\n", nmods, nmods == 1 ? "" : "s");
 }
+int w32_mod_count(void) { mods_init(); return nmods; }                /* re_mods.c: Resident Evil 3's archives */
+const char *w32_mod_dir(int k) { mods_init(); return k >= 0 && k < nmods ? mod_dir[k] : ""; }
 /* Windows path -> host path. mode 0: read (overlay if present, else base); 1: create/write (overlay, copied up). */
 static int host_path(const char *win, char *out, size_t cap, int mode, const char *overlay, const char *layer)
 {
