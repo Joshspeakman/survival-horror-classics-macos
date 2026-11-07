@@ -1514,8 +1514,8 @@ RE_GAMES = ('re1', 're2', 're2c', 're3', 're3m', 'dc')
 # Resident Evil's cooperative tasks switch stacks by hand (save esp, load another task's, ret into it): the runtime
 # runs each task on a host thread of its own and hands over at these four points (runtime/win32/re1_tasks.c)
 RE2_OVERRIDES = {0x004124e0: 'Marni error report (logged)'}
-RE3_OVERRIDES = {'re3': {0x00507b00: 'archive open (mods: re_mods.c)', 0x00507b20: 'archive seek', 0x00507b40: 'archive read', 0x00507b60: 'archive close'},
-                 're3m': {0x00507b70: 'archive open (mods: re_mods.c)', 0x00507b90: 'archive seek', 0x00507bb0: 'archive read', 0x00507bd0: 'archive close'}}
+RE3_OVERRIDES = {e: {0x004214c0: 'archive reader open (mods: re_mods.c)', 0x00414f10: 'archive reader close', 0x00414f70: 'archive reader read',
+                     0x00414fd0: 'archive reader seek'} for e in ('re3', 're3m')}
 RE_HOOKS = {'re2': {0x004e1ecd: 'room jump (Test Aids, re_aids.c)'}, 're2c': {0x004e212d: 'room jump (Test Aids, re_aids.c)'},
             're3': {0x004684f8: 'room jump (Test Aids, re_aids.c)'}, 're3m': {0x004685d8: 'room jump (Test Aids, re_aids.c)'},
             're1': {0x00477da2: 'room jump (Test Aids, re_aids.c)'}}
