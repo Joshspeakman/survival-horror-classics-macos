@@ -12,10 +12,10 @@ no copy protection (the Steam releases are wrapped in Enigma and are not used).
 
 | Game | Program | State |
 |---|---|---|
-| Resident Evil | `ResidentEvil.exe` | Title, intro, the mansion; Direct3D 1 execute buffers, its own task system |
-| Resident Evil 2 | `LeonU.exe`, `ClaireU.exe` | Menus, movies, 3D at 30 fps; room backgrounds missing ([#1](../../issues/1)) |
+| Resident Evil | `ResidentEvil.exe` | Plays: title, intro, the mansion; Direct3D 1 execute buffers, its own task system |
+| Resident Evil 2 | `LeonU.exe`, `ClaireU.exe` | Plays: movies, menus, the city and the police station with their backgrounds, 3D at 30 fps |
 | Resident Evil 3: Nemesis | `ResidentEvil3.exe`, `RE3_MERCE.exe` | Plays: movies, menus, the city, 3D |
-| Dino Crisis | `DINO.exe` | Title, briefing, movies, the facility (its demo) |
+| Dino Crisis | `DINO.exe` | Plays: title, briefing, movies, the facility; its text and sprites keyed as on Windows |
 
 ## Install
 
@@ -36,14 +36,39 @@ originals are not changed.
 
 ## The launch window
 
-A card per game, Resident Evil 2's **Leon / Claire** and Resident Evil 3's **game / The Mercenaries** under it, and:
+A card per game showing its own title screen, over that title screen blurred behind frosted glass (captured from your
+copy at install; GOG's store banner from the game folder until then). Under the cards: Resident Evil 2's **Leon /
+Claire** and Resident Evil 3's **game / The Mercenaries**. Then:
 
-- **Options**: Display (full screen with Game Mode, or a window), Around the Notch, VSync, Texture Filtering,
-  Movies, Test Aids (Resident Evil 2: GOG's own invincibility and all-weapons switches).
+- **Options**: Display (full screen with Game Mode, or a window), Around the Notch (below it, or around it), VSync,
+  Texture Filtering, Movies, Test Aids.
 - **Saves**, **Game Files**, **Updates** (rebuilds the app from the branch it follows), **Quit**, **Play**.
 
-Controllers: the one in use last (Xbox, PlayStation, ...) is the games' joystick, through DirectInput (Resident Evil
-3, Dino Crisis) or winmm (Resident Evil, Resident Evil 2); Menu is Escape. The games' own controller settings map it.
+A controller works in the launch window: d-pad or left stick to choose a game (up/down: the version), A or Start to
+play, Y for Options (up/down a row, left/right/A to change it), B to quit or close Options. The keyboard does the same
+with the arrows, Return, Space and Escape.
+
+## Controllers
+
+Any controller macOS knows (Xbox, PlayStation, Switch Pro, MFi) is the games' joystick: DirectInput's gamepad for
+Resident Evil 3 and Dino Crisis, winmm's joystick for Resident Evil and Resident Evil 2. It is always there for the
+games, idle until a controller connects, so one turned on after the game started still works. The d-pad also drives
+the left stick (the games read the stick to walk and in menus); Menu is Escape. Buttons are mapped in each game's own
+controller settings, as on Windows.
+
+## Frame rate
+
+The four games run their world in fixed 30-frame steps (menus at 60); a higher rate would only make them run faster, so
+the frame rate stays the games' own. VSync paces the frames to the display (ProMotion included), with Game Mode in full
+screen.
+
+## Test Aids
+
+Options > Test Aids (or `SHC_AIDS=1`): the player's health is held full (Resident Evil, Resident Evil 2, Resident Evil
+3, The Mercenaries), and Resident Evil 2 starts with every weapon (GOG's own `-wepall`). For testing a room:
+`SHC_ROOM=<stage><room>` (as the room files are named, `101` = stage 1 room 01) makes the first room a new game loads
+that one (Resident Evil, 2 and 3), and `SHC_ROOM_AT=<n>` the n-th. `recomp/tools/re_qa.sh <folder>` is the QA pass: each
+version from the installed app through a new game and a set of rooms, with a contact sheet and a report.
 
 ## How it works
 

@@ -35,6 +35,12 @@ The runtime's DirectDraw 7 / Direct3D 7 is the base; the older interfaces are vt
 - Direct3D 1 (Resident Evil): execute buffers, interpreted at Execute (process vertices, triangles, lines and points,
   states, matrices, texture loads, branches).
 - A copy onto the primary surface covering at least a quarter of it presents it.
+- Textures not created in system memory report DDSCAPS_VIDEOMEMORY, as DirectDraw does: Resident Evil 2's renderer
+  (Capcom's Marni) reads each texture's caps back and draws room backgrounds only from textures in video memory.
+- A plain copy into a texture with a colour key is uploaded with that key (Dino Crisis fills its font and sprite pages
+  by Blt from system-memory surfaces that have none).
+- A screen-space draw whose texture coordinates stay inside the texture samples it clamped (Resident Evil's background
+  tiles start at u = -0.0001: wrapped and filtered, a dark column showed where two tiles meet).
 
 ## Movies (`amstream.inc`, `dshow.c`)
 
@@ -56,8 +62,19 @@ The runtime's DirectDraw 7 / Direct3D 7 is the base; the older interfaces are vt
   inside their function by the lifter; its cooperative tasks switch stacks by hand, so each task runs on a host
   thread of its own and the switch points hand over (`re1_tasks.c`).
 
+## Test aids (`recomp/runtime/win32/re_aids.c`)
+
+Health (held each frame by the host): Resident Evil 0xbe636c (s16; held at the most seen this game: Chris 140, Jill
+96), Resident Evil 2 0x994646 / Claire 0x9946c6 (200), Resident Evil 3 and The Mercenaries 0xa5ccc0 (its maximum at
+0xa5ccc2). Room jump: a hook just before each game's room loader reads the stage and room (Resident Evil 0x477da2,
+bytes 0xbe9820/1; Resident Evil 2 0x4e1ecd / Claire 0x4e212d, words 0x999114/6 and 0x999194/6; Resident Evil 3 0x4684f8
+/ The Mercenaries 0x4685d8, words 0xa61fa6/8, a jump to another stage loading that stage first as a door does). They
+were found by watching memory as the player is hurt and as rooms load (DS_SCRIPT dump/peek/pin, W32_FILELOG's return
+addresses) and confirmed by holding them.
+
 ## Logs (development)
 
 `DSR_LOG=1` (DirectDraw: surfaces, locks, texture handles, keys, clears, presents), `DSR_DRAWSTATE=1` (each new
-draw state), `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
+draw state; 2: by vertex alpha and texture size too), `DSR_DRAWSEQ=<s>,<n>` (+`_TEX=<id>`: draws in order), `DSR_BLTLOG=1`,
+`DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
 (+ `W32_TRACE_ONLY=ddraw,...`), `W32_SEHLOG=1`, `DS_TRACE_HOOKS=<addrs>` at build time with `DS_HOOKTRACE=1`.
