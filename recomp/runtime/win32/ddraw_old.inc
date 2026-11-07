@@ -102,6 +102,17 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
 {
     if (!nv) return;
     pre_draw(d, fvf & ~0x20u, flags);
+    {   /* development (DSR_DRAWSEQ=<seconds>,<count>): the draws in order from that time on (blend, texture, colour, place) */
+        static double at = -1; static int left; static struct timespec t0;
+        if (at < 0) { const char *e = getenv("DSR_DRAWSEQ"); at = 1e9; left = 0; if (e) sscanf(e, "%lf,%d", &at, &left); clock_gettime(CLOCK_MONOTONIC, &t0); }
+        if (left > 0) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+            static int only = -2; if (only == -2) { const char *e2 = getenv("DSR_DRAWSEQ_TEX"); only = e2 ? atoi(e2) : -1; }
+            if ((double)(t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9 >= at && (only < 0 || (d->tex[0] && (int)d->tex[0]->id == only))) { left--;
+                float f[8] = {0}; memcpy(f, v, 32); DSurface *tx = d->tex[0];
+                fprintf(stderr, "dsr: seq tex %u %ux%u blend %u (%u/%u) ck %u atest %u | diffuse %08x | prim %u n %u | v0 %.1f,%.1f uv %.4f,%.4f\n",
+                        tx ? tx->id : 0, tx ? U32(tx->desc, SD_WIDTH) : 0, tx ? U32(tx->desc, SD_HEIGHT) : 0, d->rs[27], d->rs[19], d->rs[20], d->old ? d->old->ck_enable : 0, d->rs[15],
+                        (fvf & 0x40) ? *(const uint32_t *)(v + 16) : 0, prim, nv, f[0], f[1], f[6], f[7]); } }
+    }
     {   /* development (DSR_DRAWSTATE=1): each new combination of a draw's texture and its blending and keying state */
         static int on = -1; static uint64_t seen[256]; static int ns;
         if (on < 0) on = getenv("DSR_DRAWSTATE") != 0;
@@ -118,12 +129,24 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
                 o ? o->ck_enable : 0, d->rs[27], d->rs[19], d->rs[20], o ? o->atest : d->rs[15], o ? o->aref : d->rs[24], o ? o->afunc : d->rs[25], o ? o->mapblend : 0, fvf, prim, nv); }
         }
     }
+    /* A screen-space draw whose texture coordinates all lie within the texture (a background tile, a sprite) samples it
+     * clamped: the same as wrapping inside, but a filtered edge does not pick up the far side of the texture (Resident
+     * Evil's backgrounds are 256-wide tiles that start at u = -0.0001: wrapped, the seam between tiles came out dark). */
+    int clamp = 0;
+    if ((fvf & 0xe) == 4 && d->tex[0] && (fvf & 0xf00) && !(fvf & 0x20)) {
+        uint32_t uo = 16 + ((fvf & 0x40) ? 4 : 0) + ((fvf & 0x80) ? 4 : 0), st = fvf_stride(fvf); float lo = 1e9f, hi = -1e9f;
+        for (uint32_t k = 0; k < nv; k++) { float uv[2]; memcpy(uv, v + (size_t)k * st + uo, 8); for (int j = 0; j < 2; j++) { if (uv[j] < lo) lo = uv[j]; if (uv[j] > hi) hi = uv[j]; } }
+        clamp = lo >= -0.01f && hi <= 1.01f && (d->tss[0][13] != 3 || d->tss[0][14] != 3);
+    }
+    uint32_t au = d->tss[0][13], av = d->tss[0][14];
+    if (clamp) { send_tss(d, 0, 13, 3); send_tss(d, 0, 14, 3); }
     if (fvf & 0x20) {
         uint32_t out_fvf = fvf & ~0x20u, so = fvf_stride(out_fvf), si = so + 4;
         uint8_t *t = malloc((size_t)so * nv); if (!t) return;
         for (uint32_t k = 0; k < nv; k++) { memcpy(t + k * so, v + k * si, 12); memcpy(t + k * so + 12, v + k * si + 16, so - 12); }
         emit_draw(prim, out_fvf, t, nv, (const uint8_t *)idx, ni); free(t);
     } else emit_draw(prim, fvf, v, nv, (const uint8_t *)idx, ni);
+    if (clamp) { send_tss(d, 0, 13, au); send_tss(d, 0, 14, av); }
 }
 static uint32_t fvf_stride_any(uint32_t fvf) { return fvf_stride(fvf & ~0x20u) + ((fvf & 0x20) ? 4 : 0); }
 
@@ -422,7 +445,10 @@ static void enum_tex_formats(Ctx *c, uint32_t cb, uint32_t ctx, int as_sd)
         {0x40, 16, 0xf800, 0x7e0, 0x1f, 0}, {0x40, 16, 0x7c00, 0x3e0, 0x1f, 0}, {0x41, 16, 0x7c00, 0x3e0, 0x1f, 0x8000},
         {0x41, 16, 0xf00, 0xf0, 0xf, 0xf000}, {0x41, 32, 0xff0000, 0xff00, 0xff, 0xff000000u}, {0x40, 32, 0xff0000, 0xff00, 0xff, 0} };
     uint32_t b = scratch(SD_BYTES);
-    for (size_t k = 0; k < sizeof f / sizeof *f; k++) {
+    size_t order[6] = {0, 1, 2, 3, 4, 5};
+    if (getenv("W32_TEXFMT_1555_FIRST")) { order[0] = 2; order[1] = 0; order[2] = 1; }   /* development */
+    for (size_t kk = 0; kk < sizeof f / sizeof *f; kk++) {
+        size_t k = order[kk];
         uint8_t *pf = GP(b) + (as_sd ? SD_PF : 0);
         memset(GP(b), 0, SD_BYTES);
         if (as_sd) { U32(GP(b), 0) = 108; U32(GP(b), SD_FLAGS) = DDSD_CAPS | DDSD_PIXELFORMAT; U32(GP(b), SD_CAPS) = DDSCAPS_TEXTURE; }
@@ -544,6 +570,8 @@ MD(dev1_CreateExecuteBuffer, 4)
     DExb *e = calloc(1, sizeof *e); e->ref = 1; e->size = size; e->mem = heap_alloc(w32_process_heap, 8, size + 16); U32(e->data, 0) = 48;
     e->g = make_iface(O_EXB, e); rt_w32(G_MEM, ARG(2), e->g); RET(DD_OK, 4); END
 /* the vertex records into the device's array of transformed vertices */
+static unsigned d_tex_w(DDevice *d) { return d->tex[0] ? U32(d->tex[0]->desc, SD_WIDTH) : 0; }
+static unsigned d_tex_h(DDevice *d) { return d->tex[0] ? U32(d->tex[0]->desc, SD_HEIGHT) : 0; }
 static void process_vertices(DDevice *me, DExb *e, uint32_t flags, uint32_t start, uint32_t dest, uint32_t count)
 {
     DOld1 *o1 = old1(me); uint32_t need = dest + count;
@@ -585,6 +613,15 @@ MD(dev1_Execute, 4)
         case 3: {                                                                /* TRIANGLE: v1 v2 v3 flags (WORDs) */
             if (cap < cnt * 3) { cap = cnt * 3; idx = realloc(idx, cap * 2); }
             for (uint32_t k = 0; k < cnt; k++) { memcpy(idx + k * 3, d + (size_t)k * sz, 6); }
+            {   /* development (DSR_VLOG=x0,x1): triangles with a vertex between screen x0 and x1 (the first 40) */
+                static int n_log; static float lx0 = -1, lx1 = -1; if (lx0 < 0) { const char *e = getenv("DSR_VLOG"); if (e) sscanf(e, "%f,%f", &lx0, &lx1); else lx0 = 1e9f; }
+                for (uint32_t k = 0; k < cnt * 3 && n_log < 40 && lx0 < 1e8f; k += 3) {
+                    int hit = 0; for (int j = 0; j < 3; j++) { float x; memcpy(&x, o1->tlv + (size_t)idx[k + j] * 32, 4); if (idx[k + j] < o1->ntlv && x >= lx0 && x <= lx1) hit = 1; }
+                    if (!hit) continue; n_log++; fprintf(stderr, "dsr: tri tex %ux%u:", d_tex_w(me), d_tex_h(me));
+                    for (int j = 0; j < 3; j++) { float f[8]; memcpy(f, o1->tlv + (size_t)idx[k + j] * 32, 32); fprintf(stderr, " (%.3f,%.3f uv %.5f,%.5f)", f[0], f[1], f[6], f[7]); }
+                    fprintf(stderr, "\n");
+                }
+            }
             draw_tl(me, 4, idx, cnt * 3); break; }
         case 2: {                                                                /* LINE */
             if (cap < cnt * 2) { cap = cnt * 2; idx = realloc(idx, cap * 2); }

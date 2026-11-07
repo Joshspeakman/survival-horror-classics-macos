@@ -580,6 +580,23 @@ static void present_if_frame(Ctx *c, DSurface *me, const int32_t *a)
         present(c, me);
     }
 }
+/* A plain copy into a texture with a colour key (Dino Crisis loads its sprite and font pages by Blt from system-memory
+ * surfaces that have none): the key belongs to the destination, so the pixels are copied as they are and uploaded again
+ * with it, as DirectDraw would test them against it when drawing. Without this the key's pixels kept the source's
+ * alpha and each glyph's black cell covered its neighbour. */
+static void upload_rect(DSurface *me, const int32_t *u);
+static void copy_into_keyed(DSurface *me, const int32_t *a, DSurface *src, const int32_t *b)
+{
+    uint32_t bpp = bpp_of(me->desc) / 8;
+    if (!me->has_ck || !(U32(me->desc, SD_CAPS) & DDSCAPS_TEXTURE) || src->gpu_dirty || src->is_rt || bpp_of(src->desc) / 8 != bpp || bpp == 0) return;
+    int32_t w = a[2] - a[0], h = a[3] - a[1];
+    if (w <= 0 || h <= 0 || w != b[2] - b[0] || h != b[3] - b[1]) return;
+    if (a[0] < 0 || a[1] < 0 || b[0] < 0 || b[1] < 0 || (uint32_t)a[2] > U32(me->desc, SD_WIDTH) || (uint32_t)a[3] > U32(me->desc, SD_HEIGHT) ||
+        (uint32_t)b[2] > U32(src->desc, SD_WIDTH) || (uint32_t)b[3] > U32(src->desc, SD_HEIGHT)) return;
+    for (int32_t y = 0; y < h; y++)
+        memmove(G_MEM + me->mem + (uint32_t)(a[1] + y) * (uint32_t)me->pitch + (uint32_t)a[0] * bpp, G_MEM + src->mem + (uint32_t)(b[1] + y) * (uint32_t)src->pitch + (uint32_t)b[0] * bpp, (size_t)w * bpp);
+    upload_rect(me, a);
+}
 M(s_Blt, 6) ME(DSurface, O_SURF)
     uint32_t dr = ARG(1), flags = ARG(4), fx = ARG(5); DSurface *src = obj(ARG(2), O_SURF); int32_t a[4], b[4];
     rect_or_full(me, dr, a);
@@ -587,6 +604,8 @@ M(s_Blt, 6) ME(DSurface, O_SURF)
     else if (flags & DDBLT_DEPTHFILL) emit_blt(me, a, 0, 0, flags, fx ? rt_r32(G_MEM, fx + 80) : 0);
     else if (src) {
         rect_or_full(src, ARG(3), b); emit_blt(me, a, src, b, flags, 0);
+        if (!(flags & (0x8000u | 0x10000u))) copy_into_keyed(me, a, src, b);   /* (not a keyed copy: DDBLT_KEYSRC, KEYSRCOVERRIDE) */
+        if (getenv("DSR_BLTLOG")) fprintf(stderr, "dsr: Blt %u (%d,%d-%d,%d) <- %u (%d,%d-%d,%d) flags %08x src key %d %04x\n", me->id, a[0], a[1], a[2], a[3], src->id, b[0], b[1], b[2], b[3], flags, src->has_ck, src->ck[0]);
         /* a copy into the primary surface is on screen at once (the movies show their frames this way, not by flipping):
            the whole picture copied over is the picture presented */
         if ((U32(me->desc, SD_CAPS) & DDSCAPS_PRIMARYSURFACE) && a[0] == 0 && a[1] == 0 && a[2] == (int32_t)U32(me->desc, SD_WIDTH) && a[3] == (int32_t)U32(me->desc, SD_HEIGHT) &&
@@ -600,6 +619,8 @@ M(s_BltFast, 6) ME(DSurface, O_SURF)
     rect_or_full(src, ARG(4), r);
     dr[0] = (int32_t)ARG(1); dr[1] = (int32_t)ARG(2); dr[2] = dr[0] + (r[2] - r[0]); dr[3] = dr[1] + (r[3] - r[1]);
     emit_blt(me, dr, src, r, ARG(5) | 0x80000000u, 0);
+    if (!(ARG(5) & 1)) copy_into_keyed(me, dr, src, r);                    /* (not DDBLTFAST_SRCCOLORKEY) */
+    if (getenv("DSR_BLTLOG")) fprintf(stderr, "dsr: BltFast %u at %d,%d <- %u (%d,%d-%d,%d) flags %08x src key %d %04x\n", me->id, dr[0], dr[1], src->id, r[0], r[1], r[2], r[3], ARG(5), src->has_ck, src->ck[0]);
     present_if_frame(c, me, dr);
     RET(DD_OK, 6);
 END
@@ -703,6 +724,18 @@ M(s_Unlock, 2) ME(DSurface, O_SURF)
         int32_t u[4];
         if (me->lock_has_rect) memcpy(u, me->lock_rect, 16); else { u[0] = 0; u[1] = 0; u[2] = (int32_t)U32(me->desc, SD_WIDTH); u[3] = (int32_t)U32(me->desc, SD_HEIGHT); }
         upload_rect(me, u);
+        {   /* development (DSR_TEXDUMP=<folder>): each texture as it is unlocked, as a PPM (surface id, unlock count) */
+            static const char *dir = (const char *)1; static unsigned n; if (dir == (const char *)1) dir = getenv("DSR_TEXDUMP");
+            uint32_t w = U32(me->desc, SD_WIDTH), h = U32(me->desc, SD_HEIGHT), bpp = bpp_of(me->desc) / 8;
+            if (dir && (U32(me->desc, SD_CAPS) & DDSCAPS_TEXTURE) && n < 400 && (bpp == 2 || bpp == 4)) {
+                char fp[1200]; snprintf(fp, sizeof fp, "%s/s%u-%u.ppm", dir, me->id, n++); FILE *f = fopen(fp, "wb");
+                if (f) { fprintf(f, "P6\n%u %u\n255\n", w, h);
+                    for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) { const uint8_t *q = G_MEM + me->mem + y * (uint32_t)me->pitch + x * bpp;
+                        uint32_t v = bpp == 2 ? (uint32_t)(q[0] | q[1] << 8) : (uint32_t)(q[0] | q[1] << 8 | q[2] << 16 | (uint32_t)q[3] << 24), c = bpp == 2 ? px_to_bgra(v, me->pk) : v;
+                        uint8_t rgb[3] = {(uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c}; fwrite(rgb, 1, 3, f); }
+                    fclose(f); }
+            }
+        }
     }
     RET(DD_OK, 2);
 END
