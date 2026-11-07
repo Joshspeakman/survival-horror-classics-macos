@@ -34,6 +34,11 @@
 #define RE_ROOM_HOOK 0x004e1ecdu
 #define RE_STAGE 0x00999114u
 #define RE_ROOM 0x00999116u
+#elif defined(RE1_EDITION)                         /* USA/STAGEs/ROOMsrrp.RDT; stage and room are bytes */
+#define RE_ROOM_HOOK 0x00477da2u
+#define RE_STAGE 0x00be9820u
+#define RE_ROOM 0x00be9821u
+#define RE_ROOM_BYTES 1
 #elif defined(RE3_EDITION)                         /* the room's name in the ROFS archives: Bio19/Data_j/rdt/RSRR.rdt */
 #ifdef RE3_MERCE
 #define RE_ROOM_HOOK 0x004685d8u
@@ -57,9 +62,18 @@ int re_hook(Ctx *c, uint32_t addr)
         const char *e = getenv("SHC_ROOM");
         unsigned stage = 0, room = 0;
         if (e && strlen(e) >= 3 && sscanf(e, "%1x%2x", &stage, &room) == 2 && stage >= 1) {
-            fprintf(stderr, "re: room jump: stage %u room %02x (was %u %02x)\n", stage, room, rt_r16(G_MEM, RE_STAGE) + 1, rt_r16(G_MEM, RE_ROOM));
-            int other = rt_r16(G_MEM, RE_STAGE) != stage - 1;
+#ifdef RE_ROOM_BYTES
+            uint32_t cur_stage = G_MEM[RE_STAGE], cur_room = G_MEM[RE_ROOM];
+#else
+            uint32_t cur_stage = rt_r16(G_MEM, RE_STAGE), cur_room = rt_r16(G_MEM, RE_ROOM);
+#endif
+            fprintf(stderr, "re: room jump: stage %u room %02x (was %u %02x)\n", stage, room, cur_stage + 1, cur_room);
+            int other = cur_stage != stage - 1;
+#ifdef RE_ROOM_BYTES
+            G_MEM[RE_STAGE] = (uint8_t)(stage - 1); G_MEM[RE_ROOM] = (uint8_t)room;
+#else
             rt_w16(G_MEM, RE_STAGE, stage - 1); rt_w16(G_MEM, RE_ROOM, room);
+#endif
 #ifdef RE_STAGE_LOAD
             if (other) {                                /* as a door to another stage does: its data, then the room */
                 Ctx save = *c; c->esp -= 4; rt_w32(G_MEM, c->esp, 0xffeff000u); rt_call(c, RE_STAGE_LOAD);
