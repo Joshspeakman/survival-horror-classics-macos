@@ -118,6 +118,9 @@ int rt_override(Ctx *c, uint32_t addr)
 #ifdef RE1_EDITION
     { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
 #endif
+#ifdef RE3_EDITION
+    { int re_mods_override(Ctx *, uint32_t); if (re_mods_override(c, addr)) return 1; }   /* re_mods.c: mods in Resident Evil 3's archives */
+#endif
 #if defined(RE2_EDITION) && !defined(RE2_CLAIRE)
     static int marni_log = -1; if (marni_log < 0) marni_log = getenv("W32_MARNILOG") != 0;
     if (addr == 0x004124e0u && marni_log) {             /* development (W32_MARNILOG=1): Marni's error reports, then as the game does */

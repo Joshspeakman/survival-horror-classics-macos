@@ -1,7 +1,7 @@
 /* Survival Horror Classics launch window: one app for the natively recompiled Resident Evil, Resident Evil 2,
  * Resident Evil 3: Nemesis and Dino Crisis (the player's own GOG copies). A card per game (its GOG icon, from the game's
  * folder at install time), the chosen game's versions under it (Resident Evil 2: Leon or Claire; Resident Evil 3: the
- * game or The Mercenaries), a row of tiles (Options, Saves, Game Files, Updates) and Quit / Play. The look is drawn
+ * game or The Mercenaries), a row of tiles (Options, Mods, Saves, Game Files, Updates) and Quit / Play. The look is drawn
  * here: a dark field, a slow red bloom behind the chosen card, typewriter captions.
  *
  * This is the app's executable (Contents/MacOS/SurvivalHorrorClassics). Play opens a fresh instance of the app that
@@ -12,6 +12,8 @@
  *   RE_NO_MOVIES=1, GTA_NO_MOVIES=1      the movies skipped (amstream.inc, dshow.c)
  *   DS_ARGS="..."                        the game's command line: Resident Evil 2's display mode (-mode0) and its GOG
  *                                        Test Aids (SHC_AIDS=1: re_aids.c; Resident Evil 2 also -wepall)
+ *   GTA_MODS=<folders>                   the game's enabled mods, first wins (the Mods window: horror_mods.m; the runtime
+ *                                        reads them in place of the game's files: files.c, re_mods.c)
  *   DS_LOG_FILE=<data>/<BIN>.log
  * The games stay where they were installed from (by default the Expansion Pak SD card): a game whose folder is on a
  * volume that is not mounted says so and does not play. Saves and settings: ~/Games/SurvivalHorrorClassics/<id>.
@@ -38,13 +40,18 @@ static NSString *home_dir(void) { return [NSHomeDirectory() stringByAppendingPat
 
 /* ---- the games and their versions ---- */
 typedef struct { const char *id, *label, *bin; } Version;
-typedef struct { const char *id, *title, *year, *tag; int nv; Version v[2]; } GameDef;
-static const GameDef GAMES[4] = {
-    {"re1", "RESIDENT EVIL", "1997", "Spencer Mansion", 1, {{"re1", "Resident Evil", "ResidentEvil"}}},
-    {"re2", "RESIDENT EVIL 2", "1999", "Raccoon City", 2, {{"re2", "Leon", "ResidentEvil2Leon"}, {"re2c", "Claire", "ResidentEvil2Claire"}}},
-    {"re3", "RESIDENT EVIL 3", "2000", "Nemesis", 2, {{"re3", "The Game", "ResidentEvil3"}, {"re3m", "The Mercenaries", "ResidentEvil3Mercenaries"}}},
-    {"dc", "DINO CRISIS", "2000", "Ibis Island", 1, {{"dc", "Dino Crisis", "DinoCrisis"}}},
+typedef struct { const char *id, *title, *year, *tag; int nv; Version v[2]; const char *name; int gamebanana; } GameDef;
+static const GameDef GAMES[4] = {   /* gamebanana: GameBanana's game, for the Mods window's browser (Dino Crisis has none) */
+    {"re1", "RESIDENT EVIL", "1997", "Spencer Mansion", 1, {{"re1", "Resident Evil", "ResidentEvil"}}, "Resident Evil", 13229},
+    {"re2", "RESIDENT EVIL 2", "1999", "Raccoon City", 2, {{"re2", "Leon", "ResidentEvil2Leon"}, {"re2c", "Claire", "ResidentEvil2Claire"}}, "Resident Evil 2", 8862},
+    {"re3", "RESIDENT EVIL 3", "2000", "Nemesis", 2, {{"re3", "The Game", "ResidentEvil3"}, {"re3m", "The Mercenaries", "ResidentEvil3Mercenaries"}}, "Resident Evil 3", 7006},
+    {"dc", "DINO CRISIS", "2000", "Ibis Island", 1, {{"dc", "Dino Crisis", "DinoCrisis"}}, "Dino Crisis", 0},
 };
+/* horror_mods.m: the Mods window */
+NSString *hmods_env(NSString *game);
+void hmods_counts(NSString *game, NSUInteger *installed, NSUInteger *on);
+void hmods_show(NSWindow *parent, NSString *title, NSString *game, int gamebanana, NSString *gameDir, NSString *prefer, void (^changed)(void));
+int hmods_cli(NSString *game, NSString *gameDir, NSString *archive, NSString *place);
 enum { NG = 4 };
 
 @interface Opt : NSObject
@@ -54,7 +61,8 @@ enum { NG = 4 };
 - (NSString *)value { return self.choices[self.index][0]; }
 @end
 
-enum { HIT_NONE = -1, HIT_PLAY = 1, HIT_QUIT, HIT_OPTIONS, HIT_SAVES, HIT_FILES, HIT_UPDATES, HIT_CARD = 100, HIT_VER = 200, HIT_ROW = 300 };
+enum { HIT_NONE = -1, HIT_PLAY = 1, HIT_QUIT, HIT_OPTIONS, HIT_MODS, HIT_SAVES, HIT_FILES, HIT_UPDATES, HIT_CARD = 100, HIT_VER = 200, HIT_ROW = 300 };
+enum { NTILES = 5 };   /* Options, Mods, Saves, Game Files, Updates: HIT_OPTIONS + k */
 @interface HView : NSView { @public NSInteger ver[NG]; }
 @property NSInteger game, hover; @property BOOL open; @property NSArray<Opt *> *opts;
 @property NSDictionary *installed; @property NSMutableDictionary *art, *backdrop, *soft, *blurred; @property CGFloat glow, fade; @property NSInteger prevGame; @property NSString *status;
@@ -114,7 +122,7 @@ static NSImage *frost(NSImage *img, CGFloat soft)
 - (BOOL)acceptsFirstResponder { return YES; }
 - (NSRect)cardRect:(NSInteger)k { CGFloat w = 200, gap = 22, x0 = (self.bounds.size.width - (4 * w + 3 * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 150, w, 250); }
 - (NSRect)verRect:(NSInteger)k of:(NSInteger)n { CGFloat w = 210, gap = 14, x0 = (self.bounds.size.width - (n * w + (n - 1) * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 430, w, 40); }
-- (NSRect)tileRect:(NSInteger)k { CGFloat w = 122, x0 = 40; return NSMakeRect(x0 + k * (w + 12), 520, w, 48); }
+- (NSRect)tileRect:(NSInteger)k { CGFloat w = 106, x0 = 40; return NSMakeRect(x0 + k * (w + 10), 520, w, 48); }
 - (NSRect)playRect { return NSMakeRect(self.bounds.size.width - 40 - 170, 516, 170, 56); }
 - (NSRect)quitRect { return NSMakeRect(self.bounds.size.width - 40 - 170 - 14 - 110, 516, 110, 56); }
 - (NSRect)panelRect { CGFloat h = 70 + 58 * (CGFloat)self.opts.count; return NSMakeRect(150, MAX(60, 300 - h / 2), self.bounds.size.width - 300, h); }
@@ -128,7 +136,7 @@ static NSImage *frost(NSImage *img, CGFloat soft)
     for (NSInteger k = 0; k < NG; k++) if (NSPointInRect(p, [self cardRect:k])) return HIT_CARD + k;
     const GameDef *d = &GAMES[self.game];
     if (d->nv > 1) for (NSInteger k = 0; k < d->nv; k++) if (NSPointInRect(p, [self verRect:k of:d->nv])) return HIT_VER + k;
-    for (NSInteger k = 0; k < 4; k++) if (NSPointInRect(p, [self tileRect:k])) return HIT_OPTIONS + k;
+    for (NSInteger k = 0; k < NTILES; k++) if (NSPointInRect(p, [self tileRect:k])) return HIT_OPTIONS + k;
     if (NSPointInRect(p, self.playRect)) return HIT_PLAY;
     if (NSPointInRect(p, self.quitRect)) return HIT_QUIT;
     return HIT_NONE;
@@ -141,7 +149,7 @@ static NSImage *frost(NSImage *img, CGFloat soft)
 - (void)mouseMoved:(NSEvent *)e { NSInteger h = [self hitAt:[self convertPoint:e.locationInWindow fromView:nil]]; if (h != self.hover) { self.hover = h; self.needsDisplay = YES; } }
 - (void)mouseDown:(NSEvent *)e { NSInteger h = [self hitAt:[self convertPoint:e.locationInWindow fromView:nil]]; if (h != HIT_NONE && self.act) self.act(h); }
 /* one step of navigation, from the keyboard or a controller: dx/dy a direction, or a button */
-enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS, NAV_PLAY };
+enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS, NAV_PLAY, NAV_MODS };
 - (void)nav:(int)n
 {
     if (!self.act) return;
@@ -157,6 +165,7 @@ enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS,
     else if ((n == NAV_UP || n == NAV_DOWN) && GAMES[self.game].nv > 1) self.act(HIT_VER + (self->ver[self.game] + (n == NAV_DOWN ? 1 : GAMES[self.game].nv - 1)) % GAMES[self.game].nv);
     else if (n == NAV_OK || n == NAV_PLAY) self.act(HIT_PLAY);
     else if (n == NAV_OPTIONS) { self.act(HIT_OPTIONS); if (self.open) { self.hover = HIT_ROW; self.needsDisplay = YES; } }
+    else if (n == NAV_MODS) self.act(HIT_MODS);
     else if (n == NAV_BACK) self.act(HIT_QUIT);
 }
 - (void)keyDown:(NSEvent *)e
@@ -164,6 +173,7 @@ enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS,
     unichar ch = e.charactersIgnoringModifiers.length ? [e.charactersIgnoringModifiers characterAtIndex:0] : 0;
     if (ch == 27) { if (self.act) self.act(self.open ? HIT_OPTIONS : HIT_QUIT); return; }
     if (ch == '\r' || ch == 3) { if (self.act && !self.open) self.act(HIT_PLAY); return; }
+    if ((ch == 'm' || ch == 'M') && !self.open) { if (self.act) self.act(HIT_MODS); return; }
     if (self.open && (ch == NSUpArrowFunctionKey || ch == NSDownArrowFunctionKey || ch == NSLeftArrowFunctionKey || ch == NSRightArrowFunctionKey || ch == ' ')) {
         [self nav:ch == NSUpArrowFunctionKey ? NAV_UP : ch == NSDownArrowFunctionKey ? NAV_DOWN : ch == NSLeftArrowFunctionKey ? NAV_LEFT : ch == ' ' ? NAV_OK : NAV_RIGHT]; return; }
     if (!self.open && (ch == NSLeftArrowFunctionKey || ch == NSRightArrowFunctionKey)) { if (self.act) self.act(HIT_CARD + (self.game + (ch == NSLeftArrowFunctionKey ? NG - 1 : 1)) % NG); return; }
@@ -223,11 +233,16 @@ enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS,
     }
     else text(@"", type(12, NO), ash(), NSZeroRect, NSTextAlignmentCenter);
     /* tiles and buttons */
-    NSArray *tiles = @[@"Options", @"Saves", @"Game Files", @"Updates"];
-    for (NSInteger k = 0; k < 4; k++) {
+    NSArray *tiles = @[@"Options", @"Mods", @"Saves", @"Game Files", @"Updates"];
+    NSUInteger nmods = 0, onmods = 0; hmods_counts(@(GAMES[self.game].id), &nmods, &onmods);
+    for (NSInteger k = 0; k < NTILES; k++) {
         NSRect r = [self tileRect:k]; BOOL hov = self.hover == HIT_OPTIONS + k || (k == 0 && self.open);
         [self glass:r radius:8 tint:rgb(1, 1, 1, hov ? 0.11 : 0.06) edge:hov ? blood() : nil width:1];
-        text(tiles[k], type(14, YES), paper(), NSMakeRect(r.origin.x, r.origin.y + 14, r.size.width, 20), NSTextAlignmentCenter);
+        if (HIT_OPTIONS + k == HIT_MODS && nmods) {   /* how many of the game's mods are on */
+            text(tiles[k], type(14, YES), paper(), NSMakeRect(r.origin.x, r.origin.y + 6, r.size.width, 20), NSTextAlignmentCenter);
+            text([NSString stringWithFormat:@"%lu of %lu on", (unsigned long)onmods, (unsigned long)nmods], type(11, NO), onmods ? blood() : ash(),
+                 NSMakeRect(r.origin.x, r.origin.y + 27, r.size.width, 16), NSTextAlignmentCenter);
+        } else text(tiles[k], type(14, YES), paper(), NSMakeRect(r.origin.x, r.origin.y + 14, r.size.width, 20), NSTextAlignmentCenter);
     }
     NSRect q = self.quitRect, p = self.playRect;
     [self glass:q radius:8 tint:rgb(1, 1, 1, self.hover == HIT_QUIT ? 0.11 : 0.06) edge:nil width:1];
@@ -318,7 +333,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     [w makeKeyAndOrderFront:nil]; [w makeFirstResponder:v]; [NSApp activateIgnoringOtherApps:YES];
     __block double t = 0;
     /* a controller: d-pad or left stick to move (held: repeats), A / Start to play (A changes an option), B back or quit,
-     * Y the options */
+     * Y the options, X the mods */
     __block int held = 0; __block double next = 0; __block uint32_t was = 0;
     [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
     self.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 30 repeats:YES block:^(NSTimer *tm) { t += 1.0 / 30; v.glow = 0.5 + 0.5 * sin(t * 1.3);
@@ -329,11 +344,14 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                     : g.dpad.up.pressed || y > 0.6f ? NAV_UP : g.dpad.down.pressed || y < -0.6f ? NAV_DOWN : 0;
             if (dir != held) { held = dir; next = t + 0.38; if (dir) [v nav:dir]; }
             else if (dir && t >= next) { next = t + 0.14; [v nav:dir]; }
-            uint32_t now = (g.buttonA.pressed ? 1u : 0) | (g.buttonB.pressed ? 2u : 0) | (g.buttonY.pressed ? 4u : 0) | (g.buttonMenu.pressed ? 8u : 0), down = now & ~was; was = now;
+            uint32_t now = (g.buttonA.pressed ? 1u : 0) | (g.buttonB.pressed ? 2u : 0) | (g.buttonY.pressed ? 4u : 0) | (g.buttonMenu.pressed ? 8u : 0) | (g.buttonX.pressed ? 16u : 0),
+                     down = now & ~was; was = now;
             if (down & 1) [v nav:NAV_OK]; else if (down & 2) [v nav:NAV_BACK]; else if (down & 4) [v nav:NAV_OPTIONS]; else if (down & 8) [v nav:v.open ? NAV_BACK : NAV_PLAY];
+            else if ((down & 16) && !v.open) [v nav:NAV_MODS];
         } else { held = 0; was = 0; }
         if (v.fade < 1) { v.fade = MIN(1, v.fade + 1.0 / 30 / 0.4); v.needsDisplay = YES; } else [v setNeedsDisplayInRect:NSInsetRect([v cardRect:v.game], -260, -140)]; }];
     if (getenv("SHC_LAUNCHER_PLAY")) [self hit:HIT_PLAY];
+    if (getenv("SHC_LAUNCHER_MODS")) [self hit:HIT_MODS];                                         /* development: the Mods window */
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
 - (void)hit:(NSInteger)h
@@ -344,6 +362,12 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     else if (h >= HIT_CARD) { if (v.game != h - HIT_CARD) { v.prevGame = v.game; v.fade = 0; } v.game = h - HIT_CARD; }
     else switch (h) {
         case HIT_OPTIONS: v.open = !v.open; break;
+        case HIT_MODS: { NSDictionary *e = [v entry:v.game]; const GameDef *d = &GAMES[v.game];
+                         if (!e) { v.status = @"Not installed"; break; }
+                         if (!volume_ok(e[@"game"])) { v.status = [NSString stringWithFormat:@"Mods are placed by the game's own files: connect %@ first", volume_name(e[@"game"]) ?: @"its drive"]; break; }
+                         hmods_show(self.window, @(d->name), @(d->id), d->gamebanana, e[@"game"], !strcmp([v version:v.game]->id, "re2c") ? @"claire" : @"leon",
+                                    ^{ v.needsDisplay = YES; });
+                         break; }
         case HIT_QUIT: [self save]; [NSApp terminate:nil]; return;
         case HIT_SAVES: { NSDictionary *e = [v entry:v.game]; NSString *d = e[@"data"] ?: home_dir();
                           [[NSFileManager defaultManager] createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
@@ -386,6 +410,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                                    @"DSR_ANISO": env[@"aniso"], @"DS_LOG_FILE": log, @"DS_ARGS": [args componentsJoinedByString:@" "]} mutableCopy];
     if ([env[@"movies"] isEqual:@"off"]) { genv[@"RE_NO_MOVIES"] = @"1"; genv[@"GTA_NO_MOVIES"] = @"1"; }
     if ([env[@"aids"] isEqual:@"on"]) genv[@"SHC_AIDS"] = @"1";                                         /* re_aids.c: health held at its most */
+    NSString *mods = hmods_env(@(GAMES[v.game].id)); if (mods.length) genv[@"GTA_MODS"] = mods;        /* the enabled mods (files.c, re_mods.c) */
     if (getenv("SHC_LAUNCHER_DRY")) {
         for (NSString *k in [genv.allKeys sortedArrayUsingSelector:@selector(compare:)]) printf("%s=%s\n", k.UTF8String, [genv[k] UTF8String]);
         printf("'%s' --exe '%s' --game '%s' --data '%s'\n", bin.UTF8String, exe.UTF8String, [e[@"game"] UTF8String], data.UTF8String); fflush(stdout); exit(0);
@@ -418,10 +443,23 @@ static void exec_game(void)
     execv(argv[0], (char *const *)argv);
     fprintf(stderr, "Survival Horror Classics: %s did not start: %s\n", argv[0], strerror(errno));
 }
+/* --install-mod <re1|re2|re3|dc> <archive> [leon|claire|both], --list-mods <game>: the Mods window's installer, from a
+ * terminal (the game's folder from games.plist) */
+static int mods_cli(int argc, const char **argv)
+{
+    NSString *game = argc > 2 ? @(argv[2]) : @"", *dir = nil;
+    NSDictionary *inst = [NSDictionary dictionaryWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"games.plist"]];
+    for (int k = 0; k < NG; k++) if ([game isEqualToString:@(GAMES[k].id)]) dir = inst[@(GAMES[k].v[0].id)][@"game"];
+    if (!dir) { fprintf(stderr, "usage: %s --install-mod <re1|re2|re3|dc> <archive> [leon|claire|both] | --list-mods <game> (the game must be installed)\n", argv[0]); return 2; }
+    if (!strcmp(argv[1], "--list-mods")) return hmods_cli(game, dir, nil, nil);
+    if (argc < 4) { fprintf(stderr, "--install-mod: which archive?\n"); return 2; }
+    if (!volume_ok(dir)) { fprintf(stderr, "the game's folder isn't reachable: %s\n", dir.UTF8String); return 1; }
+    return hmods_cli(game, dir, @(argv[3]), argc > 4 ? @(argv[4]) : nil);
+}
 int main(int argc, const char **argv)
 {
-    (void)argc; (void)argv;
     if (getenv("SHC_PLAY_BIN")) { exec_game(); return 1; }
+    if (argc > 1 && (!strcmp(argv[1], "--install-mod") || !strcmp(argv[1], "--list-mods"))) { @autoreleasepool { return mods_cli(argc, argv); } }
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication]; app.activationPolicy = NSApplicationActivationPolicyRegular;
         Launcher *l = [Launcher new]; app.delegate = l; [app run];

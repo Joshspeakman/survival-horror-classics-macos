@@ -72,9 +72,27 @@ bytes 0xbe9820/1; Resident Evil 2 0x4e1ecd / Claire 0x4e212d, words 0x999114/6 a
 were found by watching memory as the player is hurt and as rooms load (DS_SCRIPT dump/peek/pin, W32_FILELOG's return
 addresses) and confirmed by holding them.
 
+## Mods (`recomp/host/horror_mods.m`, `files.c`, `re_mods.c`)
+
+The launcher passes the enabled mods' folders, first wins, in `GTA_MODS` (the shared runtime's name for it). Resident
+Evil, Resident Evil 2 and Dino Crisis open loose files with `CreateFileA` under the game folder. The file layer looks
+for each one in the mods before the game folder, any case (`files.c`, as for the GTA port). Writes still go to the
+overlay in the data folder.
+
+Resident Evil 3 reads everything through four functions on its archive reader (the object at 0x5349dc): open(name),
+seek, read and close, at 0x507b00/20/40/60 (The Mercenaries 0x507b70/90/b0/d0). They are cdecl, return in eax, and
+the game's own handles are 0. These functions are taken over (`re_mods.c`, `lift.py` RE3_OVERRIDES). A name the
+enabled mods have (`/data/pld/pl00.pld`, below an optional `bio19/`) opens the mod's file with a handle of 0x4d4f0000
++ slot, which seek, read and close then serve as plain bytes, as the game's reader returns an entry once unpacked.
+Everything else goes to the game's reader.
+
+The installer reads each `Rofs<n>.dat` directory to know where a bare file goes. The header holds the folder name
+(`DATA`, `PLD`), then at 8 × its offset comes the directory: a count, then per file its offset / 8, size and name. A
+new game's requests: `W32_ROFSLOG=1`.
+
 ## Logs (development)
 
 `DSR_LOG=1` (DirectDraw: surfaces, locks, texture handles, keys, clears, presents), `DSR_DRAWSTATE=1` (each new
 draw state; 2: by vertex alpha and texture size too), `DSR_DRAWSEQ=<s>,<n>` (+`_TEX=<id>`: draws in order), `DSR_BLTLOG=1`,
-`DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
+`DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_ROFSLOG=1` (Resident Evil 3's archive reads and mod files), `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
 (+ `W32_TRACE_ONLY=ddraw,...`), `W32_SEHLOG=1`, `DS_TRACE_HOOKS=<addrs>` at build time with `DS_HOOKTRACE=1`.

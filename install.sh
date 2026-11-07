@@ -78,7 +78,7 @@ done
 STAGE="$(mktemp -d "$APPS/.shc.XXXXXX" 2>/dev/null || { mkdir -p "$APPS"; mktemp -d "$APPS/.shc.XXXXXX"; })/$NAME.app"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/art"
 OLD="$A/Contents/Resources/games.plist"
-clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -framework CoreImage -framework GameController -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m"
+clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -framework CoreImage -framework GameController -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m" "$HERE/recomp/host/horror_mods.m"
 U_BUILT="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 G="$STAGE/Contents/Resources/games.plist"; plutil -create xml1 "$G"
 INSTALLED=""
