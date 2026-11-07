@@ -70,8 +70,16 @@ def code_range(pe):
         return lo, hi, bytes(buf)
     if not is_dll and t and not pe.section('_TEXT') and not pe.section('.rld'):
         # as far as the file's data goes: GOG's fixes to the Resident Evil games and Dino Crisis are code caves past
-        # .text's VirtualSize (the rest of its last page, which Windows maps), jumped to from the patched game code
-        n = max(t[2], t[4]); return t[1], t[1] + n, pe.bytes_at(t[1], n)
+        # .text's VirtualSize (the rest of its last page, which Windows maps), jumped to from the patched game code;
+        # in Dino Crisis also in .rdata, which GOG made executable. Every executable section, gaps filled with int3.
+        ex = [s for s in pe.sections if s[5] & 0x20000000 and s[0] != '.bind']
+        if len(ex) <= 1:
+            n = max(t[2], t[4]); return t[1], t[1] + n, pe.bytes_at(t[1], n)
+        lo, hi = min(s[1] for s in ex), max(s[1] + max(s[2], s[4]) for s in ex)
+        buf = bytearray(b'\xcc' * (hi - lo))
+        for s in ex:
+            b = pe.bytes_at(s[1], max(s[2], s[4])); buf[s[1] - lo:s[1] - lo + len(b)] = b
+        return lo, hi, bytes(buf)
     if not is_dll and not pe.section('.rld'):
         # Delta Force: Watcom's code section is AUTO; DF2 adds MASM's _text and _TEXT after .text. Every executable
         # section but the Steam wrapper's .bind, gaps filled with int3.
