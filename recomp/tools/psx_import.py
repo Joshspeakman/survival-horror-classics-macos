@@ -13,9 +13,10 @@ nothing from a disc is part of the project.
       mix stay as they were. A match is confirmed on the waveform itself (above 0.9); PC clips with none keep the
       PC's (reported).
 
-  psx_import.py movies re1 <disc .cue>[,<another disc .cue>] <game folder> <mod folder> [--report <file>]
-      The disc's movies (MDEC, 15 fps, 37.8 kHz sound) in place of the PC's (Resident Evil: Cinepak, 10 fps, 22 kHz),
-      each converted to MPEG-1 (what the port's player decodes; 30 fps, each frame shown twice) as "<PC movie>.mpg"
+  psx_import.py movies <re1|re2|re3|dc> <disc .cue>[,<another disc .cue>] <game folder> <mod folder> [--report <file>]
+      The disc's movies (MDEC, 37.8 kHz sound) in place of the PC's (Resident Evil: Cinepak, 10 fps, 22 kHz), each at its
+      real frame rate (frames over playing time; ffmpeg takes every STR for 15 fps, and Resident Evil 2's and Dino
+      Crisis's are 30), converted to MPEG-1 (what the port's player decodes; 30 fps) as "<PC movie>.mpg"
       below <mod folder>, which the port plays in its place (amstream.inc, dshow.c). The discs are tried in the order
       given (Resident Evil: the Ultimate Director's Cut first, for its uncut colour opening and endings, then the
       original release for the staff rolls it lacks). Each pairing is checked frame by frame against the PC's movie
@@ -220,17 +221,44 @@ def fine_env(a, rate):
 
 # the PC's movies and the disc's names for them (Resident Evil: the US PC names its opening and two endings by region)
 MOVIES = {
-    're1': {'pc': 'USA/Movie', 'ext': '.avi', 'disc_dirs': ('PSXUSA/ZMOVIE/', 'PSX/MOVIE/'),
+    're1': {'pc': [('USA/Movie', '.avi')], 'disc_dirs': ('PSXUSA/ZMOVIE/', 'PSX/MOVIE/'), 'on': True,
+            'note': '15 fps, 37.8 kHz sound (the PC: 10 fps Cinepak); the uncut colour cuts where a disc has them',
             'names': {'pu': 'pj', 'ou': 'oj', 'eu4': 'ed4', 'eu5': 'ed5'},
             'keep': ('staf_r', 'stfc_r', 'stfj_r', 'stfz_r')},   # the PC's staff rolls carry the credits in the picture;
                                                                  # the PlayStation drew them over its rolls in the game
+    're2': {'pc': [('Pl0/Zmovie', '.bin'), ('Pl1/Zmovie', '.bin'), ('Zmovie', '.bin')], 'disc_dirs': ('PL0/ZMOVIE/', 'PL1/ZMOVIE/', 'ZMOVIE/'),
+            'names': {'r704le': 'r704l', 'r704ce': 'r704c', 'titlele': 'titlel', 'titlece': 'titlec'}, 'keep': ('staffe',), 'on': False,
+            'note': 'the PlayStation encode, 30 fps like the PC\'s, a touch darker, 37.8 kHz sound (the PC: Indeo 5); off: switch on to compare'},
+    're3': {'pc': [('zmovie', '.dat')], 'disc_dirs': ('CD_DATA/ZMOVIE/',), 'on': False,
+            'note': 'the PlayStation encode at 15 fps with its 37.8 kHz sound (the PC: the same frames, MPEG-1); off: switch on to compare'},
+    'dc':  {'pc': [('Movie', '.dat')], 'disc_dirs': ('PSX/MOVIE/',), 'on': False,
+            'names': {'e_op': 'opening', 'e_ed1': 'end1', 'e_ed2': 'end2', 'e_ed3': 'end3', 'e_maku': 'maku'},
+            'keep': ('staff',),                                  # its credits are in the picture (the PlayStation drew them)
+            'note': 'the PlayStation movies: 320x160 at 15 fps (the PC: 640x480); off: switch on to compare'},
 }
 
-def frames(path, fmt=None, fps=4):
-    """a movie as grey 32x24 frames, fps a second: an array (frames, 768)"""
-    args = [FFMPEG, '-v', 'error'] + (['-f', fmt] if fmt else []) + ['-i', path, '-vf', f'fps={fps},scale=32:24,format=gray', '-f', 'rawvideo', '-']
-    r = subprocess.run(args, capture_output=True); n = len(r.stdout) // 768
-    return np.frombuffer(r.stdout[:n * 768], np.uint8).astype(np.float32).reshape(n, 768)
+def str_rate(path, sectors):
+    """a PlayStation movie's real frame rate: its frames over its playing time (the disc streams 150 sectors a second);
+    ffmpeg takes every STR for 15 fps, and Resident Evil 2's and Dino Crisis's are 30"""
+    r = subprocess.run([FFMPEG[:-6] + 'ffprobe' if FFMPEG.endswith('ffmpeg') else 'ffprobe', '-v', 'error', '-f', 'psxstr', '-select_streams', 'v:0',
+                        '-count_packets', '-show_entries', 'stream=nb_read_packets', '-of', 'csv=p=0', path], capture_output=True, text=True)
+    try: n = int(r.stdout.strip().split(',')[0])
+    except ValueError: return 15.0
+    secs = sectors / 150.0
+    return round(n / secs, 3) if secs > 0 and n > 0 else 15.0
+
+def frames(path, fmt=None, fps=4, rate=None):
+    """a movie as grey 32x24 frames, fps a second: an array (frames, 768); rate: the input's real frame rate. Black
+    borders (a letterbox inside a 640x480 frame, say) are trimmed first, so two cuts of a movie framed differently compare"""
+    args = [FFMPEG, '-v', 'error'] + (['-f', fmt] if fmt else []) + (['-r', str(rate)] if rate else []) + ['-i', path,
+            '-vf', f'fps={fps},scale=96:72,format=gray', '-f', 'rawvideo', '-']
+    r = subprocess.run(args, capture_output=True); n = len(r.stdout) // (96 * 72)
+    if not n: return np.zeros((0, 768), np.float32)
+    m = np.frombuffer(r.stdout[:n * 96 * 72], np.uint8).astype(np.float32).reshape(n, 72, 96)
+    avg = m.mean(0); rows = np.where(avg.mean(1) > 10)[0]; cols = np.where(avg.mean(0) > 10)[0]
+    if len(rows) > 8 and len(cols) > 8: m = m[:, rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+    ys = np.linspace(0, m.shape[1] - 1, 24).astype(int); xs = np.linspace(0, m.shape[2] - 1, 32).astype(int)
+    return m[:, ys][:, :, xs].reshape(n, 768)
 
 def colour(path, fmt=None):
     """how colourful a movie is: the mean chroma distance from grey (0 for a black-and-white one), from 2 frames a second"""
@@ -260,13 +288,15 @@ def duration(path, fmt=None):
     except ValueError: return 0.0
 
 def movies(game, cues, game_dir, mod, report=None):
-    g = MOVIES[game]; d = find_ci(game_dir, g['pc']); lines = []
-    pcs = sorted(n for n in os.listdir(d) if n.lower().endswith(g['ext']))
+    g = MOVIES[game]; lines = []; pcs = []
+    for folder, ext in g['pc']:
+        d = find_ci(game_dir, folder)
+        if d: pcs += [(os.path.join(d, n), f'{folder}/{n}', ext) for n in sorted(os.listdir(d)) if n.lower().endswith(ext)]
     discs = [psx_disc.Disc(c) for c in cues.split(',')]
     try:
         tables = [{p.upper(): (p, lba, size) for p, lba, size, xa in psx_disc.walk(dd)} for dd in discs]
-        for name in pcs:
-            stem = name[:-len(g['ext'])].lower(); want = g['names'].get(stem, stem).upper()
+        for pc_path, rel, ext in pcs:
+            name = os.path.basename(rel); stem = name[:-len(ext)].lower(); want = g.get('names', {}).get(stem, stem).upper()
             if stem in g.get('keep', ()): lines.append(f'  -    {name}: the PC\'s (kept)'); continue
             src = None
             for dd, t in zip(discs, tables):
@@ -283,18 +313,19 @@ def movies(game, cues, game_dir, mod, report=None):
                     tmp.write(sec)
                 raw = tmp.name
             try:
-                pc_path = os.path.join(d, name); dpc = duration(pc_path); dps = (size // 2048) / 150.0
-                score = same_scene(frames(pc_path), frames(raw, 'psxstr'))
+                dpc = duration(pc_path); dps = (size // 2048) / 150.0
+                rate = str_rate(raw, size // 2048)
+                score = same_scene(frames(pc_path), frames(raw, 'psxstr', rate=rate))
                 if colour(pc_path) > 6 and colour(raw, 'psxstr') < 2:          # a black-and-white cut of a colour movie
                     lines.append(f'  -    {name}: {path} is in black and white: kept'); continue
                 if score < 0.6:
                     lines.append(f'  -    {name}: {os.path.basename(cues.split(",")[discs.index(dd)])} {path} looks different ({score:.2f}): kept'); continue
-                out = os.path.join(mod, *g['pc'].lower().split('/'), name.lower() + '.mpg'); os.makedirs(os.path.dirname(out), exist_ok=True)
-                r = subprocess.run([FFMPEG, '-nostdin', '-v', 'error', '-y', '-f', 'psxstr', '-i', raw, '-c:v', 'mpeg1video', '-q:v', '2', '-r', '30',
+                out = os.path.join(mod, *rel.lower().split('/')) + '.mpg'; os.makedirs(os.path.dirname(out), exist_ok=True)
+                r = subprocess.run([FFMPEG, '-nostdin', '-v', 'error', '-y', '-f', 'psxstr', '-r', str(rate), '-i', raw, '-c:v', 'mpeg1video', '-q:v', '2', '-r', '30',
                                     '-c:a', 'mp2', '-b:a', '224k', '-ar', '44100', '-f', 'mpeg', out + '.part'], capture_output=True)
                 if r.returncode: lines.append(f'  -    {name}: conversion failed: {r.stderr.decode()[-200:]}'); continue
                 os.replace(out + '.part', out)
-                lines.append(f'{score:.2f}  {name}  <-  {path} ({dps:.1f} s; PC {dpc:.1f} s)')
+                lines.append(f'{score:.2f}  {name}  <-  {path} ({dps:.1f} s at {rate:g} fps; PC {dpc:.1f} s)')
             finally: os.unlink(raw)
     finally:
         for dd in discs: dd.close()
@@ -418,9 +449,9 @@ def restore(game, spec, game_dir, mods_root, app=None):
         nm = sum(1 for _, _, fs in os.walk(tmp) for f in fs if f.endswith('.mpg')) if os.path.isdir(tmp) else 0
         if nm:
             shutil.rmtree(folder_m, ignore_errors=True); os.replace(tmp, folder_m)
-            entries.append({'name': 'PlayStation movies (your disc)', 'folder': 'playstation-movies', 'kind': 'files', 'enabled': True, 'game': game,
+            entries.append({'name': 'PlayStation movies (your disc)', 'folder': 'playstation-movies', 'kind': 'files', 'enabled': MOVIES[game]['on'], 'game': game,
                             'source': ', '.join(os.path.basename(p) for p in order),
-                            'note': f'{nm} movies from your PlayStation discs (15 fps, 37.8 kHz sound; the uncut colour cuts where a disc has them)'})
+                            'note': f'{nm} movies from your PlayStation discs: {MOVIES[game]["note"]}'})
         else: shutil.rmtree(tmp, ignore_errors=True)
     if not entries: say('Nothing from these discs matched the game.'); return 1
     index_put(mods_root, game, entries)
