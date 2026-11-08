@@ -113,10 +113,25 @@ new game's requests: `W32_ROFSLOG=1`.
   (`df_imports.c`), so a mod's `.SAP` can hold plain PCM.
 - **Movie lookups** (`amstream.inc`, `dshow.c`, the MCI device) try `<file>.mpg` through the file layer, so mods can
   supply movies.
+- **Dino Crisis's music never played** before 2026-11-07. Its music player streams each `Sound/BGM` track through a
+  3-second DirectSound buffer, refilled when the play cursor passes the positions it registers through
+  `IDirectSoundNotify` (17 of them). The runtime had no such interface, so the open failed (`E_NOINTERFACE`) and the
+  game played no music at all. `dsound.c` now gives every secondary buffer an `IDirectSoundNotify` (the object's fourth
+  interface, +24): the mixer sets each event as the play cursor passes its offset, and the stop ones on `Stop` or at
+  a one-shot buffer's end. A dump of the played stream (`W32_DSDUMP`) matches the file sample for sample, through
+  the loop.
+- **Dino Crisis's loop points** are in its music table (`DINO.exe` 0x625448: 16-byte rows of id, flags, name, loop
+  point; flags 0x08 once, 0x0a loop the whole file, 0x2a loop from the point), in sample frames of the PC's 22050 Hz
+  file. The player turns them into a byte offset with the file's own format (0x4049a9). A mod at another rate would
+  loop in the wrong place, so `re_mods.c` takes over the game's first sound-table setup (0x4043e0, `lift.py`) and
+  scales the loop point of each track a mod replaces to the mod file's rate. `W32_DC_MUSIC_AS=mf_16=me_00SL`
+  (development) plays the second track where the game plays the first, to hear a loop early on.
+- **Sound buffers**: up to 4096 at once (`NBUF`). Dino Crisis duplicates a buffer for every effect it plays and
+  frees them with the room; a long stretch held about 800, past the old 512, after which new sounds failed.
 
 ## Logs (development)
 
 `DSR_LOG=1` (DirectDraw: surfaces, locks, texture handles, keys, clears, presents), `DSR_DRAWSTATE=1` (each new
 draw state; 2: by vertex alpha and texture size too), `DSR_DRAWSEQ=<s>,<n>` (+`_TEX=<id>`: draws in order), `DSR_BLTLOG=1`,
-`DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_ROFSLOG=1` (Resident Evil 3's archive reads and mod files), `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
+`DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_ROFSLOG=1` (Resident Evil 3's archive reads and mod files), `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `W32_DSLOG=1` (DirectSound buffers and notifications), `W32_DSDUMP=<folder>` (each buffer as played), `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
 (+ `W32_TRACE_ONLY=ddraw,...`), `W32_SEHLOG=1`, `DS_TRACE_HOOKS=<addrs>` at build time with `DS_HOOKTRACE=1`.

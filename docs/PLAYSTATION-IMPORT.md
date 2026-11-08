@@ -1,27 +1,46 @@
 # Plan: PlayStation content from your own discs
 
-**Status (2026-11-07):** done and in the Mods window as **Restore from Disc…** (`recomp/tools/psx_import.py restore`,
-`psx_disc.py`):
+**Status (2026-11-07):** done, in the Mods window as **Restore from Disc…** (`recomp/tools/psx_import.py restore`,
+`psx_disc.py`, `psx_seq.c`). Each mod's line in the list says how many files it replaces.
 
-- **Voices, all four games.** Lines confirmed on the waveform: Resident Evil 487 of 563, Resident Evil 2 569 of 599,
-  Resident Evil 3 358 of 441, Dino Crisis 554 of 676.
-- **Movies, Resident Evil.** 21 movies, from the Ultimate Director's Cut (uncut, colour) and the original release.
+| | Voices | Music | Sound effects | Movies |
+|---|---|---|---|---|
+| Resident Evil | 487 of 563 | stays the PC's (below) | 120 of 486: the ones the PC cut to 22 kHz | 21 (on) |
+| Resident Evil 2 | 569 of 599 | 53 of 108 | stays the PC's (below) | 24 (off) |
+| Resident Evil 3 | 358 of 441 | the disc's files are the PC's | the disc's files are the PC's | 13 (off) |
+| Dino Crisis | 554 of 676 | 94 of 96 | 450 of 728 | 4 (off) |
 
-Decided after comparing:
+How each was decided, by measuring:
 
-- **Movies elsewhere stay the PC's.** Resident Evil 2's run at 30 fps on PC against 15 on the disc. Resident Evil 3's
-  PC movies are the disc's own frames. Dino Crisis's are 640×480 on PC.
-
-Not done yet:
-
-- **Music.** It needs a sequencer and SPU renderer for the PlayStation's sequences and sample banks.
-- **Sound effects.**
+- **Music, Resident Evil 2 and Dino Crisis:** rendered from the disc's sequences and banks (`psx_seq.c`, the
+  PlayStation's sound chip per PSX-SPX; Studio Medium reverb, the best fit to the PC's recordings) and matched to the
+  PC's tracks by loudness bands and pitch classes. Resident Evil 2's sub tracks (ambience) play on a main track's
+  bank; the bank their notes find is used (SUB00 matches; the other sub recordings don't match any render).
+- **Dino Crisis's formats** (Capcom's own): data files are a table of (kind, size, address, slot) rows then 2 KB-aligned
+  chunks; kind 3 a "Gian" bank header, 4 its samples, 5 a sequence. Gian: 16 programs of 8 bytes, then per program 16
+  tones of 24 bytes laid out as VAB tones, but the sample is its sound RAM address / 8 (the bank's address is in the
+  file's table). Sequences: an 8-byte header (00 01, ticks a beat, tempo), no running status, bit 7 of a status byte
+  set when a one-byte delta time follows, `A0 nn` a wait, `FF 51` tempo, `FF 2F` end; libsnd's loop markers.
+- **Dino Crisis's loops:** each looping track is cut from the render's own loop (the second time round, so the reverb
+  carries over the seam) and keeps the PC's loop point; the runtime scales loop points to the mod's 44.1 kHz
+  (`re_mods.c`). Where the sequence's loop doesn't give the PC's, the render is retimed to the PC's tempo first.
+- **Resident Evil's music stays the PC's:** its PC tracks match none of the disc's 90 sounding sequences, alone or a
+  bank's sequences mixed, by loudness, pitch or transposed pitch; there is nothing to replace them with reliably.
+- **Sound effects:** the PC's effects are the disc's samples converted. Each PC effect is found among every bank's
+  samples by its semitone-shifted spectrum and loudness shape, confirmed on the waveform (0.85 or better at the best
+  resampling ratio), and replaced by the disc sample at the PC's pitch at 16-bit 44.1 kHz. Dino Crisis's PC effects
+  are 8-bit, so every match is taken. Resident Evil's are 16-bit 22 kHz, so only those whose disc sample has more
+  samples than the PC's (the PC cut its rate) are taken. Resident Evil 2's PC effects are 4-bit ADPCM banks of the
+  same samples at the same rate (32 of 767 at a higher rate on the disc), so they stay.
+- **Movies:** Resident Evil's are better on the disc (on). The others are offered switched off: Resident Evil 2's PC
+  movies run at 30 fps, Dino Crisis's are 640×480, and Resident Evil 3's are the disc's own frames.
 
 Found on the way and fixed:
 
 - Resident Evil's sounds were never loaded (`mmioSeek`).
 - Resident Evil's movies never played (no MCI device).
 - Resident Evil 2 couldn't take PCM `.SAP` audio (ACM).
+- Dino Crisis played no music at all (no `IDirectSoundNotify`), and ran out of sound buffers after a few minutes.
 
 Goal: from a disc image of your own PlayStation copy of a game, pull in what the PlayStation version does better than the
 GOG PC release, and install it as mods in the launcher's Mods window. Each kind is its own mod ("PlayStation music",

@@ -3,7 +3,19 @@
  * of the project; this only reads the player's own files.
  *
  *   psx_seq <bank.vh> <bank.vb> <sequence> <out.wav> [-n <sequence number in a SEP>] [-s <seconds>] [-r <reverb 0-9>]
- *           [-d <reverb depth 0-127>] [-i]          (-i: print the sequences in the file and exit)
+ *           [-d <reverb depth 0-127>] [-b <the bank's sound RAM address, hex>] [-t <tempo scale>] [-i] [-v]
+ *   (-i: print the sequences in the file and exit; -v: the loop markers' times, notes and programs used)
+ *   psx_seq --samples <bank.vh> <bank.vb> <folder> [-b <address>]: each sample the bank's tones play, decoded once
+ *           through (to its end flag) as <folder>/<offset in the .vb, hex>.raw (16-bit mono); one line each on stdout:
+ *           offset, samples, looped (0/1), program, tone, centre note, fine tune (for the disc import's sound effects)
+ *
+ * Dino Crisis uses Capcom's own formats, read here too:
+ *   - "Gian" banks: a 16-byte header (programs at 6, master volume at 12, pan at 13); 16 programs of 8 bytes (tones,
+ *     volume, -, -, pan); then for each program 16 tones of 24 bytes laid out as a VAB tone, except that the last
+ *     two bytes are the sample's sound RAM address / 8, so the bank's own address is needed (-b; its file says it).
+ *   - sequences: an 8-byte header (00 01, ticks a beat and tempo, little-endian); no running status; an event's status
+ *     byte has bit 7 set when a one-byte delta time follows it and clear when none does; A0 nn waits nn ticks;
+ *     FF 51 + 3 bytes sets the tempo; FF 2F ends it. The loop markers are libsnd's.
  *
  * The sound chip (SPU) follows the PSX-SPX reference (psx-spx.consoledev.net, "Sound Processing Unit"):
  *   - SPU-ADPCM decoding (16-byte blocks, 28 samples, filters 0-4, loop start/end/repeat flags)
@@ -79,7 +91,7 @@ static const struct { const char *name; int size; uint16_t r[32]; } presets[10] 
 };
 
 /* ---- the VAB bank ---- */
-typedef struct { uint8_t prior, mode, vol, pan, center, shift, min, max, pbmin, pbmax; uint16_t adsr1, adsr2; int16_t prog, vag; } Tone;
+typedef struct { uint8_t prior, mode, vol, pan, center, shift, min, max, pbmin, pbmax; uint16_t adsr1, adsr2; int16_t prog, vag; int32_t addr; } Tone;
 typedef struct { int ntones; uint8_t mvol, mpan; Tone t[16]; } Prog;
 static Prog progs[128]; static uint8_t vab_mvol = 127, vab_pan = 64;
 static uint8_t *vb; static long vb_len; static uint32_t vag_off[256], vag_len[256]; static int nvags;
@@ -93,9 +105,27 @@ static uint8_t *load(const char *path, long *len)
 }
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t le32(const uint8_t *p) { return (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24); }
+static uint32_t bank_base; static int gian;
+static int tone_ok(const Tone *t) { return gian ? t->addr >= 0 && t->addr < vb_len : t->vag > 0 && t->vag <= nvags; }
+static void load_gian(const uint8_t *h, long hlen)
+{
+    int ps = le16(h + 6); gian = 1; vab_mvol = h[12]; vab_pan = h[13];
+    for (int p = 0; p < 16 && p < ps; p++) {
+        Prog *g = &progs[p]; const uint8_t *pa = h + 0x10 + p * 8; g->ntones = pa[0]; g->mvol = pa[1]; g->mpan = pa[4];
+        if (g->ntones > 16) g->ntones = 16;
+        for (int k = 0; k < g->ntones; k++) {
+            long o = 0x90 + (long)p * 0x180 + k * 24; if (o + 24 > hlen) { g->ntones = k; break; }
+            const uint8_t *t = h + o; Tone *x = &g->t[k];
+            x->prior = t[0]; x->mode = t[1]; x->vol = t[2]; x->pan = t[3]; x->center = t[4]; x->shift = t[5]; x->min = t[6]; x->max = t[7];
+            x->pbmin = t[12]; x->pbmax = t[13]; x->adsr1 = le16(t + 16); x->adsr2 = le16(t + 18); x->prog = (int16_t)le16(t + 20);
+            x->addr = (int32_t)le16(t + 22) * 8 - (int32_t)bank_base; x->vag = 1;
+        }
+    }
+}
 static void load_vab(const uint8_t *h, long hlen)
 {
-    if (hlen < 32 || memcmp(h, "pBAV", 4)) { fprintf(stderr, "psx_seq: not a VAB header (pBAV)\n"); exit(2); }
+    if (hlen >= 16 && !memcmp(h, "Gian", 4)) { load_gian(h, hlen); return; }
+    if (hlen < 32 || memcmp(h, "pBAV", 4)) { fprintf(stderr, "psx_seq: not a VAB header (pBAV) or a Gian bank\n"); exit(2); }
     int ps = le16(h + 18); nvags = le16(h + 22); vab_mvol = h[24]; vab_pan = h[25];
     const uint8_t *pa = h + 32, *ta = pa + 128 * 16, *vs = ta + (long)ps * 16 * 32;
     if ((long)(vs - h) + 512 > hlen) { fprintf(stderr, "psx_seq: VAB header too short\n"); exit(2); }
@@ -245,22 +275,22 @@ static void voice_volume(Voice *v)
     double l = pan <= 64 ? 1.0 : (127 - pan) / 63.0, r = pan >= 64 ? 1.0 : pan / 64.0;
     v->vol_l = (int32_t)(vol * l * 0x3FFF); v->vol_r = (int32_t)(vol * r * 0x3FFF);
 }
-static int verbose; static long notes_total, notes_unmatched, prog_used[128];
+static int verbose; static double tscale = 1.0;       /* -t: the tempo, scaled */ static long notes_total, notes_unmatched, prog_used[128];
 static void note_on(int ch, int key, int vel)
 {
     const Chan *c = &chans[ch]; const Prog *g = &progs[c->prog & 127];
     notes_total++; prog_used[c->prog & 127]++;
-    { int any = 0; for (int k = 0; k < g->ntones; k++) if (key >= g->t[k].min && key <= g->t[k].max && g->t[k].vag > 0 && g->t[k].vag <= nvags) any = 1;
+    { int any = 0; for (int k = 0; k < g->ntones; k++) if (key >= g->t[k].min && key <= g->t[k].max && tone_ok(&g->t[k])) any = 1;
       if (!any) { notes_unmatched++; if (verbose > 1) fprintf(stderr, "  note ch %d prog %d key %d: no tone\n", ch, c->prog, key); } }
     for (int k = 0; k < g->ntones; k++) {
-        const Tone *t = &g->t[k]; if (key < t->min || key > t->max || t->vag <= 0 || t->vag > nvags) continue;
+        const Tone *t = &g->t[k]; if (key < t->min || key > t->max || !tone_ok(t)) continue;
         int best = -1; long oldest = 1L << 62;
         for (int i = 0; i < 24; i++) if (!voices[i].on) { best = i; break; }
         if (best < 0) for (int i = 0; i < 24; i++) if (voices[i].phase == RELEASE && voices[i].age < oldest) { oldest = voices[i].age; best = i; }
         if (best < 0) for (int i = 0; i < 24; i++) if (voices[i].age < oldest) { oldest = voices[i].age; best = i; }
         Voice *v = &voices[best]; memset(v, 0, sizeof *v);
         v->on = 1; v->chan = ch; v->key = key; v->prior = vel; v->age = ++age_counter; v->tone = t;
-        v->start = v->addr = v->loop = vag_off[t->vag]; v->counter = 0; v->first = 1; v->reverb = (t->mode & 4) != 0;
+        v->start = v->addr = v->loop = gian ? (uint32_t)t->addr : vag_off[t->vag]; v->counter = 0; v->first = 1; v->reverb = (t->mode & 4) != 0;
         v->adsr1 = t->adsr1; v->adsr2 = t->adsr2; v->phase = ATTACK; v->level = 0;
         v->pitch = note_pitch(t, key, c->bend); voice_volume(v);
         decode_block(v);
@@ -272,7 +302,43 @@ static void note_off(int ch, int key)
 }
 
 static const uint8_t *seq, *seq_end, *pos, *loop_pos; static int loop_count, running; static double tick_seconds; static int ppqn;
-static int nrpn;
+static int nrpn; static int capcom, loop_delta; static double now_s; static int loops_seen;
+static void loop_mark(int end)                          /* -v: where the loop starts and ends (seconds), for the import */
+{
+    if (verbose && loops_seen < 4) { fprintf(stderr, "loop %s %.4f\n", end ? "end" : "start", now_s); loops_seen++; }
+}
+static int capcom_event(void)                           /* Capcom's: one event, then its delta in ticks; -1 at the end */
+{
+    for (;;) {
+        if (pos + 1 >= seq_end) return -1;
+        uint8_t s0 = *pos++, st = s0 | 0x80; int ch = st & 15;
+        switch (st & 0xF0) {
+        case 0xA0: return *pos++;                       /* a wait */
+        case 0x90: { int k = *pos++, vel = *pos++; if (vel) note_on(ch, k, vel); else note_off(ch, k); break; }
+        case 0x80: { int k = *pos++; pos++; note_off(ch, k); break; }
+        case 0xB0: { int cc = *pos++, val = *pos++;
+            if (cc == 7) chans[ch].vol = val; else if (cc == 11) chans[ch].expr = val; else if (cc == 10) chans[ch].pan = val;
+            else if (cc == 99) { nrpn = val;
+                if (val == 20) { loop_pos = pos; loop_delta = s0 & 0x80; loop_mark(0); }
+                else if (val == 30 && loop_pos && loop_count != 0) { loop_mark(1); if (loop_count > 0) loop_count--; pos = loop_pos;
+                    if (loop_delta) return *pos++; continue; } }
+            else if (cc == 6 && nrpn == 20) loop_count = val == 127 || val == 0 ? -1 : val;
+            if (cc == 7 || cc == 11 || cc == 10) for (int i = 0; i < 24; i++) if (voices[i].on && voices[i].chan == ch) voice_volume(&voices[i]);
+            break; }
+        case 0xC0: chans[ch].prog = *pos++; break;
+        case 0xD0: pos++; break;
+        case 0xE0: { int lo = *pos++, hi = *pos++; chans[ch].bend = ((hi << 7) | lo) - 8192; if (chans[ch].bend > 8191) chans[ch].bend = 8191;
+            for (int i = 0; i < 24; i++) if (voices[i].on && voices[i].chan == ch) voices[i].pitch = note_pitch(voices[i].tone, voices[i].key, chans[ch].bend); break; }
+        default:
+            if (st == 0xFF) { int type = *pos++;
+                if (type == 0x2F) return -1;
+                if (type == 0x51) { uint32_t t = (uint32_t)pos[0] << 16 | pos[1] << 8 | pos[2]; if (t) tick_seconds = t / 1e6 / ppqn; pos += 3; }
+                break; }
+            return -1;
+        }
+        return s0 & 0x80 ? *pos++ : 0;
+    }
+}
 static uint32_t varlen(void) { uint32_t v = 0; for (int k = 0; k < 4 && pos < seq_end; k++) { uint8_t b = *pos++; v = v << 7 | (b & 0x7F); if (!(b & 0x80)) break; } return v; }
 static int seq_event(void)                              /* one event; 0 at the end */
 {
@@ -285,7 +351,7 @@ static int seq_event(void)                              /* one event; 0 at the e
     case 0xA0: pos += 2; break;
     case 0xB0: { int cc = *pos++, val = *pos++;
         if (cc == 7) chans[ch].vol = val; else if (cc == 11) chans[ch].expr = val; else if (cc == 10) chans[ch].pan = val;
-        else if (cc == 99) { nrpn = val; if (val == 20) { loop_pos = pos; } else if (val == 30 && loop_pos) {
+        else if (cc == 99) { nrpn = val; if (val == 20) { loop_pos = pos; loop_mark(0); } else if (val == 30 && loop_pos) { loop_mark(1);
             if (loop_count != 0) { if (loop_count > 0) loop_count--; pos = loop_pos; } } }
         else if (cc == 6 && nrpn == 20) loop_count = val == 127 || val == 0 ? -1 : val;
         if (cc == 7 || cc == 11 || cc == 10) for (int i = 0; i < 24; i++) if (voices[i].on && voices[i].chan == ch) voice_volume(&voices[i]);
@@ -308,8 +374,32 @@ static int seq_event(void)                              /* one event; 0 at the e
 static void put16(FILE *f, int v) { fputc(v & 255, f); fputc((v >> 8) & 255, f); }
 static void put32(FILE *f, uint32_t v) { put16(f, (int)(v & 0xFFFF)); put16(f, (int)(v >> 16)); }
 
+static int dump_samples(int argc, char **argv)
+{
+    for (int k = 5; k < argc; k++) if (!strcmp(argv[k], "-b") && k + 1 < argc) bank_base = (uint32_t)strtoul(argv[++k], NULL, 16);
+    long hlen; uint8_t *h = load(argv[2], &hlen); vb = load(argv[3], &vb_len); load_vab(h, hlen);
+    static uint8_t done[1 << 16];
+    for (int p = 0; p < 128; p++) for (int k = 0; k < progs[p].ntones; k++) {
+        const Tone *t = &progs[p].t[k]; if (!tone_ok(t)) continue;
+        uint32_t a = gian ? (uint32_t)t->addr : vag_off[t->vag]; if ((a >> 4) < sizeof done && done[a >> 4]) continue;
+        if ((a >> 4) < sizeof done) done[a >> 4] = 1;
+        char path[1024]; snprintf(path, sizeof path, "%s/%x.raw", argv[4], a);
+        FILE *o = fopen(path, "wb"); if (!o) { fprintf(stderr, "psx_seq: cannot write %s\n", path); return 2; }
+        Voice v; memset(&v, 0, sizeof v); v.addr = a; long n = 0; int looped = 0;
+        for (int blocks = 0; v.addr + 16 <= (uint32_t)vb_len && blocks < 65536; blocks++) {
+            uint8_t fl = vb[v.addr + 1]; decode_block(&v);
+            for (int j = 0; j < 28; j++) { fputc(v.buf[j] & 255, o); fputc((v.buf[j] >> 8) & 255, o); }
+            n += 28; v.addr += 16;
+            if (fl & 1) { looped = (fl & 2) != 0; break; }
+        }
+        fclose(o); printf("%x %ld %d %d %d %d %d\n", a, n, looped, p, k, t->center, t->shift);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 5 && !strcmp(argv[1], "--samples")) return dump_samples(argc, argv);
     if (argc < 5) { fprintf(stderr, "usage: psx_seq bank.vh bank.vb sequence out.wav [-n seq] [-s seconds] [-r reverb 0-9] [-d depth] [-i]\n"); return 2; }
     int which = 0, preset = 0, depth = 0, info = 0; double seconds = 0;
     for (int k = 5; k < argc; k++) {
@@ -319,10 +409,18 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[k], "-d") && k + 1 < argc) depth = atoi(argv[++k]);
         else if (!strcmp(argv[k], "-i")) info = 1;
         else if (!strcmp(argv[k], "-v")) verbose++;
+        else if (!strcmp(argv[k], "-t") && k + 1 < argc) { tscale = atof(argv[++k]); if (tscale <= 0) tscale = 1; }
+        else if (!strcmp(argv[k], "-b") && k + 1 < argc) bank_base = (uint32_t)strtoul(argv[++k], NULL, 16);
     }
     if (preset < 0 || preset > 9) preset = 0;
     long hlen, slen; uint8_t *h = load(argv[1], &hlen); vb = load(argv[2], &vb_len); uint8_t *s = load(argv[3], &slen);
     load_vab(h, hlen);
+    if (slen >= 10 && s[0] == 0 && s[1] == 1) {          /* Capcom's (Dino Crisis) */
+        capcom = 1; ppqn = s[2] | s[3] << 8; uint32_t t0 = le32(s + 4); if (!ppqn) ppqn = 48; if (!t0) t0 = 500000;
+        if (info) { printf("Capcom sequence: %d ticks a beat, %.1f bpm\n", ppqn, 60e6 / t0); return 0; }
+        seq = s + 8; seq_end = s + slen; pos = seq; tick_seconds = t0 / 1e6 / ppqn;
+        goto play;
+    }
     if (slen < 15 || memcmp(s, "pQES", 4)) { fprintf(stderr, "psx_seq: not a sequence (pQES)\n"); return 2; }
     /* SEQ (version 1): one sequence after a 15-byte header; SEP (version 0): sequences, each with its id, resolution,
      * tempo, rhythm and data size */
@@ -346,6 +444,7 @@ int main(int argc, char **argv)
     if (info) return 0;
     if (!found || !ppqn) { fprintf(stderr, "psx_seq: no sequence %d\n", which); return 2; }
     seq = found; seq_end = found_end; pos = seq; tick_seconds = tempo / 1e6 / ppqn;
+play:
     for (int c = 0; c < 16; c++) { chans[c].vol = 127; chans[c].expr = 127; chans[c].pan = 64; chans[c].prog = c; }
     reverb_init(preset, depth);
     if (seconds <= 0) seconds = 600;
@@ -354,11 +453,13 @@ int main(int argc, char **argv)
     fwrite("RIFF", 1, 4, o); put32(o, 36 + (uint32_t)total * 4); fwrite("WAVEfmt ", 1, 8, o); put32(o, 16); put16(o, 1); put16(o, 2);
     put32(o, 44100); put32(o, 44100 * 4); put16(o, 4); put16(o, 16); fwrite("data", 1, 4, o); put32(o, (uint32_t)total * 4);
     double next = 0, now = 0; int ended = 0; long silent = 0; long written = 0;
-    { uint32_t d = varlen(); next = d * tick_seconds; }
+    if (!capcom) { uint32_t d = varlen(); next = d * tick_seconds / tscale; }
     int32_t rl = 0, rr = 0, rin_l = 0, rin_r = 0;
     for (long i = 0; i < total; i++) {
-        now = i / 44100.0;
-        while (!ended && now >= next) { if (!seq_event()) { ended = 1; break; } uint32_t d = varlen(); next += d * tick_seconds; }
+        now = i / 44100.0; now_s = now;
+        while (!ended && now >= next) {
+            if (capcom) { int d = capcom_event(); if (d < 0) { ended = 1; break; } next += d * tick_seconds / tscale; continue; }
+            if (!seq_event()) { ended = 1; break; } uint32_t d = varlen(); next += d * tick_seconds / tscale; }
         int32_t L = 0, Rr = 0, el = 0, er = 0, any = 0;
         for (int k = 0; k < 24; k++) { int32_t l, r; voice_sample(&voices[k], &l, &r); L += l; Rr += r; if (voices[k].on && voices[k].reverb) { el += l; er += r; } if (voices[k].on) any = 1; }
         if (rev_on) {
