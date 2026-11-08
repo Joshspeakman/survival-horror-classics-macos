@@ -118,8 +118,8 @@ int rt_override(Ctx *c, uint32_t addr)
 #ifdef RE1_EDITION
     { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
 #endif
-#ifdef RE3_EDITION
-    { int re_mods_override(Ctx *, uint32_t); if (re_mods_override(c, addr)) return 1; }   /* re_mods.c: mods in Resident Evil 3's archives */
+#if defined(RE3_EDITION) || defined(DC_EDITION)
+    { int re_mods_override(Ctx *, uint32_t); if (re_mods_override(c, addr)) return 1; }   /* re_mods.c: mods in Resident Evil 3's archives; Dino Crisis's music loop points */
 #endif
 #if defined(RE2_EDITION) && !defined(RE2_CLAIRE)
     static int marni_log = -1; if (marni_log < 0) marni_log = getenv("W32_MARNILOG") != 0;

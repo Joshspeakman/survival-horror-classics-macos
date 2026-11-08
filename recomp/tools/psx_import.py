@@ -38,6 +38,16 @@ nothing from a disc is part of the project.
       loudness patterns, the loop's from a second time round so its reverb carries over the seam) for the same length,
       at the recording's loudness. A track whose render doesn't match its recording (chroma below 0.75) keeps the PC's.
 
+  psx_import.py music dc <disc .cue> <game folder> <mod folder> [--report <file>]
+      Dino Crisis's music: every sequence on the disc (Capcom's own formats, PSX/DATA/*.DAT) rendered, matched to the
+      PC's Sound/BGM tracks (8-bit 22 kHz) and written at 16-bit 44.1 kHz; loops cut from the render's own loop at the
+      PC's loop points (DINO.exe's music table; the runtime scales them to the mod's rate, re_mods.c).
+
+  psx_import.py effects <re1|dc> <disc .cue> <game folder> <mod folder> [--report <file>]
+      The PC's sound effects replaced by the disc's samples they were converted from: every bank's samples decoded
+      (psx_seq --samples), each PC effect found by its pitch-shifted spectrum and confirmed on the waveform, written at
+      its pitch, timing and loudness at 16-bit 44.1 kHz (Resident Evil: only where the PC cut the rate down).
+
 Needs: ffmpeg (Homebrew), numpy (the project's recomp/.venv). Run with recomp/.venv/bin/python.
 """
 import os, struct, subprocess, sys, tempfile, wave
@@ -462,8 +472,8 @@ def restore(game, spec, game_dir, mods_root, app=None):
                             'source': ', '.join(os.path.basename(p) for p in order),
                             'note': f'{nm} movies from your PlayStation discs: {MOVIES[game]["note"]}'})
         else: shutil.rmtree(tmp, ignore_errors=True)
-    # music (Resident Evil 2: its recordings rebuilt from the disc's own sequences and banks)
-    if game == 're2':
+    # music (Resident Evil 2, Dino Crisis: rebuilt from the disc's own sequences and sample banks)
+    if game in ('re2', 'dc'):
         folder_u = os.path.join(mods_root, game, 'playstation-music'); tmp = folder_u + '.new'; shutil.rmtree(tmp, ignore_errors=True)
         say('Rendering the music from the disc…')
         nu, tu = music(game, raw[0], game_dir, tmp)
@@ -472,7 +482,18 @@ def restore(game, spec, game_dir, mods_root, app=None):
             entries.append({'name': 'PlayStation music (your disc)', 'folder': 'playstation-music', 'kind': 'files', 'enabled': True, 'game': game,
                             'source': os.path.basename(raw[0]),
                             'note': f'{nu} of {tu} tracks rendered from your disc\'s own sequences and samples at 44.1 kHz stereo, as the '
-                                    f'PlayStation plays them (the PC: 22 kHz ADPCM recordings); the rest stay the PC\'s'})
+                                    f'PlayStation plays them (the PC: {"8-bit 22 kHz" if game == "dc" else "22 kHz ADPCM"} recordings); the rest stay the PC\'s'})
+        else: shutil.rmtree(tmp, ignore_errors=True)
+    # sound effects (Dino Crisis: its PC effects are its PlayStation samples cut to 8 bits; Resident Evil: some cut to 22 kHz)
+    if game in EFFECTS:
+        folder_e = os.path.join(mods_root, game, 'playstation-effects'); tmp = folder_e + '.new'; shutil.rmtree(tmp, ignore_errors=True)
+        say('Matching the sound effects…')
+        ne, te = effects(game, ','.join(vdiscs if game == 're1' else raw[:1]), game_dir, tmp)
+        if ne:
+            shutil.rmtree(folder_e, ignore_errors=True); os.replace(tmp, folder_e)
+            entries.append({'name': 'PlayStation sound effects (your disc)', 'folder': 'playstation-effects', 'kind': 'files', 'enabled': True, 'game': game,
+                            'source': os.path.basename(raw[0]),
+                            'note': f'{ne} of {te} sound effects from your disc\'s own samples: {EFFECTS[game]["note"]}; the rest stay the PC\'s'})
         else: shutil.rmtree(tmp, ignore_errors=True)
     if not entries: say('Nothing from these discs matched the game.'); return 1
     index_put(mods_root, game, entries)
@@ -485,7 +506,7 @@ def psx_seq_bin():
     if os.path.exists(b) and os.access(b, os.X_OK): return b
     src = os.path.join(here, 'psx_seq.c'); out = os.path.join(tempfile.gettempdir(), 'psx_seq-' + str(os.getuid()))
     if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
-        subprocess.run(['clang', '-O2', '-o', out, src, '-lm'], check=True)
+        subprocess.run(['clang', '-O2', '-o', out + '.new', src, '-lm'], check=True); os.replace(out + '.new', out)
     return out
 
 def music_feats(a, rate, hop=0.05):
@@ -552,12 +573,14 @@ def render(seq, vh, vb, seconds, reverb=3, depth=48):
     finally:
         import shutil; shutil.rmtree(work, ignore_errors=True)
 
-def place(pc_mono, pc_rate, ren, ren_rate, loop=False):
+def place(pc_mono, pc_rate, ren, ren_rate, loop=False, first=False):
     """where the PC recording starts in the render (44.1 kHz samples), how well they agree (bands, chroma)"""
     rm = ren.mean(1); sc = band_scores(music_feats(pc_mono, pc_rate), music_feats(rm, ren_rate))
     j = int(np.argmax(sc)); best = float(sc[j])
     if loop:   # a loop: the latest place nearly as good (a second time round: its reverb carries over the seam)
         cand = np.where(sc >= best - 0.03)[0]; j = int(cand.max())
+    elif first:  # the start: the earliest place nearly as good (later ones can be the same music a loop later)
+        cand = np.where(sc >= best - 0.03)[0]; j0 = int(cand.min()); j = j0 + int(np.argmax(sc[j0:j0 + 40]))   # its best within 2 s
     # to 10 ms, then 1 ms, around it
     h = int(0.05 * ren_rate); lo = max(0, j * h - h); seg = rm[lo:lo + len(pc_mono) * ren_rate // pc_rate + 2 * h]
     sc2 = band_scores(music_feats(pc_mono, pc_rate, 0.01), music_feats(seg, ren_rate, 0.01))
@@ -567,16 +590,34 @@ def place(pc_mono, pc_rate, ren, ren_rate, loop=False):
     return start, best, chroma
 
 def music(game, cue, game_dir, mod, report=None):
-    if game != 're2': say('Music: only Resident Evil 2 so far'); return 0, 0
+    if game == 'dc': return dc_music(cue, game_dir, mod, report)
+    if game != 're2': say('Music: Resident Evil 2 and Dino Crisis'); return 0, 0
     d = psx_disc.Disc(cue.split(',')[0]); bundles = {}
     try:
         for path, lba, size, xa in psx_disc.walk(d):
             if path.upper().startswith('COMMON/SOUND/') and path.upper().endswith('.BGM'): bundles[os.path.basename(path).upper()[:-4]] = psx_disc.read_file(d, lba, size)
     finally: d.close()
     folder = find_ci(game_dir, 'Common/Sound/bgm'); lines = []; done = 0; total = 0
+    split = {n: split_bundle(b) for n, b in bundles.items()}
+    mains = [n for n in sorted(split) if split[n] and n.startswith('MAIN')]
     for name in sorted(bundles):
-        parts = split_bundle(bundles[name])
+        parts = split[name]
         if not parts: continue
+        if name.startswith('SUB'):
+            # a sub track layers over a room's main music and plays that bank's instruments: the bank its notes find
+            def missing(vh, vb):
+                work = tempfile.mkdtemp(prefix='psx-sub-')
+                try:
+                    for n_, d_ in (('a.seq', parts[0]), ('a.vh', vh), ('a.vb', vb)): open(os.path.join(work, n_), 'wb').write(d_)
+                    r = subprocess.run([psx_seq_bin(), os.path.join(work, 'a.vh'), os.path.join(work, 'a.vb'), os.path.join(work, 'a.seq'),
+                                        os.path.join(work, 'a.wav'), '-s', '30'], capture_output=True, text=True)
+                    import re as _re; m = _re.search(r'(\d+) notes, (\d+) with no tone', r.stderr)
+                    return (int(m.group(2)), -int(m.group(1))) if m else (1 << 30, 0)
+                finally: import shutil as _sh; _sh.rmtree(work, ignore_errors=True)
+            own = missing(parts[1], parts[2])
+            if own[0]:
+                best = min(((missing(split[m][1], split[m][2]), m) for m in mains), default=None)
+                if best and best[0][0] < own[0]: parts = (parts[0], split[best[1]][1], split[best[1]][2]); lines.append(f'       {name}: on {best[1]}\'s bank')
         stem = name.replace('SUB_', 'SUB')
         pcs = [n for n in sorted(os.listdir(folder)) if n.upper() in (f'{stem}.SAP', f'{stem}_1.SAP', f'{stem}_2.SAP')]
         if not pcs: continue
@@ -586,7 +627,8 @@ def music(game, cue, game_dir, mod, report=None):
             total += 1; p, pr = read_pc(os.path.join(folder, n))
             if len(p) < pr: lines.append(f'  -    {n}: too short'); continue
             start, bands, chroma = place(p, pr, ren, rate, loop=n.upper().endswith('_2.SAP') or '_' not in n)
-            if chroma < 0.75: lines.append(f'  -    {n}: the render doesn\'t match the recording (chroma {chroma:.2f}): kept'); continue
+            if chroma < 0.75 and not (name.startswith('SUB') and bands >= 0.9):   # ambience (no tune): its loudness pattern
+                lines.append(f'  -    {n}: the render doesn\'t match the recording (chroma {chroma:.2f}, bands {bands:.2f}): kept'); continue
             cnt = int(len(p) * rate / pr); seg = ren[start:start + cnt]
             if len(seg) < cnt: lines.append(f'  -    {n}: the render ends too soon: kept'); continue
             seg = seg * (rms(p) / max(rms(seg.mean(1)), 1e-6))
@@ -599,10 +641,349 @@ def music(game, cue, game_dir, mod, report=None):
     if report: open(report, 'w').write('\n'.join(lines) + '\n')
     return done, total
 
+# ---- Dino Crisis: Capcom's own sound formats (psx_seq.c reads them) ----
+DC_REVERB, DC_DEPTH = 3, 64                     # Studio Medium, depth 64: the best fit to the PC's own recordings
+DC_MUSIC_TABLE = 0x625448                       # DINO.exe: rows of id, flags, name ("bgm\me_00SL"), loop point (frames)
+
+def dc_chunks(b):
+    """a Dino Crisis data file: a table of (kind, size, address, slot) rows in its first 2 KB, each chunk after it at the
+    next 2 KB boundary. Kinds: 3 a "Gian" bank header, 4 its samples, 5 a sequence."""
+    rows = []; p = 0
+    while p + 16 <= min(0x800, len(b)):
+        k, sz, a, c = struct.unpack_from('<IIII', b, p)
+        if k > 16 or sz == 0 or sz > len(b): break
+        rows.append((k, sz, a, c)); p += 16
+    off = 0x800; out = []
+    for k, sz, a, c in rows: out.append((k, a, c, b[off:off + sz])); off += (sz + 0x7ff) & ~0x7ff
+    return out
+
+def dc_table(exe):
+    """the PC's music table: {name: (flags, loop frames)}; flags 0x08 plays once, 0x0a loops the whole file, 0x2a loops
+    from the loop point (in frames of the PC's 22050 Hz file) to its end"""
+    b = open(exe, 'rb').read()
+    pe = struct.unpack_from('<I', b, 0x3c)[0]; ns = struct.unpack_from('<H', b, pe + 6)[0]; opt = struct.unpack_from('<H', b, pe + 20)[0]
+    base = struct.unpack_from('<I', b, pe + 52)[0]; secs = []
+    for k in range(ns):
+        o = pe + 24 + opt + 40 * k; vs, va, rs, ra = struct.unpack_from('<IIII', b, o + 8); secs.append((va, ra, rs))
+    def f(v):
+        for va, ra, rs in secs:
+            if base + va <= v < base + va + rs: return v - base - va + ra
+    out = {}; q = f(DC_MUSIC_TABLE)
+    while q is not None:
+        i, fl, nm, val = struct.unpack_from('<IIII', b, q); n = f(nm) if nm else None
+        if n is None: break
+        name = b[n:b.index(b'\0', n)].decode('latin1')
+        if name.lower().startswith('bgm\\'): out.setdefault(name[4:], (fl, val))
+        q += 16
+    return out
+
+def dc_render(work, stem, sq, slot, seconds, tempo=1.0):
+    """a render (44.1 kHz stereo) and its loop: (start, end) in seconds, or None"""
+    sp = os.path.join(work, stem); out = os.path.join(work, f'{stem}.{sq}.wav')
+    r = subprocess.run([psx_seq_bin(), f'{sp}.{slot}.vh', f'{sp}.{slot}.vb', f'{sp}.{sq}.{slot}', out, '-b', open(f'{sp}.{slot}.base').read(),
+                        '-s', str(seconds), '-r', str(DC_REVERB), '-d', str(DC_DEPTH), '-t', '%.6f' % tempo, '-v'], capture_output=True, text=True)
+    ls = [float(l.split()[2]) for l in r.stderr.splitlines() if l.startswith('loop start')]
+    le = [float(l.split()[2]) for l in r.stderr.splitlines() if l.startswith('loop end')]
+    loop = (ls[0], le[0]) if ls and le and le[0] - ls[0] > 1 else None
+    return out, loop
+
+def dc_music(cue, game_dir, mod, report=None):
+    """Dino Crisis's music: every sequence on the disc (PSX/DATA/*.DAT: Gian banks and Capcom sequences) rendered as the
+    PlayStation plays it, each PC track (Sound/BGM/*.dat, 8-bit 22 kHz) matched to its render by the music's loudness
+    and pitch patterns, and written as 16-bit 44.1 kHz stereo at the PC track's loudness. Its loops are cut from the
+    render's own loop (a second time round, so the reverb carries over the seam): a track that loops from a point keeps
+    that point (the runtime scales it to the new rate, re_mods.c), one that loops whole is one loop long."""
+    import hashlib, shutil, concurrent.futures as cf
+    exe = find_ci(game_dir, 'DINO.exe'); folder = find_ci(game_dir, 'Sound/BGM')
+    if not exe or not folder: say('Dino Crisis: DINO.exe or Sound/BGM is missing'); return 0, 0
+    table = dc_table(exe)
+    work = tempfile.mkdtemp(prefix='dc-music-'); pairs = []; seen = set()
+    try:
+        d = psx_disc.Disc(cue.split(',')[0])
+        try:
+            for path, lba, size, xa in psx_disc.walk(d):
+                up = path.upper()
+                if not (up.startswith('PSX/DATA/') and up.endswith('.DAT')) or xa: continue
+                head = psx_disc.read_file(d, lba, min(size, 0x800)); kinds = set()
+                for q in range(0, len(head) - 15, 16):
+                    k, sz = struct.unpack_from('<II', head, q)
+                    if k > 16 or sz == 0: break
+                    kinds.add(k)
+                if 5 not in kinds: continue
+                cs = dc_chunks(psx_disc.read_file(d, lba, size)); stem = os.path.basename(up)[:-4]; banks = {}
+                for k, a, c, data in cs:
+                    if k == 3 and data[:4] == b'Gian': banks.setdefault(c & 15, {})['vh'] = (data, a)
+                    if k == 4: banks.setdefault(c & 15, {})['vb'] = (data, a)
+                for slot, b in banks.items():
+                    if 'vh' in b and 'vb' in b:
+                        open(os.path.join(work, f'{stem}.{slot}.vh'), 'wb').write(b['vh'][0]); open(os.path.join(work, f'{stem}.{slot}.vb'), 'wb').write(b['vb'][0])
+                        open(os.path.join(work, f'{stem}.{slot}.base'), 'w').write('%x' % b['vh'][1])
+                for k, a, c, data in cs:
+                    if k != 5: continue
+                    idx = c & 15; slot = 4 if idx == 0 and 4 in banks else 5 if 5 in banks else 4
+                    if slot not in banks or 'vb' not in banks[slot] or 'vh' not in banks[slot]: continue
+                    key = (hashlib.md5(data).hexdigest(), hashlib.md5(banks[slot]['vb'][0]).hexdigest())
+                    if key in seen: continue
+                    seen.add(key); open(os.path.join(work, f'{stem}.seq{idx}.{slot}'), 'wb').write(data); pairs.append((stem, f'seq{idx}', slot))
+        finally: d.close()
+        if not pairs: say('Dino Crisis: no music on this disc'); return 0, 0
+        say(f'Rendering {len(pairs)} pieces of music from the disc…'); psx_seq_bin()
+        feats = {}
+        def first(pr):
+            stem, sq, slot = pr; out, loop = dc_render(work, stem, sq, slot, 180)
+            a, rate = read_stereo(out); m = a.mean(1); os.unlink(out)
+            return pr, music_feats(m, rate), music_chroma(m, rate), loop
+        with cf.ThreadPoolExecutor(max(2, (os.cpu_count() or 4) - 1)) as ex:
+            for pr, f, c, loop in ex.map(first, pairs): feats[pr] = (f, c, loop)
+        lines = []; done = 0; names = sorted(table)
+        for n in names:
+            pcf = next((x for x in os.listdir(folder) if x.lower() == n.lower() + '.dat'), None)
+            if not pcf: continue
+            fl, val = table[n]; p, pr_ = read_pc(os.path.join(folder, pcf)); L = len(p) / pr_
+            pf, pch = music_feats(p, pr_), music_chroma(p, pr_); code = n[:5].replace('_', '').upper()
+            cands = []
+            for k, (rf, rc, loop) in feats.items():
+                if len(rf) < len(pf): continue
+                sc = band_scores(pf, rf); j = int(np.argmax(sc)); b = float(sc[j])
+                cj = int(j * 0.05 / 0.1); m = min(len(pch), len(rc) - cj); ch = float((pch[:m] * rc[cj:cj + m]).sum(1).mean()) if m > 0 else 0.0
+                named = code in k[0].replace('_', '')
+                cands.append((b, ch, named, k))
+            ok = [c for c in cands if c[2] and (c[0] >= 0.6 and c[1] >= 0.35 or c[0] >= 0.45 and c[1] >= 0.7)] or \
+                 [c for c in cands if c[1] >= 0.68 and c[0] >= 0.65]
+            if not ok:
+                best = sorted(cands, key=lambda c: -(c[0] + c[1]))[:2]
+                lines.append(f'  -    {pcf}: no piece of the disc\'s music matches it: kept (nearest: ' +
+                             ', '.join(f'{c[3][0]} {c[3][1]} bands {c[0]:.2f} chroma {c[1]:.2f}' for c in best) + ')'); continue
+            b, ch, named, k = max(ok, key=lambda c: (c[2], c[0] + c[1]))
+            loop = feats[k][2]; T = val / 22050.0
+            need = 2 * L + 20 + (2 * (loop[1] - loop[0]) if loop else 0)
+            out, loop = dc_render(work, *k, min(600, need)); ren, rate = read_stereo(out); os.unlink(out)
+            whole = (fl & 0x22) == 0x02
+            start, b2, ch2 = place(p, pr_, ren, rate, loop=whole, first=not whole)
+            S = start / rate; how = 'as the PC'
+            if fl & 0x02 and not (loop and (fl & 0x20 and S + T >= loop[0] - 0.05 or not fl & 0x20 and S >= loop[0] - 0.05)) and L > 12:
+                # a loop the sequence's own doesn't give: the PC's, at the PC's tempo (the render runs a little slower),
+                # measured by where the PC's last seconds fall in the render
+                tail = p[int((L - 9) * pr_):int((L - 1) * pr_)]; lo = max(0, start + int((L - 11) * rate)); hi = min(len(ren), start + int((L + 1) * rate))
+                sc = band_scores(music_feats(tail, pr_, 0.01), music_feats(ren[lo:hi].mean(1), rate, 0.01))
+                at = (lo + int(np.argmax(sc)) * int(0.01 * rate)) / rate; f = (at - S) / (L - 9)
+                if 0.98 < f < 1.02 and abs(f - 1) > 0.0003:
+                    out, loop = dc_render(work, *k, min(600, need), tempo=f); ren, rate = read_stereo(out); os.unlink(out)
+                    start, b2, ch2 = place(p, pr_, ren, rate, first=True); S = start / rate; how = f'as the PC, at {f:.4f}x the tempo'
+            if loop and fl & 0x20 and S + T >= loop[0] - 0.05:           # loops from a point: a second time round after it
+                P = loop[1] - loop[0]; a0 = int(round(start + T * rate)); a1 = int(round(start + (T + P) * rate)); a2 = int(round(start + (T + 2 * P) * rate))
+                seg = np.concatenate([ren[start:a0], ren[a1:a2]]) if a2 <= len(ren) else None; how = f'loop at {T:.2f} s, {P:.2f} s long'
+            elif loop and fl & 0x02 and not fl & 0x20 and S >= loop[0] - 0.05:   # loops whole: one loop
+                P = loop[1] - loop[0]; seg = ren[start:start + int(round(P * rate))]; how = f'one loop, {P:.2f} s'
+            else:
+                seg = ren[start:start + int(round(L * rate))]
+            if seg is None or len(seg) < rate // 2 or how == 'as the PC' and len(seg) < int(0.98 * L * rate):
+                lines.append(f'  -    {pcf}: the render ends too soon: kept'); continue
+            seg = seg * (rms(p) / max(rms(seg.mean(1)), 1e-6)); peak = float(np.abs(seg).max())
+            if peak > 0.999: seg = seg * (0.999 / peak)
+            write_stereo(os.path.join(mod, 'Sound', 'BGM', pcf), seg, rate)
+            done += 1; lines.append(f'{ch2:.2f}  {pcf}  <-  {k[0]}.DAT {k[1]} at {S:.2f} s ({len(seg) / rate:.1f} s; {how}; bands {b2:.2f})')
+        for l in lines: say(l)
+        say(f'music: {done} of {len(names)} tracks rendered from the disc')
+        if report: open(report, 'w').write('\n'.join(lines) + '\n')
+        return done, len(names)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+# ---- Dino Crisis's sound effects: the PC's are its PlayStation samples converted to 8-bit 22 kHz ----
+SE_K, SE_F0 = 96, 40.0                          # semitone bands from 40 Hz, for the pitch-shift search
+
+def se_trim(a, rel=0.02):
+    t = max(float(np.abs(a).max()) * rel, 1e-4) if len(a) else 1; idx = np.where(np.abs(a) > t)[0]
+    return (int(idx[0]), int(idx[-1]) + 1) if len(idx) else (0, 0)
+
+def se_env(a, n=48):
+    e = np.sqrt(np.add.reduceat(a.astype(np.float64) ** 2, np.linspace(0, len(a), n, endpoint=False).astype(int)) + 1e-9)
+    e = np.log(e + 1e-4); e = e - e.mean(); return e / (np.linalg.norm(e) + 1e-9)
+
+def se_bands(a, rate):
+    n = 1 << int(np.ceil(np.log2(max(len(a), 256)))); X = np.abs(np.fft.rfft(a, n)) ** 2; f = np.fft.rfftfreq(n, 1 / rate)
+    k = np.floor(12 * np.log2(np.maximum(f, 1) / SE_F0)).astype(int); ok = (k >= 0) & (k < SE_K) & (f < 0.45 * rate)
+    B = np.log(np.bincount(k[ok], X[ok], SE_K) + 1e-6); B[~np.isin(np.arange(SE_K), np.unique(k[ok]))] = np.nan; return B
+
+def se_corr(a, b):
+    if len(a) >= len(b): c = ncc(a.astype(np.float64), b.astype(np.float64)); j = int(np.argmax(c)); return float(c[j]), j
+    c = ncc(b.astype(np.float64), a.astype(np.float64)); j = int(np.argmax(c)); return float(c[j]), -j
+
+def se_rs(x, r): n = int(len(x) * r); return np.interp(np.arange(n) / r, np.arange(len(x)), x)
+
+def se_search(d, p, r0):
+    """the resampling ratio near r0 (PC samples per disc sample) and lag where the disc sample's waveform best matches"""
+    best = (-1.0, r0, 0); k = 4 if len(d) > 3000 else 1; dd, pp = d[::k], p[::k]
+    for r in np.linspace(r0 * 0.955, r0 * 1.045, 31):
+        if int(len(d) * r) < 32: continue
+        c, j = se_corr(pp, se_rs(dd, r))
+        if c > best[0]: best = (c, float(r), j * k)
+    if best[0] < 0.4: return best
+    for span, steps in ((0.005, 21), (0.0003, 7)):
+        r1 = best[1]
+        for r in np.linspace(r1 * (1 - span), r1 * (1 + span), steps):
+            c, j = se_corr(p, se_rs(d, r))
+            if c > best[0]: best = (c, float(r), j)
+    return best
+
+_SE = {}
+def _se_init(folder):
+    """a worker's disc samples: every .raw below folder, trimmed, with their loudness shape and semitone spectrum"""
+    import glob, hashlib
+    seen = set(); keys = []; data = []
+    for f in sorted(glob.glob(os.path.join(folder, '*', '*.raw'))):
+        b = open(f, 'rb').read(); h = hashlib.md5(b).hexdigest()
+        if h in seen or len(b) < 400: continue
+        seen.add(h); a = np.frombuffer(b, '<i2').astype(np.float32) / 32768; s, e = se_trim(a)
+        if e - s < 100: continue
+        keys.append(f); data.append((a, s, e))
+    _SE['keys'] = keys; _SE['data'] = data
+    _SE['E'] = np.stack([se_env(a[s:e]) for a, s, e in data]); _SE['B'] = np.stack([se_bands(a[s:e], 44100) for a, s, e in data])
+
+def _se_match(path):
+    """one PC effect: (path, score, ratio, lag, disc sample index, PC trim start) or a score of -1"""
+    p, rate = read_pc(path); s, e = se_trim(p); pt = p[s:e]
+    if len(pt) < 100 or rate != 22050: return path, -1.0, 0, 0, -1, 0
+    E, B = _SE['E'], _SE['B']; pb = se_bands(pt, 22050); es = E @ se_env(pt)
+    best = np.full(len(E), -9.0); bm = np.zeros(len(E), int)
+    for m in range(-16, 41):                     # a pitch m semitones off: the PC's band k is the disc's k + m (ratio 0.5 * 2^(m/12))
+        lo, hi = max(0, -m), min(SE_K, SE_K - m); x = pb[lo:hi]; Y = B[:, lo + m:hi + m]
+        ok = ~np.isnan(x)[None, :] & ~np.isnan(Y); n = ok.sum(1)
+        xs = np.where(ok, x[None, :], 0); ys = np.where(ok, Y, 0)
+        xc = np.where(ok, xs - (xs.sum(1) / np.maximum(n, 1))[:, None], 0); yc = np.where(ok, ys - (ys.sum(1) / np.maximum(n, 1))[:, None], 0)
+        c = (xc * yc).sum(1) / (np.sqrt((xc ** 2).sum(1) * (yc ** 2).sum(1)) + 1e-9); c[n < 24] = -9
+        better = c > best; best[better] = c[better]; bm[better] = m
+    sc = best + 0.5 * es; top = (-1.0, 0, 0, -1)
+    for i in np.argsort(-sc)[:12]:
+        a, ds, de = _SE['data'][i]
+        for dm in (0, -1, 1):
+            c, r, j = se_search(a[ds:de], pt, 0.5 * 2 ** ((bm[i] + dm) / 12))
+            if c > top[0]: top = (c, r, j, int(i))
+            if c > 0.9: break
+        if top[0] > 0.97: break
+    return path, top[0], top[1], top[2], top[3], s
+
+def fft_resample(x, n):
+    """x at n samples, band-limited (zero-padded so the ends don't wrap)"""
+    pad = len(x) // 8 + 64; y = np.concatenate([np.zeros(pad), x, np.zeros(pad)]); m = len(y); N = int(round(m * n / len(x)))
+    Y = np.fft.irfft(np.fft.rfft(y), N) * (N / m); q = int(round(pad * n / len(x))); return Y[q:q + n]
+
+def disc_banks(game, d):
+    """every sample bank on the disc: (vh, vb, sound RAM address or None). Dino Crisis: the Gian banks in PSX/DATA/*.DAT;
+    Resident Evil: PSX/SOUND/*.HED (a VAB header after a small table) with its .VB, and the VAB in each room (.RDT)"""
+    files = list(psx_disc.walk(d))
+    if game == 'dc':
+        for path, lba, size, xa in files:
+            up = path.upper()
+            if xa or not (up.startswith('PSX/DATA/') and up.endswith('.DAT')): continue
+            banks = {}
+            for k, a, c, data in dc_chunks(psx_disc.read_file(d, lba, size)):
+                if k == 3 and data[:4] == b'Gian': banks.setdefault(c & 15, {})['vh'] = (data, a)
+                if k == 4: banks.setdefault(c & 15, {})['vb'] = (data, a)
+            for b in banks.values():
+                if 'vh' in b and 'vb' in b: yield b['vh'][0], b['vb'][0], b['vh'][1]
+    elif game == 're1':
+        byname = {p.upper(): (l, s) for p, l, s, x in files}
+        for path, lba, size, xa in files:
+            up = path.upper()
+            if up.startswith('PSX/SOUND/') and up.endswith('.HED') and up[:-4] + '.VB' in byname:
+                h = psx_disc.read_file(d, lba, size); i = h.find(b'pBAV')
+                if i >= 0: yield h[i:], psx_disc.read_file(d, *byname[up[:-4] + '.VB']), None
+            elif up.endswith('.RDT'):
+                b = psx_disc.read_file(d, lba, size); i = b.find(b'pBAV')
+                if i < 0 or i + 32 > len(b): continue
+                ps, ts, vs = struct.unpack_from('<HHH', b, i + 18); vh = 32 + 2048 + ps * 512 + 512
+                if i + vh > len(b): continue
+                vbl = sum(struct.unpack_from('<256H', b, i + vh - 512)[:vs + 1]) * 8
+                yield b[i:i + vh], b[i + vh:i + vh + vbl], None
+
+EFFECTS = {   # the PC's effects folder, which of its files are effects, and when a disc sample is worth taking
+    'dc':  {'folder': 'Sound/SE', 'pick': lambda n: n.lower().endswith('.dat'), 'take': lambda score, r: score >= 0.85,
+            'note': '16-bit 44.1 kHz at the PC\'s pitch, timing and loudness (the PC: 8-bit 22 kHz)'},
+    're1': {'folder': 'USA/Sound', 'pick': lambda n: n.lower().endswith('.wav') and not n.lower().startswith('bgm'),
+            'take': lambda score, r: score >= 0.85 and r < 0.95,       # only where the PC cut the disc's sample rate down
+            'note': 'the ones the PC cut down to 22 kHz, at the disc\'s full rate (44.1 kHz files) and the PC\'s pitch, timing and loudness'},
+}
+
+def effects(game, cue, game_dir, mod, report=None):
+    """the PC's sound effects (Dino Crisis: 8-bit 22 kHz; Resident Evil: 22 kHz) are the PlayStation's samples converted.
+    Each sample of every bank on the disc is decoded (psx_seq --samples); each PC effect is looked for among them by its
+    pitch-shifted spectrum and loudness shape, then confirmed on the waveform itself at the best resampling ratio (0.85
+    or better); the disc's sample is then written at that pitch, 16-bit 44.1 kHz, at the PC effect's place, length,
+    loudness and channels. Effects with no match (or, for Resident Evil, no more detail on the disc) keep the PC's."""
+    import hashlib, shutil, concurrent.futures as cf
+    cfg = EFFECTS[game]; folder = find_ci(game_dir, cfg['folder'])
+    if not folder: say(f'{TITLES[game]}: {cfg["folder"]} is missing'); return 0, 0
+    work = tempfile.mkdtemp(prefix=f'{game}-se-'); seen = set(); nb = 0
+    try:
+        tool = psx_seq_bin()
+        for c in cue.split(','):
+            d = psx_disc.Disc(c)
+            try:
+                for vh, vb, base in disc_banks(game, d):
+                    h = hashlib.md5(vb).hexdigest()
+                    if h in seen or not vb: continue
+                    seen.add(h); nb += 1; out = os.path.join(work, f'{nb:04d}'); os.makedirs(out)
+                    open(out + '.vh', 'wb').write(vh); open(out + '.vb', 'wb').write(vb)
+                    subprocess.run([tool, '--samples', out + '.vh', out + '.vb', out, 'x'] + (['-b', '%x' % base] if base is not None else []), capture_output=True)
+            finally: d.close()
+        pcs = sorted(os.path.join(r, f) for r, _, fs in os.walk(folder) for f in fs if cfg['pick'](f))
+        say(f'Matching {len(pcs)} sound effects with {nb} of the disc\'s sample banks…')
+        _se_init(work); keys, data = _SE['keys'], _SE['data']; done = 0; lines = []
+        with cf.ProcessPoolExecutor(max(2, (os.cpu_count() or 4) - 1), initializer=_se_init, initargs=(work,)) as ex:
+            for k, (path, score, r, j, i, ps) in enumerate(ex.map(_se_match, pcs, chunksize=4)):
+                rel = os.path.relpath(path, game_dir)
+                if (k + 1) % 50 == 0: say(f'Sound effects: {k + 1} of {len(pcs)}')
+                if i < 0 or not cfg['take'](score, r): lines.append(f'  -    {rel}: {"no match" if i < 0 else f"best {score:.2f} at {r:.2f}"}: kept'); continue
+                a, ds, de = data[i]
+                raw = open(path, 'rb').read(); ch = struct.unpack_from('<H', raw, 22)[0] if raw[:4] == b'RIFF' else 1
+                pcm, pr = read_pc(path); n_out = 2 * len(pcm)
+                # the disc sample's start in the PC clip: its trimmed start at ps + j, at r PC samples per disc sample
+                start = 2 * (ps + j - ds * r); x = fft_resample(a.astype(np.float64), int(round(len(a) * 2 * r)))
+                o = int(round(start)); y = np.zeros(n_out)
+                lo, hi = max(0, o), min(n_out, o + len(x))
+                if hi > lo: y[lo:hi] = x[lo - o:hi - o]
+                # loudness: least squares against the PC clip (at 22 kHz, its own channels)
+                if ch == 2:
+                    st = _stereo_pc(path)
+                    gl = _ls_gain(st[:, 0], y[::2][:len(st)]); gr = _ls_gain(st[:, 1], y[::2][:len(st)])
+                    outv = np.stack([y * gl, y * gr], 1)
+                else:
+                    outv = (y * _ls_gain(pcm, y[::2][:len(pcm)]))[:, None]
+                peak = float(np.abs(outv).max()) if outv.size else 0
+                if peak > 0.999: outv *= 0.999 / peak
+                _write_pcm(os.path.join(mod, rel), outv, 44100)
+                done += 1; lines.append(f'{score:.3f}  {rel}  <-  {os.path.basename(os.path.dirname(keys[i]))}/{os.path.basename(keys[i])} at {r * 2:.4f}x')
+        say(f'sound effects: {done} of {len(pcs)} from the disc')
+        if report: open(report, 'w').write('\n'.join(lines) + '\n')
+        return done, len(pcs)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+def _stereo_pc(path):
+    r = subprocess.run([FFMPEG, '-v', 'error', '-i', path, '-ac', '2', '-f', 's16le', '-'], capture_output=True)
+    return np.frombuffer(r.stdout, '<i2').astype(np.float64).reshape(-1, 2) / 32768
+
+def _ls_gain(target, x):
+    """the gain that gives x the target's loudness where both play (its sign: the target's polarity)"""
+    n = min(len(target), len(x)); t, y = target[:n], x[:n]; on = np.abs(t) > 0.01
+    if on.sum() < 32: on = np.ones(n, bool)
+    ry = float(np.sqrt((y[on] ** 2).mean())); g = float(np.sqrt((t[on] ** 2).mean())) / ry if ry > 1e-9 else 0.0
+    return g if float((t * y).sum()) >= 0 else -g
+
+def _write_pcm(path, a, rate):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pcm = (np.clip(a, -1, 1) * 32767).astype('<i2')
+    with wave.open(path, 'wb') as w: w.setnchannels(a.shape[1]); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm.tobytes())
+
 def main(argv):
     if len(argv) >= 5 and argv[0] == 'restore' and argv[1] in GAMES:
         app = argv[argv.index('--app') + 1] if '--app' in argv else None
         sys.exit(restore(argv[1], argv[2], argv[3], argv[4], app))
+    if len(argv) >= 5 and argv[0] == 'effects' and argv[1] in EFFECTS:
+        rep = argv[argv.index('--report') + 1] if '--report' in argv else None
+        effects(argv[1], argv[2], argv[3], argv[4], rep); return
     if len(argv) >= 5 and argv[0] == 'music':
         rep = argv[argv.index('--report') + 1] if '--report' in argv else None
         music(argv[1], argv[2], argv[3], argv[4], rep); return

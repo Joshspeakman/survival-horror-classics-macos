@@ -15,34 +15,23 @@
  * W32_ROFSDUMP_LIST=<file of names, one a line, as the game asks: /data_a/voice/M101A010.WAV>: at the game's first
  * archive open, each listed file is read through the game's own reader (unpacked) and saved below <folder> (the disc
  * import compares the PC's voices with the PlayStation's: tools/psx_import.py). W32_ROFSVOICE=<M101A010.WAV> (Resident
- * Evil 3): that voice line started at the first archive open, as the game's scenes start one. */
+ * Evil 3): that voice line started at the first archive open, as the game's scenes start one.
+ *
+ * Dino Crisis: its music table (0x625448: 16-byte rows of id, flags, name "bgm\me_00SL", loop point) gives each looping
+ * track's loop point in sample frames of the PC's file (22050 Hz); the player turns it into a byte offset with the
+ * file's own format (0x4049a9). A mod's music at another rate (the disc import's 44.1 kHz) would loop at the wrong
+ * place, so before the game reads the table (its first sound table setup, 0x4043e0) the loop point of each track a
+ * mod replaces is scaled to the mod file's rate. Without mods nothing changes. */
 #include "w32.h"
 #include "edition.h"
-#ifdef RE3_EDITION
+#if defined(RE3_EDITION) || defined(DC_EDITION)
 #include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifdef RE3_MERCE
-enum { F_OPEN = 0x00507b70u, F_SEEK = 0x00507b90u, F_READ = 0x00507bb0u, F_CLOSE = 0x00507bd0u };
-#else
-enum { F_OPEN = 0x00507b00u, F_SEEK = 0x00507b20u, F_READ = 0x00507b40u, F_CLOSE = 0x00507b60u };
-#endif
-#ifndef RE3_MERCE
-enum { VOICE_OPEN = 0x00506e70u, VOICE_PLAY = 0x00506e90u };   /* the sound object's stream open (channel, name) and play (channel) */
-#endif
-enum { M_OPEN = 0x004214c0u, M_CLOSE = 0x00414f10u, M_READ = 0x00414f70u, M_SEEK = 0x00414fd0u };   /* the reader's methods */
-#define FAKE 0x4d4f0000u                         /* a mod file's handle: FAKE + slot (the game's own are small numbers) */
-#define NSLOT 64
 int w32_mod_count(void);
 const char *w32_mod_dir(int k);
-
-static int rlog(void) { static int on = -1; if (on < 0) on = getenv("W32_ROFSLOG") != 0; return on; }
-static int fds[NSLOT]; static int fds_ready;
-static pthread_mutex_t sm = PTHREAD_MUTEX_INITIALIZER;
-
 /* rel (a/b/c, '/' separated) below base, each name in any case; 0 and the host path when it is a file */
 static int resolve_ci(const char *base, const char *rel, char *out, size_t cap)
 {
@@ -62,6 +51,25 @@ static int resolve_ci(const char *base, const char *rel, char *out, size_t cap)
     struct stat st; if (stat(cur, &st) || !S_ISREG(st.st_mode)) return -1;
     snprintf(out, cap, "%s", cur); return 0;
 }
+#endif
+#ifdef RE3_EDITION
+
+#ifdef RE3_MERCE
+enum { F_OPEN = 0x00507b70u, F_SEEK = 0x00507b90u, F_READ = 0x00507bb0u, F_CLOSE = 0x00507bd0u };
+#else
+enum { F_OPEN = 0x00507b00u, F_SEEK = 0x00507b20u, F_READ = 0x00507b40u, F_CLOSE = 0x00507b60u };
+#endif
+#ifndef RE3_MERCE
+enum { VOICE_OPEN = 0x00506e70u, VOICE_PLAY = 0x00506e90u };   /* the sound object's stream open (channel, name) and play (channel) */
+#endif
+enum { M_OPEN = 0x004214c0u, M_CLOSE = 0x00414f10u, M_READ = 0x00414f70u, M_SEEK = 0x00414fd0u };   /* the reader's methods */
+#define FAKE 0x4d4f0000u                         /* a mod file's handle: FAKE + slot (the game's own are small numbers) */
+#define NSLOT 64
+
+static int rlog(void) { static int on = -1; if (on < 0) on = getenv("W32_ROFSLOG") != 0; return on; }
+static int fds[NSLOT]; static int fds_ready;
+static pthread_mutex_t sm = PTHREAD_MUTEX_INITIALIZER;
+
 /* the game's name for a file ("Bio19/Data_a/pld/PL00.PLD", "d:/bio19/...") as a path below a mod: data_a/pld/PL00.PLD */
 static void mod_rel(const char *name, char *out, size_t cap)
 {
@@ -175,5 +183,54 @@ int re_mods_override(Ctx *c, uint32_t addr)
         close(fd); pthread_mutex_lock(&sm); fds[k] = -1; pthread_mutex_unlock(&sm); c->eax = 0;
     }
     c->esp += pops; return 1;
+}
+#endif
+
+#ifdef DC_EDITION
+enum { DC_TABLES_SET = 0x004043e0u, DC_MUSIC = 0x00625448u, DC_PC_RATE = 22050 };
+/* a WAVE file's sample rate (0 when it isn't one) */
+static uint32_t wave_rate(const char *path)
+{
+    FILE *f = fopen(path, "rb"); if (!f) return 0;
+    uint8_t h[12], ck[8], fmt[16]; uint32_t rate = 0;
+    if (fread(h, 1, 12, f) == 12 && !memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WAVE", 4))
+        while (fread(ck, 1, 8, f) == 8) {
+            uint32_t n = ck[4] | ck[5] << 8 | ck[6] << 16 | (uint32_t)ck[7] << 24;
+            if (!memcmp(ck, "fmt ", 4)) { if (n >= 16 && fread(fmt, 1, 16, f) == 16) rate = fmt[4] | fmt[5] << 8 | fmt[6] << 16 | (uint32_t)fmt[7] << 24; break; }
+            if (fseek(f, (long)(n + (n & 1)), SEEK_CUR)) break;
+        }
+    fclose(f); return rate;
+}
+int re_mods_override(Ctx *c, uint32_t addr)
+{
+    (void)c;
+    static int done; if (addr != DC_TABLES_SET || done) return 0;
+    done = 1; int n = w32_mod_count(), scaled = 0;
+    const char *as = getenv("W32_DC_MUSIC_AS");          /* development: "mf_16=me_00SL" plays the second where the first plays */
+    if (as && strchr(as, '=')) {
+        char a1[64], a2[64]; snprintf(a1, sizeof a1, "bgm\\%.*s", (int)(strchr(as, '=') - as), as); snprintf(a2, sizeof a2, "bgm\\%s", strchr(as, '=') + 1);
+        uint32_t r1 = 0, r2 = 0;
+        for (uint32_t row = DC_MUSIC; rt_r32(G_MEM, row + 8); row += 16) {
+            const char *nm = (const char *)GP(rt_r32(G_MEM, row + 8));
+            if (!strcasecmp(nm, a1)) r1 = row; if (!strcasecmp(nm, a2)) r2 = row;
+        }
+        if (r1 && r2) for (int k = 4; k < 16; k += 4) rt_w32(G_MEM, r1 + (uint32_t)k, rt_r32(G_MEM, r2 + (uint32_t)k));
+        fprintf(stderr, "dc: music %s plays as %s%s\n", a1, a2, r1 && r2 ? "" : " (not found)");
+    }
+    for (uint32_t row = DC_MUSIC; n; row += 16) {
+        uint32_t flags = rt_r32(G_MEM, row + 4), name = rt_r32(G_MEM, row + 8), loop = rt_r32(G_MEM, row + 12);
+        if (!name) break;
+        if (!(flags & 0x20) || !loop) continue;           /* no loop point: nothing to scale */
+        char rel[256]; snprintf(rel, sizeof rel, "Sound/%s.dat", (const char *)GP(name));
+        for (char *q = rel; *q; q++) if (*q == '\\') *q = '/';
+        for (int k = 0; k < n; k++) {
+            char path[2048]; if (resolve_ci(w32_mod_dir(k), rel, path, sizeof path)) continue;
+            uint32_t rate = wave_rate(path);
+            if (rate && rate != DC_PC_RATE) { rt_w32(G_MEM, row + 12, (uint32_t)((uint64_t)loop * rate / DC_PC_RATE)); scaled++; }
+            break;                                          /* the first mod with the file is the one the game reads */
+        }
+    }
+    if (scaled) fprintf(stderr, "dc: %d music loop point%s scaled to the mods' rate\n", scaled, scaled == 1 ? "" : "s");
+    return 0;                                               /* then the game's own setup */
 }
 #endif

@@ -6,8 +6,10 @@
  * Effects (I3DL2 reverb) are accepted and not applied. Play and write cursors advance with the device, as Miles'
  * fragment mixer expects.
  *
- * Each buffer's guest object holds three interface pointers, each followed by the buffer's index: +0 the buffer
- * (IDirectSoundBuffer8), +8 its IDirectSound3DBuffer (the primary buffer's: IDirectSound3DListener), +16 its effect. */
+ * Each buffer's guest object holds four interface pointers, each followed by the buffer's index: +0 the buffer
+ * (IDirectSoundBuffer8), +8 its IDirectSound3DBuffer (the primary buffer's: IDirectSound3DListener), +16 its effect,
+ * +24 its IDirectSoundNotify: events set as the play cursor passes the given offsets, and the stop ones when it stops
+ * (Dino Crisis streams its music through a buffer refilled on these). */
 #include "w32.h"
 #include "host_audio.h"
 #include <math.h>
@@ -22,11 +24,13 @@ typedef struct Buf {
     _Atomic uint32_t play; double frac; _Atomic int playing, looping;
     int is3d, mode; float pos[3], vel[3], mind, maxd; uint32_t cone[2]; float coneor[3]; int32_t conevol;
     FILE *dump; uint32_t dump_frames, serial;           /* W32_DSDUMP: the stream as played, before gain */
+    int nnotes; uint32_t note_off[32], note_ev[32];     /* IDirectSoundNotify: offsets (0xffffffff: on stop) and events */
 } Buf;
-#define NBUF 512
+void w32_event_signal(uint32_t h, int on);
+#define NBUF 4096
 static Buf bufs[NBUF];
 static struct { float pos[3], vel[3], front[3], top[3], dist, rolloff, doppler; } lis = {{0}, {0}, {0, 0, 1}, {0, 1, 0}, 1, 1, 1}; static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t vt_ds, vt_buf, vt_3d, vt_lis, vt_fx, ds_obj; static int ds_refs;
+static uint32_t vt_ds, vt_buf, vt_3d, vt_lis, vt_fx, vt_note, ds_obj; static int ds_refs;
 /* Each buffer's sound data in the game's heap, and how many buffers use it (a duplicate shares its original's). San
  * Andreas makes a buffer for almost every sound it loads: the data is freed with its last buffer (it leaked ~7 MB a
  * minute). Under `lock`, which render() holds while it reads the data. */
@@ -53,7 +57,7 @@ static _Atomic uint32_t slice_max = 512;                  /* largest render the 
 static Buf *B(uint32_t obj)                            /* any of a buffer's interface pointers -> the buffer */
 {
     uint32_t k = rt_r32(G_MEM, obj + 4);
-    return k < NBUF && bufs[k].used && (bufs[k].obj == obj || bufs[k].obj + 8 == obj || bufs[k].obj + 16 == obj) ? &bufs[k] : 0;
+    return k < NBUF && bufs[k].used && (bufs[k].obj == obj || bufs[k].obj + 8 == obj || bufs[k].obj + 16 == obj || bufs[k].obj + 24 == obj) ? &bufs[k] : 0;
 }
 static float F(uint32_t v) { float f; memcpy(&f, &v, 4); return f; }
 /* the 3D gains of a buffer: distance attenuation and pan relative to the listener */
@@ -96,10 +100,11 @@ static void render(void *u, void *buffer, uint32_t frames)
         static int tf = -1, n; if (tf < 0) { const char *e = getenv("DS_TEST_FAULT"); tf = e && getenv("DS_TEST") && !strcmp(e, "audio"); }
         if (tf && ++n == 500) *(volatile uint32_t *)(uintptr_t)8 = 1;
     }
+    uint32_t fire[64]; int nfire = 0;                     /* notification events passed: set once the lock is let go */
     pthread_mutex_lock(&lock);
     for (int k = 0; k < NBUF; k++) {          /* secondaries play whether or not the primary was Play()ed: DirectSound runs it implicitly */
         Buf *b = &bufs[k]; if (!b->used || b->primary || !b->playing || b->mem < 0x10000u || !b->size || !b->align) continue;
-        double gl, gr; gains3d(b, &gl, &gr);
+        double gl, gr; gains3d(b, &gl, &gr); uint32_t start_byte = b->play;
         uint32_t nframes = b->size / b->align, pos = b->play / b->align; double step = (double)(b->freq ? b->freq : (uint32_t)b->rate) / OUT_RATE, fr = b->frac;
         static const char *dumpdir; static int dd_init; if (!dd_init) { dd_init = 1; dumpdir = getenv("W32_DSDUMP"); }
         if (dumpdir && !b->dump) {
@@ -120,8 +125,15 @@ static void render(void *u, void *buffer, uint32_t frames)
             if (pos >= nframes) { if (b->looping) pos -= nframes; else { b->playing = 0; pos = 0; break; } }
         }
         b->frac = fr; b->play = pos * b->align;
+        for (int n = 0; n < b->nnotes && nfire < 64; n++) {
+            uint32_t o = b->note_off[n], p0 = start_byte, p1 = b->play;
+            int hit = o == 0xffffffffu ? !b->playing : p1 >= p0 ? (o >= p0 && o < p1) : (o >= p0 || o < p1);
+            if (p1 == p0 && b->playing) hit = 0;
+            if (hit) fire[nfire++] = b->note_ev[n];
+        }
     }
     pthread_mutex_unlock(&lock);
+    for (int k = 0; k < nfire; k++) w32_event_signal(fire[k], 1);
     w32_audio_out(out, frames, OUT_RATE, 1);
     if (getenv("W32_AUDIO_MUTE")) memset(out, 0, frames * 8);
 
@@ -148,6 +160,7 @@ static void b_QueryInterface(Ctx *c)                   /* the buffer (8), its 3D
     if (iid == 0 || iid == 0x279afa85u || iid == 0x6825a449u) r = b->obj;                       /* IUnknown, IDirectSoundBuffer(8) */
     else if (iid == 0x279afa86u && !b->primary) r = b->obj + 8;                                   /* IDirectSound3DBuffer */
     else if (iid == 0x279afa84u && b->primary) r = b->obj + 8;                                    /* IDirectSound3DListener */
+    else if (iid == 0xb0210783u && !b->primary) r = b->obj + 24;                                  /* IDirectSoundNotify */
     LOG("buffer QueryInterface %08x -> %s\n", iid, r ? "ok" : "no interface");
     rt_w32(G_MEM, out, r); if (r) b->refs++;
     RET(r ? DS_OK : DSERR_NOINTERFACE, 3);
@@ -233,8 +246,21 @@ static void b_SetFrequency(Ctx *c) { Buf *b = B(ARG(0)); if (!b) RET(DSERR_INVAL
 static void b_Stop(Ctx *c)
 {
     Buf *b = B(ARG(0)); if (!b) RET(DSERR_INVALIDPARAM, 1);
+    int was = b->playing;
     if (b->primary) primary_playing = 0; else b->playing = 0;
+    if (was) for (int n = 0; n < b->nnotes; n++) if (b->note_off[n] == 0xffffffffu) w32_event_signal(b->note_ev[n], 1);   /* DSBPN_OFFSETSTOP */
     RET(DS_OK, 1);
+}
+/* ---- IDirectSoundNotify ---- */
+static void n_SetNotificationPositions(Ctx *c)          /* (count, DSBPOSITIONNOTIFY *: offset, event) */
+{
+    Buf *b = B(ARG(0)); uint32_t n = ARG(1), p = ARG(2); if (!b || b->primary || n > 32 || (n && !p)) RET(DSERR_INVALIDPARAM, 3);
+    if (b->playing) RET(0x88780032u /* DSERR_INVALIDCALL */, 3);
+    pthread_mutex_lock(&lock); b->nnotes = (int)n;
+    for (uint32_t k = 0; k < n; k++) { b->note_off[k] = rt_r32(G_MEM, p + 8 * k); b->note_ev[k] = rt_r32(G_MEM, p + 8 * k + 4); }
+    pthread_mutex_unlock(&lock);
+    LOG("notification positions: %u\n", n);
+    RET(DS_OK, 3);
 }
 static void b_Unlock(Ctx *c) { RET(DS_OK, 5); }
 static void b_Restore(Ctx *c) { RET(DS_OK, 1); }
@@ -255,9 +281,9 @@ static uint32_t new_buf(Buf **out)
     int k = 0; while (k < NBUF && bufs[k].used) k++;
     if (k == NBUF) { pthread_mutex_unlock(&lock); static int w; if (!w++) fprintf(stderr, "dsound: more than %d sound buffers\n", NBUF); return 0; }
     Buf *b = &bufs[k]; uint32_t keep = b->obj; memset(b, 0, sizeof *b); b->used = 1; b->refs = 1; b->mind = 1; b->maxd = 1e9f; set_gain(b);
-    b->obj = keep ? keep : heap_alloc(w32_process_heap, 8, 24);           /* a slot's object is reused with it */
-    for (uint32_t i = 0; i < 3; i++) rt_w32(G_MEM, b->obj + 8 * i + 4, (uint32_t)k);
-    rt_w32(G_MEM, b->obj, vt_buf); rt_w32(G_MEM, b->obj + 8, vt_3d); rt_w32(G_MEM, b->obj + 16, vt_fx);
+    b->obj = keep ? keep : heap_alloc(w32_process_heap, 8, 32);           /* a slot's object is reused with it */
+    for (uint32_t i = 0; i < 4; i++) rt_w32(G_MEM, b->obj + 8 * i + 4, (uint32_t)k);
+    rt_w32(G_MEM, b->obj, vt_buf); rt_w32(G_MEM, b->obj + 8, vt_3d); rt_w32(G_MEM, b->obj + 16, vt_fx); rt_w32(G_MEM, b->obj + 24, vt_note);
     pthread_mutex_unlock(&lock);
     *out = b; return b->obj;
 }
@@ -293,6 +319,7 @@ static void d_DuplicateSoundBuffer(Ctx *c)             /* (original, duplicate *
     b->flags = o->flags; b->is3d = o->is3d; b->ch = o->ch; b->bits = o->bits; b->rate = o->rate; b->align = o->align; b->size = o->size;
     pthread_mutex_lock(&lock); b->mem = o->mem; if (b->mem) ring_use(b->mem); pthread_mutex_unlock(&lock);
     b->vol = o->vol; b->pan = o->pan; b->freq = o->freq; set_gain(b);
+    LOG("duplicate buffer\n");
     rt_w32(G_MEM, ARG(2), obj); RET(DS_OK, 3);
 }
 static void d_SetCooperativeLevel(Ctx *c) { RET(DS_OK, 3); }
@@ -402,6 +429,8 @@ IMPL(dsound, DirectSoundCreate)
             l_SetOrientation, l_SetPosition, l_SetRolloffFactor, l_SetVelocity, l_CommitDeferredSettings };
         static void (*const fx[])(Ctx *) = { b_QueryInterface, b_AddRef, b_Release, x_SetAllParameters, x_GetAllParameters, x_SetPreset, x_GetPreset,
             x_SetQuality, x_GetQuality };
+        static void (*const nt[])(Ctx *) = { b_QueryInterface, b_AddRef, b_Release, n_SetNotificationPositions };
+        vt_note = vtable("IDirectSoundNotify", nt, 4);
         _Static_assert(sizeof ds / sizeof *ds == 12 && sizeof bf / sizeof *bf == 24 && sizeof td / sizeof *td == 21 && sizeof ls / sizeof *ls == 18 &&
                        sizeof fx / sizeof *fx == 9, "vtable sizes");
         vt_ds = vtable("IDirectSound8", ds, 12); vt_buf = vtable("IDirectSoundBuffer8", bf, 24); vt_3d = vtable("IDirectSound3DBuffer", td, 21);

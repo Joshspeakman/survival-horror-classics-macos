@@ -221,6 +221,8 @@ IMPL(winmm, mmioOpenA)                                /* (file name, MMIOINFO *,
     else if (name) {
         char host[2048]; struct stat st; FILE *f = 0;
         if (!w32_host_path(GS(name), host, sizeof host, 0) && !stat(host, &st)) f = fopen(host, "rb");
+        static int flog = -1; if (flog < 0) flog = getenv("W32_FILELOG") != 0;
+        if (flog) fprintf(stderr, "w32: mmioOpenA(%s) -> %s\n", GS(name), f ? host : "(none)");
         if (!f) { if (info) rt_w32(G_MEM, info + 12, 257); RET(0, 3); }
         size = (uint32_t)st.st_size; base = heap_alloc(w32_process_heap, 0, size ? size : 1); owned = 1;
         if (fread(GP(base), 1, size, f) != size) size = 0;

@@ -90,14 +90,30 @@ Evil 3; Dino Crisis).
   - Dino Crisis: without the PC's 8-bit hiss.
   - Every line is matched to the PC line it replaces by its waveform, then cut to that line's timing and set to its
     loudness, so scenes and the mix stay as they were. Lines the disc doesn't have stay the PC's.
-- **PlayStation movies** (Resident Evil): 15 fps where the PC's are 10 fps Cinepak, the uncut colour cuts where a disc
-  has them (a Director's Cut Dual Shock with the original content restored). The PC's staff rolls stay, because their
-  credits are part of the picture.
+- **PlayStation music** (Resident Evil 2, Dino Crisis): rendered from the disc's own sequences and sample banks, as the
+  PlayStation's sound chip plays them (its sample decoding, interpolation, envelopes and reverb), at 44.1 kHz stereo.
+  Resident Evil 2's PC plays 22 kHz ADPCM recordings of the same music; Dino Crisis's, 8-bit ones. Each render is
+  matched to the PC track it replaces and cut to its start and length; loops are cut from the render's own loop, so
+  they are seamless, and loop where the PC's do.
+- **PlayStation sound effects** (Dino Crisis, Resident Evil): the PC's effects are the disc's samples converted
+  (Dino Crisis to 8 bits; some of Resident Evil's down to 22 kHz). Each is matched to its disc sample on the waveform
+  and replaced by it at 16-bit 44.1 kHz, at the PC effect's pitch, timing and loudness. Resident Evil only takes the
+  ones the PC cut down.
+- **PlayStation movies** (all four games, each its own switch in the list):
+  - Resident Evil (on): 15 fps where the PC's are 10 fps Cinepak, and the uncut colour cuts where a disc has them (a
+    Director's Cut Dual Shock with the original content restored). The PC's staff rolls stay, because their credits are
+    part of the picture.
+  - Resident Evil 2, Resident Evil 3 and Dino Crisis (off): the disc's own movies, for the PlayStation look. The PC's
+    are as good or better (Resident Evil 2 at 30 fps, Dino Crisis at 640×480, Resident Evil 3 the same frames), so
+    they stay unless you switch these on.
 
-The other games' movies stay the PC's: Resident Evil 2's run at 30 fps on PC, and Resident Evil 3's are the disc's
-own, already full size. Dino Crisis's are 640×480 on PC. Resident Evil 3's PC voices are packed in its archives, so
-restoring them runs the game for a few seconds in the background to unpack them with its own reader. The mods appear
-at the top of the list, switched on; restoring again replaces them.
+What stays the PC's, and why: Resident Evil's music (the PC's isn't a rendering of the disc's sequences, so there is
+nothing to match it to), Resident Evil 3's music and effects (the same files as the disc's), and Resident Evil 2's
+effects (the same 4-bit samples as the disc's). Each mod's line in the list says how many files it replaces.
+
+Resident Evil 3's PC voices are packed in its archives, so restoring them runs the game for a few seconds in the
+background to unpack them with its own reader. The mods appear at the top of the list, switched on (the optional
+movies off); restoring again replaces them. A restore takes a few minutes per game.
 
 From a terminal: `"Survival Horror Classics Nightly.app/Contents/MacOS/SurvivalHorrorClassics" --install-mod re2
 <archive> [leon|claire|both]`, and `--list-mods <game>`.
