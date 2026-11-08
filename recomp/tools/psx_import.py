@@ -29,6 +29,15 @@ nothing from a disc is part of the project.
       on, at the top of the list (a restore again replaces them). Resident Evil 3's PC voices are packed in its archives:
       they are unpacked by the game's own reader, the app's ResidentEvil3 run in test mode (--app).
 
+  psx_import.py music re2 <disc .cue> <game folder> <mod folder> [--report <file>]
+      Resident Evil 2's music from the disc's own sequences and sample banks (COMMON/SOUND/*.BGM: a SEQ and a VAB, the
+      same data the PC ships), rendered as the PlayStation's sound chip plays it (psx_seq.c: its ADPCM, pitch counter,
+      Gaussian interpolation, ADSR and reverb; Studio Medium, the best fit to the PC's own recordings) at 44.1 kHz
+      stereo. The PC plays 22 kHz ADPCM recordings of these (Common/Sound/bgm/MAINxx.SAP, MAINxx_1/_2.SAP for an intro
+      and its loop, SUBxx.SAP); each is replaced by the render cut at the same place (found by the music's pitch and
+      loudness patterns, the loop's from a second time round so its reverb carries over the seam) for the same length,
+      at the recording's loudness. A track whose render doesn't match its recording (chroma below 0.75) keeps the PC's.
+
 Needs: ffmpeg (Homebrew), numpy (the project's recomp/.venv). Run with recomp/.venv/bin/python.
 """
 import os, struct, subprocess, sys, tempfile, wave
@@ -453,15 +462,150 @@ def restore(game, spec, game_dir, mods_root, app=None):
                             'source': ', '.join(os.path.basename(p) for p in order),
                             'note': f'{nm} movies from your PlayStation discs: {MOVIES[game]["note"]}'})
         else: shutil.rmtree(tmp, ignore_errors=True)
+    # music (Resident Evil 2: its recordings rebuilt from the disc's own sequences and banks)
+    if game == 're2':
+        folder_u = os.path.join(mods_root, game, 'playstation-music'); tmp = folder_u + '.new'; shutil.rmtree(tmp, ignore_errors=True)
+        say('Rendering the music from the disc…')
+        nu, tu = music(game, raw[0], game_dir, tmp)
+        if nu:
+            shutil.rmtree(folder_u, ignore_errors=True); os.replace(tmp, folder_u)
+            entries.append({'name': 'PlayStation music (your disc)', 'folder': 'playstation-music', 'kind': 'files', 'enabled': True, 'game': game,
+                            'source': os.path.basename(raw[0]),
+                            'note': f'{nu} of {tu} tracks rendered from your disc\'s own sequences and samples at 44.1 kHz stereo, as the '
+                                    f'PlayStation plays them (the PC: 22 kHz ADPCM recordings); the rest stay the PC\'s'})
+        else: shutil.rmtree(tmp, ignore_errors=True)
     if not entries: say('Nothing from these discs matched the game.'); return 1
     index_put(mods_root, game, entries)
     say('Restored from your disc: ' + ', '.join(e['name'] for e in entries) + ' (on, at the top of the list).')
     return 0
 
+def psx_seq_bin():
+    """the sequence renderer: beside this script (the app's Resources), else built from psx_seq.c into a temporary folder"""
+    here = os.path.dirname(os.path.abspath(__file__)); b = os.path.join(here, 'psx_seq')
+    if os.path.exists(b) and os.access(b, os.X_OK): return b
+    src = os.path.join(here, 'psx_seq.c'); out = os.path.join(tempfile.gettempdir(), 'psx_seq-' + str(os.getuid()))
+    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
+        subprocess.run(['clang', '-O2', '-o', out, src, '-lm'], check=True)
+    return out
+
+def music_feats(a, rate, hop=0.05):
+    """log energy in 16 bands every hop seconds (mono)"""
+    if rate != 11025:
+        n = int(len(a) * 11025 / rate); a = np.interp(np.arange(n) / 11025, np.arange(len(a)) / rate, a)
+    h = max(1, int(11025 * hop)); w = 1024; n = (len(a) - w) // h
+    if n < 4: return np.zeros((1, 16), np.float32)
+    idx = np.arange(w)[None, :] + h * np.arange(n)[:, None]
+    X = np.abs(np.fft.rfft(a[idx] * np.hanning(w), axis=1)) ** 2
+    edges = np.unique(np.geomspace(2, X.shape[1] - 1, 17).astype(int))
+    B = np.stack([X[:, edges[k]:edges[k + 1]].sum(1) for k in range(len(edges) - 1)], 1)
+    return np.log10(B + 1e-6).astype(np.float32)
+
+def music_chroma(a, rate, hop=0.1):
+    if rate != 11025:
+        n = int(len(a) * 11025 / rate); a = np.interp(np.arange(n) / 11025, np.arange(len(a)) / rate, a)
+    h = int(11025 * hop); w = 4096; n = (len(a) - w) // h
+    if n < 4: return np.zeros((1, 12), np.float32)
+    idx = np.arange(w)[None, :] + h * np.arange(n)[:, None]
+    X = np.abs(np.fft.rfft(a[idx] * np.hanning(w), axis=1)); f = np.fft.rfftfreq(w, 1 / 11025); ok = (f > 65) & (f < 2100)
+    pc = np.round(12 * np.log2(f[ok] / 261.63)).astype(int) % 12; C = np.zeros((n, 12), np.float32)
+    for k in range(12): C[:, k] = X[:, ok][:, pc == k].sum(1)
+    C = np.log1p(C); C = C - C.mean(1, keepdims=True); return C / (np.linalg.norm(C, axis=1, keepdims=True) + 1e-6)
+
+def band_scores(pc_f, ren_f):
+    """the mean (over bands) normalised correlation of the PC's band features at every offset into the render's"""
+    tot = None
+    for b in range(pc_f.shape[1]):
+        r = ncc(ren_f[:, b].astype(np.float64), pc_f[:, b].astype(np.float64)); tot = r if tot is None else tot + r
+    return tot / pc_f.shape[1]
+
+def read_stereo(path):
+    with wave.open(path, 'rb') as w:
+        n, ch, rate = w.getnframes(), w.getnchannels(), w.getframerate(); raw = w.readframes(n)
+    a = np.frombuffer(raw, dtype='<i2').astype(np.float32) / 32768.0
+    return (a.reshape(-1, ch) if ch > 1 else np.stack([a, a], 1)), rate
+
+def write_stereo(path, a, rate=44100, store='wav'):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pcm = (np.clip(a, -1, 1) * 32767).astype('<i2')
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as t: name = t.name
+    with wave.open(name, 'wb') as w: w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm.tobytes())
+    body = open(name, 'rb').read(); os.unlink(name)
+    with open(path, 'wb') as f: f.write((b'\x01\0\0\0\0\0\0\0' if store == 'sap' else b'') + body)
+
+def split_bundle(b):
+    """a SEQ followed by a VAB (Resident Evil 2's .BGM): (seq, vh, vb); the samples are the bank's last bytes (its
+    header can be followed by padding)"""
+    i = b.find(b'pBAV')
+    if i < 0: return None
+    ps = struct.unpack_from('<H', b, i + 18)[0]; nv = struct.unpack_from('<H', b, i + 22)[0]
+    hdr = 32 + 128 * 16 + ps * 16 * 32 + 512; sizes = struct.unpack_from('<256H', b, i + hdr - 512); body = sum(sizes[:nv + 1]) * 8
+    return b[:i], b[i:i + hdr], b[len(b) - body:]
+
+def render(seq, vh, vb, seconds, reverb=3, depth=48):
+    work = tempfile.mkdtemp(prefix='psx-music-')
+    try:
+        for n, d in (('a.seq', seq), ('a.vh', vh), ('a.vb', vb)): open(os.path.join(work, n), 'wb').write(d)
+        out = os.path.join(work, 'a.wav')
+        subprocess.run([psx_seq_bin(), os.path.join(work, 'a.vh'), os.path.join(work, 'a.vb'), os.path.join(work, 'a.seq'), out,
+                        '-s', str(seconds), '-r', str(reverb), '-d', str(depth)], capture_output=True, check=True)
+        return read_stereo(out)
+    finally:
+        import shutil; shutil.rmtree(work, ignore_errors=True)
+
+def place(pc_mono, pc_rate, ren, ren_rate, loop=False):
+    """where the PC recording starts in the render (44.1 kHz samples), how well they agree (bands, chroma)"""
+    rm = ren.mean(1); sc = band_scores(music_feats(pc_mono, pc_rate), music_feats(rm, ren_rate))
+    j = int(np.argmax(sc)); best = float(sc[j])
+    if loop:   # a loop: the latest place nearly as good (a second time round: its reverb carries over the seam)
+        cand = np.where(sc >= best - 0.03)[0]; j = int(cand.max())
+    # to 10 ms, then 1 ms, around it
+    h = int(0.05 * ren_rate); lo = max(0, j * h - h); seg = rm[lo:lo + len(pc_mono) * ren_rate // pc_rate + 2 * h]
+    sc2 = band_scores(music_feats(pc_mono, pc_rate, 0.01), music_feats(seg, ren_rate, 0.01))
+    start = lo + int(np.argmax(sc2)) * int(0.01 * ren_rate)
+    n = int(len(pc_mono) * ren_rate / pc_rate); c = music_chroma(rm[start:start + n], ren_rate); p = music_chroma(pc_mono, pc_rate)
+    m = min(len(c), len(p)); chroma = float((c[:m] * p[:m]).sum(1).mean()) if m else 0.0
+    return start, best, chroma
+
+def music(game, cue, game_dir, mod, report=None):
+    if game != 're2': say('Music: only Resident Evil 2 so far'); return 0, 0
+    d = psx_disc.Disc(cue.split(',')[0]); bundles = {}
+    try:
+        for path, lba, size, xa in psx_disc.walk(d):
+            if path.upper().startswith('COMMON/SOUND/') and path.upper().endswith('.BGM'): bundles[os.path.basename(path).upper()[:-4]] = psx_disc.read_file(d, lba, size)
+    finally: d.close()
+    folder = find_ci(game_dir, 'Common/Sound/bgm'); lines = []; done = 0; total = 0
+    for name in sorted(bundles):
+        parts = split_bundle(bundles[name])
+        if not parts: continue
+        stem = name.replace('SUB_', 'SUB')
+        pcs = [n for n in sorted(os.listdir(folder)) if n.upper() in (f'{stem}.SAP', f'{stem}_1.SAP', f'{stem}_2.SAP')]
+        if not pcs: continue
+        longest = max(os.path.getsize(os.path.join(folder, n)) for n in pcs) / 22000.0
+        ren, rate = render(*parts, seconds=min(600, 2 * longest + 40))
+        for n in pcs:
+            total += 1; p, pr = read_pc(os.path.join(folder, n))
+            if len(p) < pr: lines.append(f'  -    {n}: too short'); continue
+            start, bands, chroma = place(p, pr, ren, rate, loop=n.upper().endswith('_2.SAP') or '_' not in n)
+            if chroma < 0.75: lines.append(f'  -    {n}: the render doesn\'t match the recording (chroma {chroma:.2f}): kept'); continue
+            cnt = int(len(p) * rate / pr); seg = ren[start:start + cnt]
+            if len(seg) < cnt: lines.append(f'  -    {n}: the render ends too soon: kept'); continue
+            seg = seg * (rms(p) / max(rms(seg.mean(1)), 1e-6))
+            peak = float(np.abs(seg).max())
+            if peak > 0.999: seg = seg * (0.999 / peak)
+            write_stereo(os.path.join(mod, 'common', 'sound', 'bgm', n.lower()), seg, rate, store='sap')
+            done += 1; lines.append(f'{chroma:.2f}  {n}  <-  {name}.BGM at {start / rate:.2f} s ({cnt / rate:.1f} s; bands {bands:.2f})')
+    for l in lines: say(l)
+    say(f'music: {done} of {total} recordings rendered from the disc')
+    if report: open(report, 'w').write('\n'.join(lines) + '\n')
+    return done, total
+
 def main(argv):
     if len(argv) >= 5 and argv[0] == 'restore' and argv[1] in GAMES:
         app = argv[argv.index('--app') + 1] if '--app' in argv else None
         sys.exit(restore(argv[1], argv[2], argv[3], argv[4], app))
+    if len(argv) >= 5 and argv[0] == 'music':
+        rep = argv[argv.index('--report') + 1] if '--report' in argv else None
+        music(argv[1], argv[2], argv[3], argv[4], rep); return
     if len(argv) >= 5 and argv[0] == 'movies' and argv[1] in MOVIES:
         rep = argv[argv.index('--report') + 1] if '--report' in argv else None
         movies(argv[1], argv[2], argv[3], argv[4], rep)
