@@ -661,11 +661,27 @@ __attribute__((visibility("default"), used)) int gta_movie_play(const char *path
         movie_layer.frame = host.bounds; movie_layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable; movie_layer.zPosition = 10;
         [host addSublayer:movie_layer];
         movie_done_cb = done; movie_done_user = user;
-        void (^finish)(NSNotification *) = ^(NSNotification *n) { (void)n; if (gen != movie_gen) return; movie_remove(); if (done) done(user); };
+        void (^finish)(NSNotification *) = ^(NSNotification *n) { (void)n; if (gen != movie_gen) return; movie_gen++; movie_remove(); if (done) done(user); };
         movie_end_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemDidPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
         movie_fail_obs = [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification object:item queue:[NSOperationQueue mainQueue] usingBlock:finish];
         [movie_player play];
         fprintf(stderr, "host: movie %s\n", p.UTF8String);
+        {   /* a watchdog: a movie that fails to load, stalls, or reaches its end without the notice still ends (else the
+             * game waits on a black screen until a key skips it) */
+            __block double last_t = -1, last_change = CACurrentMediaTime();
+            dispatch_source_t wd = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+            dispatch_source_set_timer(wd, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), 500 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+            dispatch_source_set_event_handler(wd, ^{
+                if (gen != movie_gen || !movie_player) { dispatch_source_cancel(wd); return; }
+                AVPlayerItem *it = movie_player.currentItem; double now = CACurrentMediaTime(), t = CMTimeGetSeconds(movie_player.currentTime);
+                if (isfinite(t) && t > last_t + 0.01) { last_t = t; last_change = now; }
+                double dur = it ? CMTimeGetSeconds(it.duration) : NAN;
+                const char *why = !it || it.status == AVPlayerItemStatusFailed ? "failed" : now - last_change > 8.0 ? "stalled"
+                                : (isfinite(dur) && dur > 0 && t >= dur - 0.05 && now - last_change > 1.0) ? "ended without notice" : NULL;
+                if (why) { fprintf(stderr, "host: movie %s: %s\n", why, p.UTF8String); dispatch_source_cancel(wd); finish(nil); }
+            });
+            dispatch_resume(wd);
+        }
         if (test_mode) {   /* DS_MOVIE_SKIP="s1,s2,...": skip the nth movie that many seconds in, as a key press would (QA) */
             static int nth; const char *e = getenv("DS_MOVIE_SKIP"); int idx = nth++; double at = -1;
             for (int k = 0; e && *e; k++) { char *end; double v = strtod(e, &end); if (end == e) break; if (k == idx) { at = v; break; } e = *end == ',' ? end + 1 : end; if (*end != ',') break; }
