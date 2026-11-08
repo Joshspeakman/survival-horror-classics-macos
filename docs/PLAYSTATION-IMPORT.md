@@ -5,9 +5,9 @@
 
 | | Voices | Music | Sound effects | Movies |
 |---|---|---|---|---|
-| Resident Evil | 487 of 563 | stays the PC's (below) | 120 of 486: the ones the PC cut to 22 kHz | 21 (on) |
+| Resident Evil | 487 of 563 | stays the PC's (below) | 120 of 486: the ones the PC cut to 22 kHz | 20 (on) |
 | Resident Evil 2 | 569 of 599 | 53 of 108 | stays the PC's (below) | 24 (off) |
-| Resident Evil 3 | 358 of 441 | the disc's files are the PC's | the disc's files are the PC's | 13 (off) |
+| Resident Evil 3 | 358 of 441 | the disc's files are the PC's | the disc's files are the PC's | 11 (off) |
 | Dino Crisis | 554 of 676 | 94 of 96 | 450 of 728 | 4 (off) |
 
 How each was decided, by measuring:

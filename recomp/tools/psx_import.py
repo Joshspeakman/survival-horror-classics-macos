@@ -253,7 +253,7 @@ MOVIES = {
     'dc':  {'pc': [('Movie', '.dat')], 'disc_dirs': ('PSX/MOVIE/',), 'on': False,
             'names': {'e_op': 'opening', 'e_ed1': 'end1', 'e_ed2': 'end2', 'e_ed3': 'end3', 'e_maku': 'maku'},
             'keep': ('staff',),                                  # its credits are in the picture (the PlayStation drew them)
-            'note': 'the PlayStation movies: 320x160 at 15 fps (the PC: 640x480); off: switch on to compare'},
+            'note': 'the PlayStation movies: 320x160 at 30 fps (the PC: 640x480); off: switch on to compare'},
 }
 
 def str_rate(path, sectors):
@@ -306,6 +306,29 @@ def duration(path, fmt=None):
     try: return float(r.stdout.strip())
     except ValueError: return 0.0
 
+def convert_one(g, dd, path, lba, size, pc_path, rel, name, mod, lines, why, disc_name):
+    """one disc's copy of a PC movie: checked against the PC's, converted when it is the same scene in colour"""
+    with tempfile.NamedTemporaryFile(suffix='.str', delete=False) as tmp:
+        for k in range((size + 2047) // 2048):
+            sec = dd.sector(lba + k)
+            if len(sec) < 2352: break
+            tmp.write(sec)
+        raw = tmp.name
+    try:
+        dpc = duration(pc_path); dps = (size // 2048) / 150.0
+        rate = str_rate(raw, size // 2048)
+        score = same_scene(frames(pc_path), frames(raw, 'psxstr', rate=rate))
+        if colour(pc_path) > 6 and colour(raw, 'psxstr') < 2:          # a black-and-white cut of a colour movie
+            why.append(f'{disc_name} {path} is in black and white'); return False
+        if score < 0.6: why.append(f'{disc_name} {path} looks different ({score:.2f})'); return False
+        out = os.path.join(mod, *rel.lower().split('/')) + '.mpg'; os.makedirs(os.path.dirname(out), exist_ok=True)
+        r = subprocess.run([FFMPEG, '-nostdin', '-v', 'error', '-y', '-f', 'psxstr', '-r', str(rate), '-i', raw, '-c:v', 'mpeg1video', '-q:v', '2', '-r', '30',
+                            '-c:a', 'mp2', '-b:a', '224k', '-ar', '44100', '-f', 'mpeg', out + '.part'], capture_output=True)
+        if r.returncode: why.append(f'{disc_name} {path}: conversion failed: {r.stderr.decode()[-200:]}'); return False
+        os.replace(out + '.part', out)
+        lines.append(f'{score:.2f}  {name}  <-  {disc_name} {path} ({dps:.1f} s at {rate:g} fps; PC {dpc:.1f} s)'); return True
+    finally: os.unlink(raw)
+
 def movies(game, cues, game_dir, mod, report=None):
     g = MOVIES[game]; lines = []; pcs = []
     for folder, ext in g['pc']:
@@ -317,35 +340,16 @@ def movies(game, cues, game_dir, mod, report=None):
         for pc_path, rel, ext in pcs:
             name = os.path.basename(rel); stem = name[:-len(ext)].lower(); want = g.get('names', {}).get(stem, stem).upper()
             if stem in g.get('keep', ()): lines.append(f'  -    {name}: the PC\'s (kept)'); continue
-            src = None
+            srcs = []                                   # every disc's copy, in the order given: the first that matches is taken
             for dd, t in zip(discs, tables):
                 for prefix in g['disc_dirs']:
                     e = t.get(prefix + want + '.STR')
-                    if e: src = (dd, e); break
-                if src: break
-            if not src: lines.append(f'  -    {name}: not on these discs (kept)'); continue
-            dd, (path, lba, size) = src
-            with tempfile.NamedTemporaryFile(suffix='.str', delete=False) as tmp:
-                for k in range((size + 2047) // 2048):
-                    sec = dd.sector(lba + k)
-                    if len(sec) < 2352: break
-                    tmp.write(sec)
-                raw = tmp.name
-            try:
-                dpc = duration(pc_path); dps = (size // 2048) / 150.0
-                rate = str_rate(raw, size // 2048)
-                score = same_scene(frames(pc_path), frames(raw, 'psxstr', rate=rate))
-                if colour(pc_path) > 6 and colour(raw, 'psxstr') < 2:          # a black-and-white cut of a colour movie
-                    lines.append(f'  -    {name}: {path} is in black and white: kept'); continue
-                if score < 0.6:
-                    lines.append(f'  -    {name}: {os.path.basename(cues.split(",")[discs.index(dd)])} {path} looks different ({score:.2f}): kept'); continue
-                out = os.path.join(mod, *rel.lower().split('/')) + '.mpg'; os.makedirs(os.path.dirname(out), exist_ok=True)
-                r = subprocess.run([FFMPEG, '-nostdin', '-v', 'error', '-y', '-f', 'psxstr', '-r', str(rate), '-i', raw, '-c:v', 'mpeg1video', '-q:v', '2', '-r', '30',
-                                    '-c:a', 'mp2', '-b:a', '224k', '-ar', '44100', '-f', 'mpeg', out + '.part'], capture_output=True)
-                if r.returncode: lines.append(f'  -    {name}: conversion failed: {r.stderr.decode()[-200:]}'); continue
-                os.replace(out + '.part', out)
-                lines.append(f'{score:.2f}  {name}  <-  {path} ({dps:.1f} s at {rate:g} fps; PC {dpc:.1f} s)')
-            finally: os.unlink(raw)
+                    if e: srcs.append((dd, e)); break
+            if not srcs: lines.append(f'  -    {name}: not on these discs (kept)'); continue
+            why = []
+            for dd, (path, lba, size) in srcs:
+                if convert_one(g, dd, path, lba, size, pc_path, rel, name, mod, lines, why, os.path.basename(cues.split(",")[discs.index(dd)])): break
+            else: lines.append(f'  -    {name}: ' + '; '.join(why) + ': kept')
     finally:
         for dd in discs: dd.close()
     for l in lines: say(l)
