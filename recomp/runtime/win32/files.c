@@ -440,7 +440,7 @@ IMPL(kernel32, GetFileTime)
 IMPL(kernel32, FlushFileBuffers) { RET(h_get(ARG(0), H_FILE) != 0, 1); }
 
 /* ---- directory enumeration (case-insensitive name order, "." and ".." first, like NTFS) ---- */
-typedef struct Find { char dir[3][1024]; int ndir; char **names; int n, pos, docs; } Find;   /* docs: see FindFirstFileA */
+typedef struct Find { char dir[W32_HOST_DIRS][2048]; int ndir; char **names; int n, pos, docs; } Find;   /* docs: see FindFirstFileA; one dir per layer (mods) */
 static int ci_cmp(const void *a, const void *b) { return strcasecmp(*(char *const *)a, *(char *const *)b); }
 static void fill_find(Find *fd, const char *name, uint32_t out);
 static void find_fill(Find *fd, const char *name, uint32_t out)          /* the entry, under the name the game sees */
