@@ -667,18 +667,24 @@ __attribute__((visibility("default"), used)) int gta_movie_play(const char *path
         [movie_player play];
         fprintf(stderr, "host: movie %s\n", p.UTF8String);
         {   /* a watchdog: a movie that fails to load, stalls, or reaches its end without the notice still ends (else the
-             * game waits on a black screen until a key skips it) */
-            __block double last_t = -1, last_change = CACurrentMediaTime();
+             * game waits on a black screen until a key skips it). Its progress comes from AVFoundation's own periodic
+             * callbacks; the timer reads only what they left (asking the item itself from here can block the UI thread). */
+            __block double last_t = -1, last_change = CACurrentMediaTime(), dur = NAN; __block int failed = 0;
+            AVPlayer *pl = movie_player;
+            id tobs = [pl addPeriodicTimeObserverForInterval:CMTimeMake(1, 4) queue:dispatch_get_main_queue() usingBlock:^(CMTime t) {
+                double s_ = CMTimeGetSeconds(t); if (isfinite(s_) && s_ > last_t + 0.01) { last_t = s_; last_change = CACurrentMediaTime(); }
+                AVPlayerItem *it = pl.currentItem;
+                if (it.status == AVPlayerItemStatusFailed) failed = 1;
+                else if (it.status == AVPlayerItemStatusReadyToPlay) dur = CMTimeGetSeconds(it.duration);
+            }];
             dispatch_source_t wd = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
             dispatch_source_set_timer(wd, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), 500 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
             dispatch_source_set_event_handler(wd, ^{
-                if (gen != movie_gen || !movie_player) { dispatch_source_cancel(wd); return; }
-                AVPlayerItem *it = movie_player.currentItem; double now = CACurrentMediaTime(), t = CMTimeGetSeconds(movie_player.currentTime);
-                if (isfinite(t) && t > last_t + 0.01) { last_t = t; last_change = now; }
-                double dur = it ? CMTimeGetSeconds(it.duration) : NAN;
-                const char *why = !it || it.status == AVPlayerItemStatusFailed ? "failed" : now - last_change > 8.0 ? "stalled"
-                                : (isfinite(dur) && dur > 0 && t >= dur - 0.05 && now - last_change > 1.0) ? "ended without notice" : NULL;
-                if (why) { fprintf(stderr, "host: movie %s: %s\n", why, p.UTF8String); dispatch_source_cancel(wd); finish(nil); }
+                if (gen != movie_gen || movie_player != pl) { dispatch_source_cancel(wd); [pl removeTimeObserver:tobs]; return; }
+                double now = CACurrentMediaTime();
+                const char *why = failed ? "failed" : now - last_change > 8.0 ? "stalled"
+                                : (isfinite(dur) && dur > 0 && last_t >= dur - 0.05 && now - last_change > 1.0) ? "ended without notice" : NULL;
+                if (why) { fprintf(stderr, "host: movie %s: %s\n", why, p.UTF8String); dispatch_source_cancel(wd); [pl removeTimeObserver:tobs]; finish(nil); }
             });
             dispatch_resume(wd);
         }
