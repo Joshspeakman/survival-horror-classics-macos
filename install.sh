@@ -120,6 +120,7 @@ for g in $ALL; do
 done
 # Restore from Disc (the Mods window): the disc tools in the app, and a Python with numpy for them
 cp "$HERE/recomp/tools/psx_disc.py" "$HERE/recomp/tools/psx_import.py" "$STAGE/Contents/Resources/"
+clang -O2 -o "$STAGE/Contents/Resources/psx_seq" "$HERE/recomp/tools/psx_seq.c" -lm   # the music renderer
 PSXPY="$HOMEDIR/.venv/bin/python"
 if ! "$PSXPY" -c 'import numpy' >/dev/null 2>&1; then
   { python3 -m venv "$HOMEDIR/.venv" && "$HOMEDIR/.venv/bin/pip" install -q numpy; } >/dev/null 2>&1 || echo "   (numpy could not be installed: Restore from Disc will ask for install.sh again)"
