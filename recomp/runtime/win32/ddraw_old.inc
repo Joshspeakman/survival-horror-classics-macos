@@ -113,6 +113,17 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
                         tx ? tx->id : 0, tx ? U32(tx->desc, SD_WIDTH) : 0, tx ? U32(tx->desc, SD_HEIGHT) : 0, d->rs[27], d->rs[19], d->rs[20], d->old ? d->old->ck_enable : 0, d->rs[15],
                         (fvf & 0x40) ? *(const uint32_t *)(v + 16) : 0, prim, nv, f[0], f[1], f[6], f[7]); } }
     }
+    {   /* development (DSR_QUADLOG=<seconds>): every vertex of one frame's screen-space draws that long after the first draw */
+        static double want = -2; static struct timespec t0;
+        if (want == -2) { const char *e = getenv("DSR_QUADLOG"); want = e ? atof(e) : -1; clock_gettime(CLOCK_MONOTONIC, &t0); }
+        struct timespec t = t0; if (want >= 0) clock_gettime(CLOCK_MONOTONIC, &t); double now = (double)(t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9;
+        if (want >= 0 && now >= want && now < want + 0.034 && (fvf & 0xe) == 4 && (fvf & 0xf00) && d->tex[0]) {
+            uint32_t uo = 16 + ((fvf & 0x40) ? 4 : 0) + ((fvf & 0x80) ? 4 : 0), st = fvf_stride(fvf); DSurface *tx = d->tex[0];
+            fprintf(stderr, "dsr: quad tex %u %ux%u mag %u min %u blend %u prim %u n %u:", tx->id, U32(tx->desc, SD_WIDTH), U32(tx->desc, SD_HEIGHT), d->rs[17], d->rs[18], d->rs[27], prim, nv);
+            for (uint32_t k = 0; k < nv && k < 8; k++) { float f[3], uv[2]; memcpy(f, v + (size_t)k * st, 12); memcpy(uv, v + (size_t)k * st + uo, 8);
+                fprintf(stderr, " (%.3f,%.3f z%.4f uv %.6f,%.6f)", f[0], f[1], f[2], uv[0], uv[1]); }
+            fputc('\n', stderr); }
+    }
     {   /* development (DSR_DRAWSTATE=1): each new combination of a draw's texture and its blending and keying state */
         static int on = -1; static uint64_t seen[256]; static int ns;
         if (on < 0) on = getenv("DSR_DRAWSTATE") != 0;
@@ -138,6 +149,19 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
         for (uint32_t k = 0; k < nv; k++) { float uv[2]; memcpy(uv, v + (size_t)k * st + uo, 8); for (int j = 0; j < 2; j++) { if (uv[j] < lo) lo = uv[j]; if (uv[j] > hi) hi = uv[j]; } }
         clamp = lo >= -0.01f && hi <= 1.01f && (d->tss[0][13] != 3 || d->tss[0][14] != 3);
     }
+    /* A point-sampled screen-space draw lands its first pixels exactly on the edge between two texels (the +0.5 that
+     * lines D3D's pixels up with Metal's), and rounding then picks either: Resident Evil 2's foreground tiles sit side by
+     * side on one sheet, so a tile's first row or column showed its neighbour on the sheet as thin dark or coloured lines.
+     * A sixteenth of a texel inwards makes every such sample the tile's own and moves nothing else. */
+    uint8_t *inside = 0; static int no_inside = -1; if (no_inside < 0) no_inside = getenv("DSR_NO_TEXEL_BIAS") != 0;   /* development: the old picture */
+    if (!no_inside && (fvf & 0xe) == 4 && d->tex[0] && (fvf & 0xf00) && !(fvf & 0x20) && d->tss[0][16] == 1 && d->tss[0][17] == 1) {
+        uint32_t uo = 16 + ((fvf & 0x40) ? 4 : 0) + ((fvf & 0x80) ? 4 : 0), st = fvf_stride(fvf), w = U32(d->tex[0]->desc, SD_WIDTH), h = U32(d->tex[0]->desc, SD_HEIGHT);
+        if (w && h && (inside = malloc((size_t)st * nv))) {
+            memcpy(inside, v, (size_t)st * nv);
+            for (uint32_t k = 0; k < nv; k++) { float uv[2]; memcpy(uv, inside + (size_t)k * st + uo, 8); uv[0] += 1.0f / (16.0f * w); uv[1] += 1.0f / (16.0f * h); memcpy(inside + (size_t)k * st + uo, uv, 8); }
+            v = inside;
+        }
+    }
     uint32_t au = d->tss[0][13], av = d->tss[0][14];
     if (clamp) { send_tss(d, 0, 13, 3); send_tss(d, 0, 14, 3); }
     if (fvf & 0x20) {
@@ -147,6 +171,7 @@ static void draw_old(DDevice *d, uint32_t prim, uint32_t fvf, const uint8_t *v, 
         emit_draw(prim, out_fvf, t, nv, (const uint8_t *)idx, ni); free(t);
     } else emit_draw(prim, fvf, v, nv, (const uint8_t *)idx, ni);
     if (clamp) { send_tss(d, 0, 13, au); send_tss(d, 0, 14, av); }
+    free(inside);
 }
 static uint32_t fvf_stride_any(uint32_t fvf) { return fvf_stride(fvf & ~0x20u) + ((fvf & 0x20) ? 4 : 0); }
 

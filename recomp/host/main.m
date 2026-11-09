@@ -721,6 +721,36 @@ __attribute__((visibility("default"), used)) void gta_movie_close(void)   /* the
  * can't put on a pad button). Axes: the left stick, and the right stick as both Z/Rz and Rx/Ry; the triggers are buttons
  * only (an axis would rest at one end, read as a stick held over). */
 void w32_di_pad(int connected, const float ax[6], uint32_t buttons, int pov);
+#ifdef RE_EDITION
+/* Back and Start held together for two seconds leave the game for the launch window (none of these games has a quit
+ * of its own on the pad). The prompt shows while they're held; letting go early cancels it. */
+static CALayer *movie_host_layer(void);
+static CATextLayer *quit_prompt;
+static void quit_prompt_show(int on)
+{
+    if (!on) { if (quit_prompt) { [quit_prompt removeFromSuperlayer]; quit_prompt = nil; } return; }
+    if (quit_prompt) return;
+    CALayer *host = movie_host_layer(); if (!host) return;
+    CGFloat w = 440, h = 30, sc = layer.contentsScale ?: 2;
+    CATextLayer *t = [CATextLayer layer];
+    t.string = @"Keep holding to quit to the launch window"; t.font = (__bridge CFTypeRef)@"Helvetica-Bold"; t.fontSize = 18; t.alignmentMode = kCAAlignmentCenter;
+    t.foregroundColor = CGColorGetConstantColor(kCGColorWhite); t.contentsScale = sc; t.cornerRadius = 10; t.zPosition = 20;
+    t.backgroundColor = [NSColor colorWithWhite:0 alpha:0.72].CGColor;
+    t.frame = CGRectMake((host.bounds.size.width - w) / 2, host.bounds.size.height * 0.12, w, h);
+    [CATransaction begin]; [CATransaction setDisableActions:YES]; [host addSublayer:t]; [CATransaction commit];
+    quit_prompt = t;
+}
+static void quit_to_launcher(void)
+{
+    static int once; if (once) return; once = 1;
+    fprintf(stderr, "host: Back + Start held: back to the launch window\n");
+    NSBundle *b = NSBundle.mainBundle;
+    if (![b.bundlePath hasSuffix:@".app"]) { [NSApp terminate:nil]; return; }     /* a development run: just quit */
+    NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration]; cfg.createsNewApplicationInstance = YES; cfg.environment = @{}; cfg.activates = YES;
+    [[NSWorkspace sharedWorkspace] openApplicationAtURL:b.bundleURL configuration:cfg completionHandler:^(NSRunningApplication *app, NSError *err) {
+        (void)app; (void)err; dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; }); }];
+}
+#endif
 static void gta_pad_key(int vk, int down) { for (uint16_t k = 0; k < 128; k++) if (keymap[k].vk == vk) { key_event(k, down, 0); return; } }
 static void gta_pad_start(void)
 {
@@ -768,6 +798,15 @@ static void gta_pad_start(void)
         /* the d-pad also as the left stick (the games read the stick's axes: Resident Evil 2's menus, every game's walk) */
         if (fabsf(ax[0]) < 0.2f && fabsf(ax[1]) < 0.2f) {
             if (b & 1u << 12) ax[1] = -1; if (b & 1u << 14) ax[1] = 1; if (b & 1u << 15) ax[0] = -1; if (b & 1u << 13) ax[0] = 1;
+        }
+#endif
+#ifdef RE_EDITION
+        {   static double since; double t = CACurrentMediaTime();
+            if ((b & 0x300) == 0x300) {                   /* Back and Start: kept from the game while they're both down */
+                b &= ~0x300u; if (!since) since = t;
+                if (t - since >= 0.3) quit_prompt_show(1);
+                if (t - since >= 2.0) quit_to_launcher();
+            } else if (since) { since = 0; quit_prompt_show(0); }
         }
 #endif
         w32_di_pad(connected, ax, b, pov);
