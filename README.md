@@ -123,8 +123,12 @@ From a terminal: `"Survival Horror Classics Nightly.app/Contents/MacOS/SurvivalH
 Any controller macOS knows (Xbox, PlayStation, Switch Pro, MFi) is the games' joystick: DirectInput's gamepad for
 Resident Evil 3 and Dino Crisis, winmm's joystick for Resident Evil and Resident Evil 2. It is always there for the
 games, idle until a controller connects, so one turned on after the game started still works. The d-pad also drives
-the left stick (the games read the stick to walk and in menus); Menu is Escape. Buttons are mapped in each game's own
-controller settings, as on Windows.
+the left stick (the games read the stick to walk and in menus). Buttons are mapped in each game's own controller
+settings, as on Windows.
+
+**To quit a game with the controller, hold Back and Start together for two seconds** (View and Menu on Xbox, Create and
+Options on PlayStation, - and + on Switch): a prompt shows while you hold, letting go cancels, and you land back in the
+launch window. On the keyboard, Cmd+Q quits.
 
 ## Frame rate
 

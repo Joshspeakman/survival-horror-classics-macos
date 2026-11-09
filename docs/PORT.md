@@ -39,6 +39,9 @@ The runtime's DirectDraw 7 / Direct3D 7 is the base; the older interfaces are vt
   (Capcom's Marni) reads each texture's caps back and draws room backgrounds only from textures in video memory.
 - A plain copy into a texture with a colour key is uploaded with that key (Dino Crisis fills its font and sprite pages
   by Blt from system-memory surfaces that have none).
+- A point-sampled screen-space draw has its texture coordinates moved a sixteenth of a texel inwards: its first pixels
+  land exactly on a texel edge, and Resident Evil 2's foreground tiles (side by side on 256x256 sheets) showed the
+  neighbouring tile as thin lines along their first row or column (`DSR_NO_TEXEL_BIAS=1`: the old picture).
 - A screen-space draw whose texture coordinates stay inside the texture samples it clamped (Resident Evil's background
   tiles start at u = -0.0001: wrapped and filtered, a dark column showed where two tiles meet).
 
@@ -132,6 +135,6 @@ new game's requests: `W32_ROFSLOG=1`.
 ## Logs (development)
 
 `DSR_LOG=1` (DirectDraw: surfaces, locks, texture handles, keys, clears, presents), `DSR_DRAWSTATE=1` (each new
-draw state; 2: by vertex alpha and texture size too), `DSR_DRAWSEQ=<s>,<n>` (+`_TEX=<id>`: draws in order), `DSR_BLTLOG=1`,
+draw state; 2: by vertex alpha and texture size too), `DSR_DRAWSEQ=<s>,<n>` (+`_TEX=<id>`: draws in order), `DSR_QUADLOG=<s>` (every vertex of one frame's screen-space draws), `DSR_BLTLOG=1`,
 `DSR_TEXDUMP=<folder>` (textures as PPM), `DSR_VLOG=x0,x1`, `DSR_RSLOG=1`, `W32_MARNILOG=1` (Resident Evil 2's renderer errors), `W32_FILELOG=1`, `W32_ROFSLOG=1` (Resident Evil 3's archive reads and mod files), `W32_JOYLOG=1`, `DSR_STAGELOG=1`, `W32_MOVIELOG=1`, `W32_AUDIOLOG=1`, `W32_DSLOG=1` (DirectSound buffers and notifications), `W32_DSDUMP=<folder>` (each buffer as played), `RE1_TASKLOG=1`, `W32_RELOG=1`, `W32_TRACE=<file>`
 (+ `W32_TRACE_ONLY=ddraw,...`), `W32_SEHLOG=1`, `DS_TRACE_HOOKS=<addrs>` at build time with `DS_HOOKTRACE=1`.
