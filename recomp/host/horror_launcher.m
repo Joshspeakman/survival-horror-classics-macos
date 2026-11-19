@@ -317,7 +317,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                                                                                 @[@"1", @"Off (As Released)", @"Textures sampled as the games did"]] saved:saved]];
     [opts addObject:[self opt:@"movies" title:@"Movies" choices:@[@[@"on", @"On", @"The games' movies play"], @[@"off", @"Off", @"Skipped: straight to the game"]] saved:saved]];
     [opts addObject:[self opt:@"aids" title:@"Test Aids" choices:@[@[@"off", @"Off", @"The games as released"],
-                                                                    @[@"on", @"On", @"Health held full (Resident Evil 1-3, The Mercenaries); Resident Evil 2: GOG's -wepall switch too"]] saved:saved]];
+                                                                    @[@"on", @"On", @"Health held full (Resident Evil 1-3, The Mercenaries, Dino Crisis); Resident Evil 2: GOG's -wepall switch too"]] saved:saved]];
     v.opts = opts;
     __weak Launcher *ws = self;
     v.act = ^(NSInteger h) { [ws hit:h]; };
