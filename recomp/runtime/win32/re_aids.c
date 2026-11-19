@@ -128,7 +128,7 @@ void re_aids_tick(void)                        /* the host calls it once a frame
     int16_t hp = (int16_t)rt_r16(G_MEM, RE_AID_HP), want;
 #ifdef RE_AID_HP_MAX
     want = (int16_t)rt_r16(G_MEM, RE_AID_HP_MAX);
-    if (want <= 0 || want > 2000) return;      /* not in a game */
+    if (want <= 0 || want > 4000) return;      /* not in a game (Dino Crisis: 2400 on its easiest difficulty) */
 #elif defined(RE_AID_HP_SEEN)
     static int16_t most;
     if (hp > most && hp <= 2000) most = hp;   /* a new game starts at full health */
