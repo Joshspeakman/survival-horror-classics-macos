@@ -1519,7 +1519,7 @@ RE3_OVERRIDES = {e: {0x004214c0: 'archive reader open (mods: re_mods.c)', 0x0041
 RE3_OVERRIDES['dc'] = {0x004043e0: 'sound tables set (re_mods.c: music loop points scaled to the mods\' rate)'}
 RE_HOOKS = {'re2': {0x004e1ecd: 'room jump (Test Aids, re_aids.c)'}, 're2c': {0x004e212d: 'room jump (Test Aids, re_aids.c)'},
             're3': {0x004684f8: 'room jump (Test Aids, re_aids.c)'}, 're3m': {0x004685d8: 'room jump (Test Aids, re_aids.c)'},
-            're1': {0x00477da2: 'room jump (Test Aids, re_aids.c)'}}
+            're1': {0x00477da2: 'room jump (Test Aids, re_aids.c)'}, 'dc': {0x0040d839: 'room jump (Test Aids, re_aids.c)'}}
 RE1_OVERRIDES = {0x0047575c: 'task start', 0x0047577c: 'task yield', 0x0047579c: 'task resume', 0x004757a8: 'task end'}   # Resident Evil 1, 2 (Leon, Claire), 3 (the game, The Mercenaries), Dino Crisis
 
 def main():

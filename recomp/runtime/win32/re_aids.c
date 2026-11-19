@@ -7,7 +7,9 @@
  *   Resident Evil 2   LeonU.exe 0x994646, ClaireU.exe 0x9946c6 (s16, the most is 200; read by the status screen's ECG)
  *   Resident Evil 3   0xa5ccc0 (s16), its maximum at 0xa5ccc2 (both programs: the game and The Mercenaries)
  *   Resident Evil     0xbe636c (s16; Chris 140, Jill 96: held at the most seen)
- *   Dino Crisis       not found yet */
+ *   Dino Crisis       0x6d8240 (s16), its maximum at 0x6d8242: Regina's actor is fixed in the game's state block
+ *                     (0x6d66e0 + 0x1a48 = 0x6d8128; actors keep health at +0x118, the maximum at +0x11a). A new game
+ *                     (0x40d580) sets it there from the difficulty's table at 0x644994 (1200 seen). */
 #include "w32.h"
 #include "edition.h"
 #ifdef RE_EDITION
@@ -25,6 +27,9 @@
 #define RE_AID_HP 0x00be636cu                       /* Chris 140, Jill 96: held at the most seen this session
                                                        (Jill after Chris in one session is held at 140) */
 #define RE_AID_HP_SEEN 1
+#elif defined(DC_EDITION)
+#define RE_AID_HP 0x006d8240u
+#define RE_AID_HP_MAX 0x006d8242u
 #endif
 
 /* Room jump (SHC_ROOM=<stage><room>, as the room files are named: 101 = ROOM1010.RDT, stage 1 room 01): the first room
@@ -59,6 +64,16 @@
 #else
 #define RE_STAGE_LOAD 0x004688d0u
 #endif
+#elif defined(DC_EDITION)                          /* Data/stSRR.dat; the game's state block (0x6d66e0) holds the room at
+                                                       +0x9ab0 and the stage at +0x9ab1 (stage 1 is 1). A new game writes
+                                                       0x112 there (stage 1 room 12, 0x40d830); the hook is just after,
+                                                       before the stage's and the room's files are read. Regina keeps
+                                                       the new game's starting spot, which may be off another room's floor. */
+#define RE_ROOM_HOOK 0x0040d839u
+#define RE_STAGE 0x006e0191u
+#define RE_ROOM 0x006e0190u
+#define RE_ROOM_BYTES 1
+#define RE_STAGE_FROM_1 1
 #endif
 int re_hook(Ctx *c, uint32_t addr)
 {
@@ -74,12 +89,16 @@ int re_hook(Ctx *c, uint32_t addr)
 #else
             uint32_t cur_stage = rt_r16(G_MEM, RE_STAGE), cur_room = rt_r16(G_MEM, RE_ROOM);
 #endif
+#ifndef RE_STAGE_FROM_1
+#define RE_STAGE_FROM_1 0                               /* the games keep stage 1 as 0; Dino Crisis as 1 */
+#endif
+            cur_stage -= RE_STAGE_FROM_1;
             fprintf(stderr, "re: room jump: stage %u room %02x (was %u %02x)\n", stage, room, cur_stage + 1, cur_room);
             int other = cur_stage != stage - 1;
 #ifdef RE_ROOM_BYTES
-            G_MEM[RE_STAGE] = (uint8_t)(stage - 1); G_MEM[RE_ROOM] = (uint8_t)room;
+            G_MEM[RE_STAGE] = (uint8_t)(stage - 1 + RE_STAGE_FROM_1); G_MEM[RE_ROOM] = (uint8_t)room;
 #else
-            rt_w16(G_MEM, RE_STAGE, stage - 1); rt_w16(G_MEM, RE_ROOM, room);
+            rt_w16(G_MEM, RE_STAGE, stage - 1 + RE_STAGE_FROM_1); rt_w16(G_MEM, RE_ROOM, room);
 #endif
 #ifdef RE_CAMERA
             rt_w16(G_MEM, RE_CAMERA, 0);                /* the room's first camera */

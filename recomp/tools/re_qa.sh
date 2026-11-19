@@ -28,7 +28,7 @@ info() {   # id -> BIN EXE DIR ARGS NEWGAME(keys) ROOMS SECS SKIP (DS_MOVIE_SKIP
           [ $1 = re3m ] && { KEYS="700:key:13;900:key:13;1100:key:13;1300:key:13;1500:key:13;1700:key:13;2400:key:13;2600:key:13;2800:key:13"; PLAY="2300 3200 3800 4400"; ROOMS=""; };;
     dc)   BIN=DinoCrisis; EXE=dc-DINO.exe; DIR="DinoCrisisNative/game-files/Dino Crisis"; ARGS=""
           KEYS="900:key:13;1100:key:13;1400:key:13;1900:click:371,1318"; for f in $(seq 2100 120 9400); do KEYS="$KEYS;${f}:key:13"; done
-          PLAY="2600 3600 5000 6500 7800 8600 9400 10000"; ROOMS=""; SECS=380; AT=0;;
+          PLAY="2600 3600 5000 6500 7800 8600 9400 10000"; ROOMS="105 203"; SECS=380; AT=10400;;   # room shots in play, after the opening
   esac
 }
 run() {    # id tag secs script [env...]: one run; shots named <tag>-<frame>.png
