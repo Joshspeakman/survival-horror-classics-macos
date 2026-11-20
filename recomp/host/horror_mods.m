@@ -262,6 +262,15 @@ static NSMutableDictionary *plan_commit(Plan *P)
 }
 
 // ---------------------------------------------------------------- the window
+/* a dropped PlayStation disc: its image (BIN/CUE, CHD, ISO) or a folder holding them (tools/psx_disc.py reads either) */
+static BOOL is_disc(NSString *path)
+{
+    NSSet *ext = [NSSet setWithArray:@[@"cue", @"bin", @"chd", @"iso", @"img"]];
+    BOOL dir = NO; if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&dir]) return NO;
+    if (!dir) return [ext containsObject:path.pathExtension.lowercaseString];
+    for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:path error:nil]) if ([ext containsObject:n.pathExtension.lowercaseString]) return YES;
+    return NO;
+}
 @interface SHMods : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate>
 @property NSPanel *panel, *browser; @property NSTableView *table, *btable; @property NSTextField *status, *bstatus; @property NSProgressIndicator *spin;
 @property NSSearchField *search; @property NSPopUpButton *sort; @property NSImageView *preview; @property NSTextField *pinfo;
@@ -306,7 +315,7 @@ static NSString *ask_place(NSString *modName, NSString *prefer)   /* Resident Ev
     p.title = [NSString stringWithFormat:@"Mods — %@", self.title]; p.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     p.delegate = self; p.releasedWhenClosed = NO; p.minSize = NSMakeSize(660, 360); self.panel = p;
     NSView *cv = p.contentView;
-    NSTextField *head = [NSTextField wrappingLabelWithString:@"The first mod wins where two change the same file. The game's own files are never changed: switching a mod off or removing it brings them back. Drop a zip, rar or 7z here to install it."];
+    NSTextField *head = [NSTextField wrappingLabelWithString:@"The first mod wins where two change the same file. The game's own files are never changed: switching a mod off or removing it brings them back. Drop a zip, rar or 7z here to install it, or your PlayStation disc images to restore from them."];
     head.frame = NSMakeRect(16, 424, 868, 36); head.textColor = NSColor.secondaryLabelColor; head.font = [NSFont systemFontOfSize:12];
     head.autoresizingMask = NSViewMinYMargin | NSViewWidthSizable; [cv addSubview:head];
     NSTableView *t = [NSTableView new]; self.table = t;
@@ -417,13 +426,31 @@ static NSString *ask_place(NSString *modName, NSString *prefer)   /* Resident Ev
     if (getenv("SHC_PSX_TOOL")) tool = @(getenv("SHC_PSX_TOOL"));                                   /* development */
     if (getenv("SHC_PSX_PYTHON")) py = @(getenv("SHC_PSX_PYTHON"));
     NSFileManager *fm = NSFileManager.defaultManager;
-    if (![fm fileExistsAtPath:tool] || ![fm isExecutableFileAtPath:py]) { self.status.stringValue = @"This copy of the app has no disc tools: run install.sh again."; NSBeep(); return; }
+    NSString *tk = [res stringByAppendingPathComponent:@"setup/toolkit.tar.xz"];
+    BOOL dropin = [fm fileExistsAtPath:tk] && !getenv("SHC_PSX_PYTHON");   /* the downloaded app (make_suite.sh): its own Python, numpy and ffmpeg */
+    if (![fm fileExistsAtPath:tool] || (!dropin && ![fm isExecutableFileAtPath:py])) {
+        self.status.stringValue = dropin ? @"This copy of the app has no disc tools: download it again." : @"This copy of the app has no disc tools: run install.sh again."; NSBeep(); return; }
     if (![fm fileExistsAtPath:self.gameDir]) { self.status.stringValue = @"The game's folder isn't reachable: connect its drive first."; NSBeep(); return; }
     self.restoreButton.enabled = NO; self.status.stringValue = @"Reading your disc…";
     NSTask *t = [NSTask new]; t.executableURL = [NSURL fileURLWithPath:py];
     t.arguments = @[@"-I", tool, @"restore", self.game, discs, self.gameDir, hmods_root(), @"--app", NSBundle.mainBundle.bundlePath];
     NSMutableDictionary *env = [NSProcessInfo.processInfo.environment mutableCopy];
-    env[@"PATH"] = [@"/opt/homebrew/bin:/usr/local/bin:" stringByAppendingString:env[@"PATH"] ?: @"/usr/bin:/bin"]; t.environment = env;
+    env[@"PATH"] = [@"/opt/homebrew/bin:/usr/local/bin:" stringByAppendingString:env[@"PATH"] ?: @"/usr/bin:/bin"];
+    if (dropin) {
+        /* the toolkit's Python, unpacked once into ~/Games/SurvivalHorrorClassics/.python with numpy from the app's wheel (no
+         * download); ffmpeg and ffprobe from Resources/bin (tools/build_ffmpeg.sh); chdman only for .chd images (Homebrew) */
+        NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Games/SurvivalHorrorClassics/.python"];
+        env[@"PATH"] = [NSString stringWithFormat:@"%@:%@", [res stringByAppendingPathComponent:@"bin"], env[@"PATH"]];
+        env[@"SHC_PY"] = [dir stringByAppendingPathComponent:@"python/bin/python3"]; env[@"SHC_PY_DIR"] = dir; env[@"SHC_TOOLKIT"] = tk;
+        env[@"SHC_WHEELS"] = [res stringByAppendingPathComponent:@"wheels"];
+        NSString *script = @"[ -x \"$SHC_PY\" ] || { mkdir -p \"$SHC_PY_DIR\" && /usr/bin/tar -xf \"$SHC_TOOLKIT\" -C \"$SHC_PY_DIR\" python && "
+                            "/usr/bin/xattr -r -d com.apple.quarantine \"$SHC_PY_DIR\" 2>/dev/null; true; } && "
+                            "{ \"$SHC_PY\" -c 'import numpy' 2>/dev/null || { echo 'Getting the disc tools ready…'; \"$SHC_PY\" -m pip install -q --disable-pip-version-check "
+                            "--no-index --find-links \"$SHC_WHEELS\" numpy; }; } && exec \"$SHC_PY\" \"$@\"";
+        t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
+        t.arguments = [@[@"-c", script, @"restore"] arrayByAddingObjectsFromArray:t.arguments];
+    }
+    t.environment = env;
     NSPipe *pipe = [NSPipe pipe]; t.standardOutput = pipe; t.standardError = pipe;
     __block NSMutableString *all = [NSMutableString string];
     pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *h) {
@@ -461,7 +488,10 @@ static NSString *ask_place(NSString *modName, NSString *prefer)   /* Resident Ev
 - (BOOL)tableView:(NSTableView *)t acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)r dropOperation:(NSTableViewDropOperation)op
 {
     NSArray<NSURL *> *urls = [info.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
-    for (NSURL *u in urls) [self installPath:u.path name:u.lastPathComponent.stringByDeletingPathExtension source:u.path done:nil];
+    for (NSURL *u in urls) {
+        if (is_disc(u.path)) { [self restoreFrom:u.path]; continue; }   /* a PlayStation disc image, or a folder of them: Restore from Disc */
+        [self installPath:u.path name:u.lastPathComponent.stringByDeletingPathExtension source:u.path done:nil];
+    }
     return urls.count > 0;
 }
 

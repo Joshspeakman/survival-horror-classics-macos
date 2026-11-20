@@ -1,0 +1,66 @@
+{
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "tag_lowercase": true,
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "CoreImage"
+  ],
+  "style": "stone",
+  "libs": [],
+  "local_network": "The games don't use your local network.",
+  "name": "Resident Evil 3: The Mercenaries",
+  "folder": "Resident Evil 3",
+  "binary": "ResidentEvil3Mercenaries",
+  "icon_label": "RE3",
+  "version": "GOG",
+  "where": "Your Resident Evil 3 folder from GOG (installed, or copied from a PC)",
+  "minutes": 4,
+  "space_gb": 2,
+  "build_gb": 1,
+  "exe": "RE3_MERCE.exe",
+  "exe_sha256": {
+    "e409166c7d70c40a561412057e48f16979f37cbf20fa18977d9db00de0127a8b": "GOG"
+  },
+  "required": [
+    "Rofs1.dat"
+  ],
+  "lift_args": [
+    "--game",
+    "re3m"
+  ],
+  "art": [
+    "shc_art.py",
+    "{game}",
+    "{art}",
+    "re3"
+  ],
+  "log": "ResidentEvil3Mercenaries",
+  "build": "./build_re.sh re3m \"$GAME\"",
+  "out": "work/re3m",
+  "rt_cflags": [
+    "-DRE3_EDITION",
+    "-DRE3_MERCE"
+  ],
+  "host_cflags": [
+    "-DRE3_EDITION",
+    "-DRE3_MERCE"
+  ],
+  "title": "RESIDENT EVIL 3",
+  "build_dir": "recomp-mercenaries",
+  "data_dir": "Mercenaries"
+}

@@ -1,0 +1,62 @@
+{
+  "name": "Survival Horror Classics",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "binary": "Survival Horror Classics",
+  "icon_label": "RE",
+  "style": "stone",
+  "title": "SURVIVAL HORROR CLASSICS",
+  "local_network": "The games don't use your local network.",
+  "launcher": [
+    "host/horror_launcher.m",
+    "host/horror_mods.m"
+  ],
+  "launcher_frameworks": [
+    "Cocoa",
+    "CoreImage",
+    "GameController"
+  ],
+  "resources": [
+    "tools/psx_disc.py",
+    "tools/psx_import.py"
+  ],
+  "helpers": [
+    {
+      "name": "ffmpeg",
+      "dir": ".",
+      "build": "tools/build_ffmpeg.sh \"$OUT\""
+    },
+    {
+      "name": "psx_seq",
+      "dir": ".",
+      "build": "clang -O2 -o \"$OUT\" tools/psx_seq.c -lm",
+      "path": "psx_seq"
+    },
+    {
+      "name": "wheels",
+      "dir": ".",
+      "build": "tools/fetch_numpy.sh \"$OUT\"",
+      "path": "wheels"
+    }
+  ],
+  "games": [
+    {
+      "json": "re1.json"
+    },
+    {
+      "json": "re2.json"
+    },
+    {
+      "json": "re2c.json"
+    },
+    {
+      "json": "re3.json"
+    },
+    {
+      "json": "re3m.json"
+    },
+    {
+      "json": "dc.json"
+    }
+  ]
+}

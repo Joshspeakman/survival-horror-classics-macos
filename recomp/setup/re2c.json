@@ -1,0 +1,76 @@
+{
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "tag_lowercase": true,
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "CoreImage"
+  ],
+  "style": "stone",
+  "libs": [],
+  "local_network": "The games don't use your local network.",
+  "name": "Resident Evil 2 (Claire)",
+  "folder": "Resident Evil 2",
+  "binary": "ResidentEvil2Claire",
+  "icon_label": "RE2",
+  "version": "GOG",
+  "where": "Your Resident Evil 2 folder from GOG (installed, or copied from a PC)",
+  "minutes": 4,
+  "space_gb": 3,
+  "build_gb": 1,
+  "exe": "ClaireU.exe",
+  "exe_sha256": {
+    "79e09de3ab921260f233e3b186abb9820aa3254c9059dc93780fd1a87fab8999": "GOG"
+  },
+  "required": [
+    "Common",
+    "Pl0",
+    "Pl1",
+    "Zmovie"
+  ],
+  "lift_args": [
+    "--game",
+    "re2c"
+  ],
+  "art": [
+    "shc_art.py",
+    "{game}",
+    "{art}",
+    "re2"
+  ],
+  "log": "ResidentEvil2Claire",
+  "build": "./build_re.sh re2c \"$GAME\"",
+  "out": "work/re2c",
+  "rt_cflags": [
+    "-DRE2_EDITION",
+    "-DRE2_CLAIRE"
+  ],
+  "host_cflags": [
+    "-DRE2_EDITION",
+    "-DRE2_CLAIRE"
+  ],
+  "title": "RESIDENT EVIL 2",
+  "prepare": [
+    [
+      "convert_movies.py",
+      "{game}"
+    ]
+  ],
+  "prepare_text": "Converting the movies",
+  "build_dir": "recomp-claire",
+  "data_dir": "Claire"
+}

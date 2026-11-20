@@ -1,0 +1,64 @@
+{
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "tag_lowercase": true,
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "CoreImage"
+  ],
+  "style": "stone",
+  "libs": [],
+  "local_network": "The games don't use your local network.",
+  "name": "Dino Crisis",
+  "folder": "Dino Crisis",
+  "binary": "DinoCrisis",
+  "icon_label": "DC",
+  "version": "GOG",
+  "where": "Your Dino Crisis folder from GOG (installed, or copied from a PC)",
+  "minutes": 4,
+  "space_gb": 2,
+  "build_gb": 1,
+  "exe": "DINO.exe",
+  "exe_sha256": {
+    "e51128312935eb3eb45eb938bbede4400c6372eab17d7fb1e9d884ac7ab9c62d": "GOG"
+  },
+  "required": [
+    "Data",
+    "Movie",
+    "Sound"
+  ],
+  "lift_args": [
+    "--game",
+    "dc"
+  ],
+  "art": [
+    "shc_art.py",
+    "{game}",
+    "{art}",
+    "dc"
+  ],
+  "log": "DinoCrisis",
+  "build": "./build_re.sh dc \"$GAME\"",
+  "out": "work/dc",
+  "rt_cflags": [
+    "-DDC_EDITION"
+  ],
+  "host_cflags": [
+    "-DDC_EDITION"
+  ],
+  "title": "DINO CRISIS"
+}
