@@ -47,6 +47,11 @@ static const GameDef GAMES[4] = {   /* gamebanana: GameBanana's game, for the Mo
     {"re3", "RESIDENT EVIL 3", "2000", "Nemesis", 2, {{"re3", "The Game", "ResidentEvil3"}, {"re3m", "The Mercenaries", "ResidentEvil3Mercenaries"}}, "Resident Evil 3", 7006},
     {"dc", "DINO CRISIS", "2000", "Ibis Island", 1, {{"dc", "Dino Crisis", "DinoCrisis"}}, "Dino Crisis", 0},
 };
+/* the downloaded app (make_suite.sh): each version set up by its own binary into ~/Games/<folder> (setup/setup_ui.m).
+ * suite_cfg: setup/<binary>.json per version id; nil in an app built from source (games.plist) */
+static NSMutableDictionary<NSString *, NSDictionary *> *suite_cfg;
+static NSString *suite_root(NSDictionary *c) { return [NSHomeDirectory() stringByAppendingPathComponent:[@"Games" stringByAppendingPathComponent:c[@"folder"]]]; }
+static NSArray<NSDictionary *> *pending_open;   /* folders dropped on the app before its window was made */
 /* horror_mods.m: the Mods window */
 NSString *hmods_env(NSString *game);
 void hmods_counts(NSString *game, NSUInteger *installed, NSUInteger *on);
@@ -220,7 +225,7 @@ enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS,
         [rgb(1, 1, 1, 0.14) setStroke]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(ir, 0.5, 0.5) xRadius:6 yRadius:6] stroke];
         text(@(GAMES[k].title), type(sel ? 16 : 15, YES), have ? paper() : ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 168, r.size.width - 16, 22), NSTextAlignmentCenter);
         text([NSString stringWithFormat:@"%s  ·  %s", GAMES[k].tag, GAMES[k].year], type(12, NO), ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 192, r.size.width - 16, 18), NSTextAlignmentCenter);
-        NSString *st = !have ? @"Not installed" : !mounted ? [NSString stringWithFormat:@"Insert %@", volume_name(en[@"game"]) ?: @"its drive"] : @"Ready";
+        NSString *st = !have ? (suite_cfg ? @"Not set up · Play sets it up" : @"Not installed") : !mounted ? [NSString stringWithFormat:@"Insert %@", volume_name(en[@"game"]) ?: @"its drive"] : @"Ready";
         text(st, type(11, NO), !have ? ash() : !mounted ? rgb(0.95, 0.6, 0.3, 1) : rgb(0.55, 0.75, 0.55, 1), NSMakeRect(r.origin.x + 8, r.origin.y + 218, r.size.width - 16, 16), NSTextAlignmentCenter);
     }
     /* the chosen game's versions */
@@ -294,13 +299,34 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:self.prefsPath] ?: @{};
     HView *v = [[HView alloc] initWithFrame:NSMakeRect(0, 0, 960, 610)]; self.view = v; v.hover = HIT_NONE;
     v.installed = [NSDictionary dictionaryWithContentsOfFile:[res stringByAppendingPathComponent:@"games.plist"]] ?: @{};
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (!v.installed.count) {   /* the downloaded app: a version is installed when its setup finished with this app's code */
+        NSMutableDictionary *inst = [NSMutableDictionary dictionary];
+        for (NSInteger k = 0; k < NG; k++) for (int j = 0; j < GAMES[k].nv; j++) {
+            const Version *ver = &GAMES[k].v[j];
+            NSData *sj = [NSData dataWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"setup/%s.json", ver->bin]]];
+            NSDictionary *c = sj ? [NSJSONSerialization JSONObjectWithData:sj options:0 error:nil] : nil;
+            if (!c) continue;
+            if (!suite_cfg) suite_cfg = [NSMutableDictionary dictionary];
+            suite_cfg[@(ver->id)] = c;
+            NSString *root = suite_root(c), *rc = [root stringByAppendingPathComponent:c[@"build_dir"] ?: @"recomp"];
+            NSData *rj = [NSData dataWithContentsOfFile:[rc stringByAppendingPathComponent:@"ready.json"]];
+            NSDictionary *ready = rj ? [NSJSONSerialization JSONObjectWithData:rj options:0 error:nil] : nil;
+            if (![ready[@"code"] isEqual:c[@"code"]] || ![fm fileExistsAtPath:[rc stringByAppendingPathComponent:@"libgame.dylib"]]) continue;   /* Play sets it up */
+            inst[@(ver->id)] = @{@"bin": @(ver->bin), @"exe": [rc stringByAppendingPathComponent:c[@"exe"]], @"game": [root stringByAppendingPathComponent:@"game-files"],
+                                 @"data": c[@"data_dir"] ? [root stringByAppendingPathComponent:c[@"data_dir"]] : root, @"built": c[@"release"] ?: @"", @"lib": rc};
+        }
+        v.installed = inst;
+    }
     v.art = [NSMutableDictionary dictionary]; v.backdrop = [NSMutableDictionary dictionary]; v.soft = [NSMutableDictionary dictionary]; v.blurred = [NSMutableDictionary dictionary]; v.fade = 1;
     for (NSInteger k = 0; k < NG; k++) {
-        NSImage *img = [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s.png", GAMES[k].id]]];
+        NSDictionary *sc = suite_cfg[@(GAMES[k].v[0].id)];
+        NSString *artdir = sc ? [suite_root(sc) stringByAppendingPathComponent:@"art"] : [res stringByAppendingPathComponent:@"art"];   /* the downloaded app: setup's art */
+        NSImage *img = [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s.png", GAMES[k].id]]];
         if (img) v.art[@(GAMES[k].id)] = img;
         /* the backdrop: the game's title screen (captured at install), else GOG's banner */
-        NSImage *bd = [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s-title.png", GAMES[k].id]]]
-                   ?: [[NSImage alloc] initWithContentsOfFile:[res stringByAppendingPathComponent:[NSString stringWithFormat:@"art/%s-banner.jpg", GAMES[k].id]]];
+        NSImage *bd = [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s-title.png", GAMES[k].id]]]
+                   ?: [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s-banner.jpg", GAMES[k].id]]];
         if (bd) { v.backdrop[@(GAMES[k].id)] = bd; NSImage *f = frost(bd, 70), *g = frost(bd, 320); if (f) v.blurred[@(GAMES[k].id)] = f; if (g) v.soft[@(GAMES[k].id)] = g; }
         v->ver[k] = [saved[[NSString stringWithFormat:@"ver_%s", GAMES[k].id]] integerValue];
     }
@@ -352,8 +378,50 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
         if (v.fade < 1) { v.fade = MIN(1, v.fade + 1.0 / 30 / 0.4); v.needsDisplay = YES; } else [v setNeedsDisplayInRect:NSInsetRect([v cardRect:v.game], -260, -140)]; }];
     if (getenv("SHC_LAUNCHER_PLAY")) [self hit:HIT_PLAY];
     if (getenv("SHC_LAUNCHER_MODS")) [self hit:HIT_MODS];                                         /* development: the Mods window */
+    if (pending_open) { NSArray *p = pending_open; pending_open = nil; dispatch_async(dispatch_get_main_queue(), ^{ [self application:NSApp openFiles:p]; }); }
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)a { return YES; }
+/* the downloaded app: a version's own binary shows its setup window (Drop, Choose, Search; setup/setup_ui.m), given a
+ * folder when one was dropped on the app, and comes back here when the game is ready (DS_SUITE). A second version of a
+ * game already set up (Claire, The Mercenaries) builds from the copy that is there. */
+- (void)setUp:(const Version *)ver folder:(NSString *)folder
+{
+    [self save];
+    setenv("DS_SUITE", NSBundle.mainBundle.executablePath.fileSystemRepresentation, 1);
+    if (folder) setenv("DS_SETUP_FOLDER", folder.fileSystemRepresentation, 1); else unsetenv("DS_SETUP_FOLDER");
+    NSString *bin = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@(ver->bin)];
+    char *const av[] = {(char *)bin.fileSystemRepresentation, NULL};
+    execv(av[0], av);
+    [alert(@"Setup did not start", @(strerror(errno))) runModal];
+}
+static BOOL holds_exe(NSString *dir, NSString *exe, int depth)   /* a dropped folder: the version's executable at most 3 levels down */
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    for (NSString *n in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([n caseInsensitiveCompare:exe] == NSOrderedSame) return YES;
+        NSString *sub = [dir stringByAppendingPathComponent:n]; BOOL isdir = NO;
+        if (depth < 3 && ![n hasPrefix:@"."] && [fm fileExistsAtPath:sub isDirectory:&isdir] && isdir && holds_exe(sub, exe, depth + 1)) return YES;
+    }
+    return NO;
+}
+- (void)application:(NSApplication *)app openFiles:(NSArray<NSString *> *)paths
+{
+    if (!self.view) { pending_open = (NSArray *)paths; return; }      /* the app opened by the drop: once its window is up */
+    for (NSString *p in paths) for (NSInteger k = 0; k < NG; k++) {
+        const Version *first = NULL;   /* a game's folder: its first version not set up yet (Leon, then Claire), else its card */
+        BOOL ours = NO;
+        for (int j = 0; j < GAMES[k].nv; j++) {
+            NSDictionary *c = suite_cfg[@(GAMES[k].v[j].id)];
+            if (!c || !holds_exe(p, c[@"exe"], 0)) continue;
+            ours = YES; if (!first && !self.view.installed[@(GAMES[k].v[j].id)]) first = &GAMES[k].v[j];
+        }
+        if (!ours) continue;
+        if (first) { [self setUp:first folder:p]; return; }
+        self.view.game = k; self.view.needsDisplay = YES; return;
+    }
+    [alert(@"That isn't one of the games", @"Drop the folder of your GOG copy of Resident Evil, Resident Evil 2, Resident Evil 3 or Dino Crisis on the app.") runModal];
+    [app replyToOpenOrPrint:NSApplicationDelegateReplyFailure];
+}
 - (void)hit:(NSInteger)h
 {
     HView *v = self.view;
@@ -363,7 +431,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     else switch (h) {
         case HIT_OPTIONS: v.open = !v.open; break;
         case HIT_MODS: { NSDictionary *e = [v entry:v.game]; const GameDef *d = &GAMES[v.game];
-                         if (!e) { v.status = @"Not installed"; break; }
+                         if (!e) { v.status = suite_cfg ? @"Not set up yet: Play sets it up" : @"Not installed"; break; }
                          if (!volume_ok(e[@"game"])) { v.status = [NSString stringWithFormat:@"Mods are placed by the game's own files: connect %@ first", volume_name(e[@"game"]) ?: @"its drive"]; break; }
                          hmods_show(self.window, @(d->name), @(d->id), d->gamebanana, e[@"game"], !strcmp([v version:v.game]->id, "re2c") ? @"claire" : @"leon",
                                     ^{ v.needsDisplay = YES; });
@@ -377,7 +445,8 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                           else v.status = e ? [NSString stringWithFormat:@"%s's folder isn't reachable: %@", GAMES[v.game].title, e[@"game"]] : @"Not installed"; break; }
         case HIT_UPDATES: { NSString *u = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"update"];
                             if (![[NSFileManager defaultManager] isExecutableFileAtPath:u]) { v.status = @"Updates: this app was not installed from a checkout"; break; }
-                            v.status = @"Updating: the games are rebuilt from GitHub (a few minutes); the app restarts when done";
+                            v.status = suite_cfg ? @"Updating: the newest release is downloaded from GitHub; the app restarts when done"
+                                                 : @"Updating: the games are rebuilt from GitHub (a few minutes); the app restarts when done";
                             [v display];
                             NSTask *task = [NSTask new]; task.launchPath = u; task.standardOutput = [NSFileHandle fileHandleWithNullDevice]; task.standardError = [NSFileHandle fileHandleWithNullDevice];
                             task.terminationHandler = ^(NSTask *tk) { dispatch_async(dispatch_get_main_queue(), ^{
@@ -392,6 +461,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
 - (void)play
 {
     HView *v = self.view; const Version *ver = [v version:v.game]; NSDictionary *e = [v entry:v.game];
+    if (!e && suite_cfg[@(ver->id)]) { [self setUp:ver folder:nil]; return; }
     if (!e) { [alert(@"Not installed", [NSString stringWithFormat:@"Install it with the project's installer: ./install.sh --games %s", GAMES[v.game].id]) runModal]; return; }
     if (!volume_ok(e[@"game"])) {
         NSString *vol = volume_name(e[@"game"]);
@@ -400,7 +470,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
         return;
     }
     NSString *bin = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:e[@"bin"]];
-    NSString *exe = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:e[@"exe"]];
+    NSString *exe = [e[@"exe"] isAbsolutePath] ? e[@"exe"] : [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:e[@"exe"]];
     NSString *data = e[@"data"]; NSString *log = [data stringByAppendingPathComponent:[e[@"bin"] stringByAppendingString:@".log"]];
     NSMutableDictionary *env = [NSMutableDictionary dictionary]; for (Opt *o in v.opts) env[o.key] = o.value;
     NSMutableArray *args = [NSMutableArray array];
@@ -418,6 +488,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
     [self save];
     NSMutableDictionary *all = [NSProcessInfo.processInfo.environment mutableCopy]; [all addEntriesFromDictionary:genv];
     [all addEntriesFromDictionary:@{@"SHC_PLAY_BIN": bin, @"SHC_PLAY_EXE": exe, @"SHC_PLAY_GAME": e[@"game"], @"SHC_PLAY_DATA": data}];
+    if (e[@"lib"]) all[@"SHC_PLAY_LIB"] = e[@"lib"];                     /* the downloaded app: the version's library, set up in its folder */
     [all removeObjectForKey:@"SHC_LAUNCHER_PLAY"];
     NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration]; cfg.createsNewApplicationInstance = YES; cfg.environment = all; cfg.activates = YES;
     [self.window orderOut:nil];
@@ -439,6 +510,8 @@ static void exec_game(void)
     if (log) { struct stat st; if (!stat(log, &st) && st.st_size > 5000000) { char old[2048]; snprintf(old, sizeof old, "%.*s.old.log", (int)(strlen(log) - 4), log); rename(log, old); }
                int fd = open(log, O_WRONLY | O_APPEND | O_CREAT, 0644); if (fd >= 0) { dup2(fd, 2); close(fd); } }
     for (int k = 0; k < 4; k++) unsetenv(names[k]);
+    const char *lib = getenv("SHC_PLAY_LIB");                         /* the downloaded app: bind the version's own library */
+    if (lib) { setenv("DYLD_LIBRARY_PATH", lib, 1); unsetenv("SHC_PLAY_LIB"); }
     const char *argv[] = {v[0], "--exe", v[1], "--game", v[2], "--data", v[3], 0};
     execv(argv[0], (char *const *)argv);
     fprintf(stderr, "Survival Horror Classics: %s did not start: %s\n", argv[0], strerror(errno));

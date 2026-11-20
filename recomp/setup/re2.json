@@ -1,0 +1,72 @@
+{
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "tag_lowercase": true,
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "CoreImage"
+  ],
+  "style": "stone",
+  "libs": [],
+  "local_network": "The games don't use your local network.",
+  "name": "Resident Evil 2 (Leon)",
+  "folder": "Resident Evil 2",
+  "binary": "ResidentEvil2Leon",
+  "icon_label": "RE2",
+  "version": "GOG",
+  "where": "Your Resident Evil 2 folder from GOG (installed, or copied from a PC)",
+  "minutes": 4,
+  "space_gb": 3,
+  "build_gb": 1,
+  "exe": "LeonU.exe",
+  "exe_sha256": {
+    "5cef4bea4d864d76329274a4fd1720bf7bc1438bc52e666b563989a00c1ccca4": "GOG"
+  },
+  "required": [
+    "Common",
+    "Pl0",
+    "Pl1",
+    "Zmovie"
+  ],
+  "lift_args": [
+    "--game",
+    "re2"
+  ],
+  "art": [
+    "shc_art.py",
+    "{game}",
+    "{art}",
+    "re2"
+  ],
+  "log": "ResidentEvil2Leon",
+  "build": "./build_re.sh re2 \"$GAME\"",
+  "out": "work/re2",
+  "rt_cflags": [
+    "-DRE2_EDITION"
+  ],
+  "host_cflags": [
+    "-DRE2_EDITION"
+  ],
+  "title": "RESIDENT EVIL 2",
+  "prepare": [
+    [
+      "convert_movies.py",
+      "{game}"
+    ]
+  ],
+  "prepare_text": "Converting the movies"
+}
