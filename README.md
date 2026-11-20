@@ -1,5 +1,7 @@
 # Survival Horror Classics: Resident Evil 1-3 and Dino Crisis, native for Apple Silicon
 
+![Survival Horror Classics, native on Apple Silicon](media/hero.jpg)
+
 Capcom's **Resident Evil** (1997 PC), **Resident Evil 2** (1999 PC), **Resident Evil 3: Nemesis** (2000 PC) and
 **Dino Crisis** (2000 PC), statically recompiled from **your own GOG copies** into native arm64 code and drawn with
 Metal: no Wine, no Rosetta, no emulator. One app, **Survival Horror Classics**, with a card for each game. It uses the
@@ -7,6 +9,14 @@ recompiler and Windows runtime of the author's GTA Classics and Dungeon Siege po
 
 No game files are in this repository. The installer reads the games you bought: the GOG releases, whose programs carry
 no copy protection (the Steam releases are wrapped in Enigma and are not used).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The launch window](media/screenshots/screenshot-launcher.png) | ![Resident Evil: the mansion hall](media/screenshots/screenshot-01-re1-mansion-hall.jpg) |
+| ![Resident Evil 2: Raccoon City](media/screenshots/screenshot-04-re2-raccoon-city.jpg) | ![Resident Evil 3: the streets](media/screenshots/screenshot-07-re3-raccoon-city.jpg) |
+| ![Dino Crisis: the facility](media/screenshots/screenshot-10-dino-crisis-facility.jpg) | ![Resident Evil 2: the police station](media/screenshots/screenshot-06-re2-police-station.jpg) |
 
 ## Status
 
