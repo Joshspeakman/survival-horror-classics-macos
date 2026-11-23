@@ -57,6 +57,9 @@
     },
     {
       "json": "dc.json"
+    },
+    {
+      "json": "dc2.json"
     }
   ]
 }

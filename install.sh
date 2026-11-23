@@ -1,8 +1,8 @@
 #!/bin/bash
-# install.sh [--games re1,re2,re3,dc] [--games-root DIR] [--installers DIR] [--app-dir DIR] [--branch main|nightly]
+# install.sh [--games re1,re2,re3,dc,dc2] [--games-root DIR] [--installers DIR] [--app-dir DIR] [--branch main|nightly]
 #            [--skip-build]
 #
-# Builds Resident Evil (1997), Resident Evil 2, Resident Evil 3: Nemesis and Dino Crisis natively for Apple Silicon from
+# Builds Resident Evil (1997), Resident Evil 2, Resident Evil 3: Nemesis, Dino Crisis and (the bonus) Dino Crisis 2 natively for Apple Silicon from
 # your own GOG copies and installs them as one app, "Survival Horror Classics.app" ("... Nightly.app" with --branch
 # nightly), in ~/Applications. Its launch window has a card per game; Play starts the chosen one.
 #
@@ -44,11 +44,12 @@ game_info() {
     re1) G_DIR=ResidentEvilNative;  G_TITLE="Resident Evil";   G_SETUP="setup_resident_evil_1.0*"; G_VERS="re1:ResidentEvil:ResidentEvil.exe";;
     re2) G_DIR=ResidentEvil2Native; G_TITLE="Resident Evil 2";  G_SETUP="setup_resident_evil_2_*";  G_VERS="re2:ResidentEvil2Leon:LeonU.exe re2c:ResidentEvil2Claire:ClaireU.exe";;
     re3) G_DIR=ResidentEvil3Native; G_TITLE="Resident Evil 3";  G_SETUP="setup_resident_evil_3_*";  G_VERS="re3:ResidentEvil3:ResidentEvil3.exe re3m:ResidentEvil3Mercenaries:RE3_MERCE.exe";;
-    dc)  G_DIR=DinoCrisisNative;    G_TITLE="Dino Crisis";      G_SETUP="setup_dino_crisis_*";      G_VERS="dc:DinoCrisis:DINO.exe";;
+    dc)  G_DIR=DinoCrisisNative;    G_TITLE="Dino Crisis";      G_SETUP="setup_dino_crisis_1*";     G_VERS="dc:DinoCrisis:DINO.exe";;
+    dc2) G_DIR=DinoCrisis2Native;   G_TITLE="Dino Crisis 2";    G_SETUP="setup_dino_crisis_2_*";    G_VERS="dc2:DinoCrisis2:Dino2.exe";;
   esac
   G_GAME="$GROOT/$G_DIR/game-files/$G_TITLE"
 }
-ALL="re1 re2 re3 dc"; [ -n "$WANT" ] || WANT="$ALL"
+ALL="re1 re2 re3 dc dc2"; [ -n "$WANT" ] || WANT="$ALL"
 DONE=""
 for g in $WANT; do
   game_info "$g"

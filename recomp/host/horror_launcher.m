@@ -40,12 +40,13 @@ static NSString *home_dir(void) { return [NSHomeDirectory() stringByAppendingPat
 
 /* ---- the games and their versions ---- */
 typedef struct { const char *id, *label, *bin; } Version;
-typedef struct { const char *id, *title, *year, *tag; int nv; Version v[2]; const char *name; int gamebanana; } GameDef;
-static const GameDef GAMES[4] = {   /* gamebanana: GameBanana's game, for the Mods window's browser (Dino Crisis has none) */
+typedef struct { const char *id, *title, *year, *tag; int nv; Version v[2]; const char *name; int gamebanana; int bonus; } GameDef;
+static const GameDef GAMES[] = {   /* gamebanana: GameBanana's game, for the Mods window's browser (Dino Crisis has none) */
     {"re1", "RESIDENT EVIL", "1997", "Spencer Mansion", 1, {{"re1", "Resident Evil", "ResidentEvil"}}, "Resident Evil", 13229},
     {"re2", "RESIDENT EVIL 2", "1999", "Raccoon City", 2, {{"re2", "Leon", "ResidentEvil2Leon"}, {"re2c", "Claire", "ResidentEvil2Claire"}}, "Resident Evil 2", 8862},
     {"re3", "RESIDENT EVIL 3", "2000", "Nemesis", 2, {{"re3", "The Game", "ResidentEvil3"}, {"re3m", "The Mercenaries", "ResidentEvil3Mercenaries"}}, "Resident Evil 3", 7006},
     {"dc", "DINO CRISIS", "2000", "Ibis Island", 1, {{"dc", "Dino Crisis", "DinoCrisis"}}, "Dino Crisis", 0},
+    {"dc2", "DINO CRISIS 2", "2002", "Edward City", 1, {{"dc2", "Dino Crisis 2", "DinoCrisis2"}}, "Dino Crisis 2", 0, 1},   /* the bonus card */
 };
 /* the downloaded app (make_suite.sh): each version set up by its own binary into ~/Games/<folder> (setup/setup_ui.m).
  * suite_cfg: setup/<binary>.json per version id; nil in an app built from source (games.plist) */
@@ -57,7 +58,7 @@ NSString *hmods_env(NSString *game);
 void hmods_counts(NSString *game, NSUInteger *installed, NSUInteger *on);
 void hmods_show(NSWindow *parent, NSString *title, NSString *game, int gamebanana, NSString *gameDir, NSString *prefer, void (^changed)(void));
 int hmods_cli(NSString *game, NSString *gameDir, NSString *archive, NSString *place);
-enum { NG = 4 };
+enum { NG = (int)(sizeof GAMES / sizeof *GAMES) };
 
 @interface Opt : NSObject
 @property NSString *key, *title; @property NSArray<NSArray<NSString *> *> *choices; @property NSInteger index;   /* {value, label, note} */
@@ -125,7 +126,7 @@ static NSImage *frost(NSImage *img, CGFloat soft)
     [edge ?: rgb(1, 1, 1, 0.16) setStroke]; [e stroke];
 }
 - (BOOL)acceptsFirstResponder { return YES; }
-- (NSRect)cardRect:(NSInteger)k { CGFloat w = 200, gap = 22, x0 = (self.bounds.size.width - (4 * w + 3 * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 150, w, 250); }
+- (NSRect)cardRect:(NSInteger)k { CGFloat w = NG > 4 ? 166 : 200, gap = NG > 4 ? 16 : 22, x0 = (self.bounds.size.width - (NG * w + (NG - 1) * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 150, w, 250); }
 - (NSRect)verRect:(NSInteger)k of:(NSInteger)n { CGFloat w = 210, gap = 14, x0 = (self.bounds.size.width - (n * w + (n - 1) * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 430, w, 40); }
 - (NSRect)tileRect:(NSInteger)k { CGFloat w = 106, x0 = 40; return NSMakeRect(x0 + k * (w + 10), 520, w, 48); }
 - (NSRect)playRect { return NSMakeRect(self.bounds.size.width - 40 - 170, 516, 170, 56); }
@@ -223,6 +224,11 @@ enum { NAV_LEFT = 1, NAV_RIGHT, NAV_UP, NAV_DOWN, NAV_OK, NAV_BACK, NAV_OPTIONS,
         if (!sel) { [rgb(0, 0, 0, 0.25) setFill]; NSRectFillUsingOperation(ir, NSCompositingOperationSourceOver); }
         [NSGraphicsContext restoreGraphicsState];
         [rgb(1, 1, 1, 0.14) setStroke]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(ir, 0.5, 0.5) xRadius:6 yRadius:6] stroke];
+        if (GAMES[k].bonus) {                                   /* the bonus game: a ribbon over its picture */
+            NSRect rb = NSMakeRect(NSMaxX(ir) - 62, ir.origin.y + 8, 56, 18);
+            [blood() setFill]; [[NSBezierPath bezierPathWithRoundedRect:rb xRadius:4 yRadius:4] fill];
+            text(@"BONUS", type(11, YES), paper(), NSMakeRect(rb.origin.x, rb.origin.y + 2, rb.size.width, 14), NSTextAlignmentCenter);
+        }
         text(@(GAMES[k].title), type(sel ? 16 : 15, YES), have ? paper() : ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 168, r.size.width - 16, 22), NSTextAlignmentCenter);
         text([NSString stringWithFormat:@"%s  ·  %s", GAMES[k].tag, GAMES[k].year], type(12, NO), ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 192, r.size.width - 16, 18), NSTextAlignmentCenter);
         NSString *st = !have ? (suite_cfg ? @"Not set up · Play sets it up" : @"Not installed") : !mounted ? [NSString stringWithFormat:@"Insert %@", volume_name(en[@"game"]) ?: @"its drive"] : @"Ready";
@@ -419,7 +425,7 @@ static BOOL holds_exe(NSString *dir, NSString *exe, int depth)   /* a dropped fo
         if (first) { [self setUp:first folder:p]; return; }
         self.view.game = k; self.view.needsDisplay = YES; return;
     }
-    [alert(@"That isn't one of the games", @"Drop the folder of your GOG copy of Resident Evil, Resident Evil 2, Resident Evil 3 or Dino Crisis on the app.") runModal];
+    [alert(@"That isn't one of the games", @"Drop the folder of your GOG copy of Resident Evil, Resident Evil 2, Resident Evil 3, Dino Crisis or Dino Crisis 2 on the app.") runModal];
     [app replyToOpenOrPrint:NSApplicationDelegateReplyFailure];
 }
 - (void)hit:(NSInteger)h

@@ -16,6 +16,7 @@ EDITION_FLAGS=()
 [[ -f "$OUT/ResidentEvil3.exe" ]] && EDITION_FLAGS=(-DRE3_EDITION)
 [[ -f "$OUT/RE3_MERCE.exe" ]] && EDITION_FLAGS=(-DRE3_EDITION -DRE3_MERCE)
 [[ -f "$OUT/DINO.exe" ]] && EDITION_FLAGS=(-DDC_EDITION)
+[[ -f "$OUT/Dino2.exe" ]] && EDITION_FLAGS=(-DDC2_EDITION)
 SAN=(); [[ -n "${DF_SANITIZE:-}" ]] && SAN=(-fsanitize="$DF_SANITIZE" -fno-omit-frame-pointer)   # development: e.g. DF_SANITIZE=address
 INC=(-I "$HERE/runtime" -I "$HERE/runtime/win32" -I "$HERE/third_party/mojoshader" -I "$HERE/third_party/minimp3" -I "$HERE/third_party/vulkan/include")
 # Check every compiler status before linking; bound parallel work on macOS.

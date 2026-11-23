@@ -1,5 +1,5 @@
 #!/bin/bash
-# build_re.sh <re1|re2|re2c|re3|re3m|dc> <game folder> [outdir]
+# build_re.sh <re1|re2|re2c|re3|re3m|dc|dc2> <game folder> [outdir]
 # Recompile one program of the player's own GOG copy of Resident Evil (ResidentEvil.exe), Resident Evil 2 (LeonU.exe,
 # ClaireU.exe), Resident Evil 3: Nemesis (ResidentEvil3.exe, RE3_MERCE.exe) or Dino Crisis (DINO.exe) into C and link
 # it with the native runtime (tools/build_runtime.sh). The GOG executables carry no wrapper or copy protection: the
@@ -16,6 +16,7 @@ case "$ID" in
   re3)  EXE_NAME=ResidentEvil3.exe; SHA=f6ab367f757e6ee7 ;;
   re3m) EXE_NAME=RE3_MERCE.exe;     SHA=e409166c7d70c40a ;;
   dc)   EXE_NAME=DINO.exe;          SHA=e51128312935eb3e ;;
+  dc2)  EXE_NAME=Dino2.exe;         SHA=45499e03a5cfb52f ;;
   *) echo "unknown game $ID"; exit 1 ;;
 esac
 sha() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -c1-16; }

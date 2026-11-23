@@ -544,6 +544,13 @@ M(s_GetAttachedSurface, 3) ME(DSurface, O_SURF)
         DSurface *t = me->attached[k];
         if ((U32(t->desc, SD_CAPS) & want) == want && (U32(t->desc, SD_CAPS2) & want2) == want2) { rt_w32(G_MEM, out, surf_iface_for(t, ARG(0))); surf_addref(t); RET(DD_OK, 3); }
     }
+    for (int k = 0; k < me->nattached; k++) {           /* the extended caps left as stack garbage (Dino Crisis 2 fills only dwCaps): */
+        DSurface *t = me->attached[k];                   /* the first caps alone, as Windows' DirectDraw lets it through */
+        if (want2 && (U32(t->desc, SD_CAPS) & want) == want) { rt_w32(G_MEM, out, surf_iface_for(t, ARG(0))); surf_addref(t); RET(DD_OK, 3); }
+    }
+    { static int lg = -1; if (lg < 0) lg = getenv("DSR_LOG") != 0;
+      if (lg) { fprintf(stderr, "dsr: GetAttachedSurface caps %08x/%08x on surface caps %08x: none of %d attached", want, want2, U32(me->desc, SD_CAPS), me->nattached);
+                for (int k = 0; k < me->nattached; k++) fprintf(stderr, " [%08x]", U32(me->attached[k]->desc, SD_CAPS)); fprintf(stderr, "\n"); } }
     rt_w32(G_MEM, out, 0); RET(DDH(255), 3);
 END
 M(s_EnumAttachedSurfaces, 3) ME(DSurface, O_SURF)

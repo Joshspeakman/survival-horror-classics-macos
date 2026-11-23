@@ -17,6 +17,7 @@ NAME=DungeonSiegeNative; EDITION_FLAGS=()
 [[ -f "$OUT/ResidentEvil3.exe" ]] && { NAME=ResidentEvil3; EDITION_FLAGS=(-DRE3_EDITION); }
 [[ -f "$OUT/RE3_MERCE.exe" ]] && { NAME=ResidentEvil3Mercenaries; EDITION_FLAGS=(-DRE3_EDITION -DRE3_MERCE); }
 [[ -f "$OUT/DINO.exe" ]] && { NAME=DinoCrisis; EDITION_FLAGS=(-DDC_EDITION); }
+[[ -f "$OUT/Dino2.exe" ]] && { NAME=DinoCrisis2; EDITION_FLAGS=(-DDC2_EDITION); }
 SAN=(); [[ -n "${DF_SANITIZE:-}" ]] && SAN=(-fsanitize="$DF_SANITIZE" -fno-omit-frame-pointer)   # development (build_runtime.sh)
 mkdir -p "$APP" "$OUT/obj/host"
 BUILD="$(git -C "$HERE" describe --always --dirty 2>/dev/null || echo unknown)"

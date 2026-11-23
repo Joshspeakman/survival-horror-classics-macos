@@ -1,0 +1,64 @@
+{
+  "release_repo": "Joshspeakman/survival-horror-classics-macos",
+  "bundle_id": "io.github.joshspeakman.survival-horror-classics",
+  "tag_lowercase": true,
+  "cc_args": [
+    "-fPIC",
+    "-DRT_HOST_RC_INIT=UINT32_MAX"
+  ],
+  "rt_opt": "-O1",
+  "frameworks": [
+    "AppKit",
+    "GameController",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "CoreImage"
+  ],
+  "style": "stone",
+  "libs": [],
+  "local_network": "The games don't use your local network.",
+  "name": "Dino Crisis 2",
+  "folder": "Dino Crisis 2",
+  "binary": "DinoCrisis2",
+  "icon_label": "DC2",
+  "version": "GOG",
+  "where": "Your Dino Crisis 2 folder from GOG (installed, or copied from a PC)",
+  "minutes": 4,
+  "space_gb": 2,
+  "build_gb": 1,
+  "exe": "Dino2.exe",
+  "exe_sha256": {
+    "45499e03a5cfb52fe18b90c0af4771e47e776b365c2bc5139c9574c136e8af54": "GOG"
+  },
+  "required": [
+    "Data",
+    "Movie",
+    "Speech"
+  ],
+  "lift_args": [
+    "--game",
+    "dc2"
+  ],
+  "art": [
+    "shc_art.py",
+    "{game}",
+    "{art}",
+    "dc2"
+  ],
+  "log": "DinoCrisis2",
+  "build": "./build_re.sh dc2 \"$GAME\"",
+  "out": "work/dc2",
+  "rt_cflags": [
+    "-DDC2_EDITION"
+  ],
+  "host_cflags": [
+    "-DDC2_EDITION"
+  ],
+  "title": "DINO CRISIS 2"
+}

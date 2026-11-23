@@ -1,7 +1,7 @@
 /* Address-specific hooks and user-data names must follow the compiled executable. */
 #ifndef DS2_EDITION_H
 #define DS2_EDITION_H
-#if defined(RE1_EDITION) || defined(RE2_EDITION) || defined(RE3_EDITION) || defined(DC_EDITION)
+#if defined(RE1_EDITION) || defined(RE2_EDITION) || defined(RE3_EDITION) || defined(DC_EDITION) || defined(DC2_EDITION)
 #define RE_EDITION 1    /* the GOG releases of Resident Evil 1-3 and Dino Crisis: DirectDraw / Direct3D 1-6 games */
 #endif
 #if defined(GTA3_EDITION) || defined(GTAVC_EDITION) || defined(GTASA_EDITION)
@@ -76,6 +76,13 @@
 #define GAME_EXE "ResidentEvil3.exe"
 #endif
 #define GAME_DIR_WIN "C:\\GOG Games\\Resident Evil 3"
+#elif defined(DC2_EDITION)
+/* Dino Crisis 2 (2002 PC, GOG 1.0 hotfix 3: Dino2.exe; like Dino Crisis, a .psxseg section left from the PlayStation) */
+#define DS2_IMAGE_END 0x00883000u
+#define DS2_TITLE "Dino Crisis 2"
+#define DS2_DOCUMENTS "Dino Crisis 2"
+#define GAME_EXE "Dino2.exe"
+#define GAME_DIR_WIN "C:\\GOG Games\\Dino Crisis 2"
 #else
 #define DS2_IMAGE_END 0x00715000u
 #define DS2_TITLE "Dino Crisis"

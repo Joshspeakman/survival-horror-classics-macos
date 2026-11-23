@@ -115,6 +115,9 @@ int rt_override(Ctx *c, uint32_t addr)
 #ifdef GTA_EDITION
     { int gta3_override(Ctx *, uint32_t); if (gta3_override(c, addr)) return 1; }   /* gta3_mode.c */
 #endif
+#ifdef DC2_EDITION
+    { int dc2_task_override(Ctx *, uint32_t); if (dc2_task_override(c, addr)) return 1; }   /* dc2_tasks.c: Dino Crisis 2's tasks */
+#endif
 #ifdef RE1_EDITION
     { int re1_task_override(Ctx *, uint32_t); if (re1_task_override(c, addr)) return 1; }   /* re1_tasks.c: Resident Evil's tasks */
 #endif
