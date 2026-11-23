@@ -108,7 +108,7 @@ for g in $ALL; do
   # test mode: a background window, muted); GOG's store banner from the game's folder (app/webcache.zip) as a fallback
   ART="$STAGE/Contents/Resources/art"
   if [ -d "$G_GAME" ] && [ -x "$STAGE/Contents/MacOS/$(echo "$G_VERS" | cut -d' ' -f1 | cut -d: -f2)" ]; then
-    case "$g" in re2) frames="600 800 1000"; args=-mode0;; re1) frames="760 800 840"; args="";; re3) frames="1180 1230 1280"; args="";; *) frames="1500 1700 1900"; args="";; esac
+    case "$g" in re2) frames="600 800 1000"; args=-mode0;; re1) frames="760 800 840"; args="";; re3) frames="1180 1230 1280"; args="";; dc2) frames="620 660 700"; args="";; *) frames="1500 1700 1900"; args="";; esac
     ART_FRAMES="$frames" "$HERE/recomp/tools/capture_art.sh" "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$ART" "$g" "$G_GAME" -- $args || true
     wc="$G_GAME/app/webcache.zip"
     if [ -f "$wc" ]; then
