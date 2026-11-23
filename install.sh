@@ -36,7 +36,7 @@ NAME="Survival Horror Classics"; ID=com.joshspeakman.survivalhorrorclassics
 [[ "$U_BRANCH" == nightly ]] && { NAME="$NAME Nightly"; ID="$ID.nightly"; }
 A="$APPS/$NAME.app"; HOMEDIR="$HOME/Games/SurvivalHorrorClassics"; mkdir -p "$HOMEDIR"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-pl() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
+pl() { /usr/libexec/PlistBuddy -c "Print :${2//./:}" "$1" 2>/dev/null || true; }   # key paths: game.bin -> :game:bin
 
 # game: native folder, title folder, installer pattern, versions (id:binary:exe)
 game_info() {
