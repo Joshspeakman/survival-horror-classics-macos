@@ -50,7 +50,8 @@
     "shc_art.py",
     "{game}",
     "{art}",
-    "re2"
+    "re2",
+    "--store"
   ],
   "log": "ResidentEvil2Leon",
   "build": "./build_re.sh re2 \"$GAME\"",

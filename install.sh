@@ -79,7 +79,7 @@ done
 STAGE="$(mktemp -d "$APPS/.shc.XXXXXX" 2>/dev/null || { mkdir -p "$APPS"; mktemp -d "$APPS/.shc.XXXXXX"; })/$NAME.app"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/art"
 OLD="$A/Contents/Resources/games.plist"
-clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -framework CoreImage -framework GameController -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m" "$HERE/recomp/host/horror_mods.m"
+clang -O2 -fobjc-arc -Wall -Wno-unused-function -framework Cocoa -framework CoreImage -framework GameController -framework QuartzCore -o "$STAGE/Contents/MacOS/SurvivalHorrorClassics" "$HERE/recomp/host/horror_launcher.m" "$HERE/recomp/host/horror_mods.m"
 U_BUILT="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)"
 G="$STAGE/Contents/Resources/games.plist"; plutil -create xml1 "$G"
 INSTALLED=""
@@ -117,7 +117,9 @@ for g in $ALL; do
       rm -rf "$T"
     fi
   fi
-  for f in "$g-title.png" "$g-banner.jpg"; do [ -f "$ART/$f" ] || [ ! -f "$A/Contents/Resources/art/$f" ] || cp "$A/Contents/Resources/art/$f" "$ART/"; done
+  # GOG's box and screenshots for the window's portrait and slides (tools/shc_art.py --store-only; skipped offline)
+  [ -d "$G_GAME" ] && [ -z "${NODL:-}" ] && python3 "$HERE/recomp/tools/shc_art.py" "$G_GAME" "$ART" "$g" --store-only >/dev/null 2>&1 || true
+  for f in "$g-title.png" "$g-banner.jpg" "$g-store-portrait.jpg" "$g"-shot-{1,2,3,4,5,6}.jpg; do [ -f "$ART/$f" ] || [ ! -f "$A/Contents/Resources/art/$f" ] || cp "$A/Contents/Resources/art/$f" "$ART/"; done
 done
 # Restore from Disc (the Mods window): the disc tools in the app, and a Python with numpy for them
 cp "$HERE/recomp/tools/psx_disc.py" "$HERE/recomp/tools/psx_import.py" "$STAGE/Contents/Resources/"

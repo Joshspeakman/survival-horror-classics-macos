@@ -47,7 +47,8 @@
     "shc_art.py",
     "{game}",
     "{art}",
-    "re1"
+    "re1",
+    "--store"
   ],
   "log": "ResidentEvil",
   "build": "./build_re.sh re1 \"$GAME\"",

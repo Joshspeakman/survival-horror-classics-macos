@@ -14,7 +14,8 @@
   "launcher_frameworks": [
     "Cocoa",
     "CoreImage",
-    "GameController"
+    "GameController",
+    "QuartzCore"
   ],
   "resources": [
     "tools/psx_disc.py",

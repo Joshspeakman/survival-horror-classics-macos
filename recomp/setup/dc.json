@@ -49,7 +49,8 @@
     "shc_art.py",
     "{game}",
     "{art}",
-    "dc"
+    "dc",
+    "--store"
   ],
   "log": "DinoCrisis",
   "build": "./build_re.sh dc \"$GAME\"",
