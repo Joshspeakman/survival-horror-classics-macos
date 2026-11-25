@@ -745,6 +745,8 @@ int main(int argc, const char **argv)
     if (argc > 1 && (!strcmp(argv[1], "--install-mod") || !strcmp(argv[1], "--list-mods"))) { @autoreleasepool { return mods_cli(argc, argv); } }
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication]; app.activationPolicy = NSApplicationActivationPolicyRegular;
+            { NSMenu *bar = [NSMenu new]; NSMenuItem *it = [NSMenuItem new]; [bar addItem:it]; NSMenu *m = [NSMenu new];   /* Command-Q quits the launch window */
+            [m addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"]; it.submenu = m; app.mainMenu = bar; }
         Launcher *l = [Launcher new]; app.delegate = l; [app run];
     }
     return 0;
