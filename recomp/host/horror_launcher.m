@@ -43,6 +43,11 @@ static NSColor *blood(void) { return rgb(0.76, 0.09, 0.11, 1); }
 static NSColor *paper(void) { return rgb(0.93, 0.90, 0.84, 1); }
 static NSColor *ash(void) { return rgb(0.56, 0.54, 0.52, 1); }
 static NSFont *type(CGFloat s, BOOL bold) { return [NSFont fontWithName:bold ? @"AmericanTypewriter-Semibold" : @"AmericanTypewriter" size:s] ?: [NSFont monospacedSystemFontOfSize:s weight:bold ? NSFontWeightSemibold : NSFontWeightRegular]; }
+static void ktext(NSString *s, NSFont *f, NSColor *c, CGFloat kern, NSRect r, NSTextAlignment al)   /* letter-spaced, one line */
+{
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new]; p.alignment = al; p.lineBreakMode = NSLineBreakByTruncatingTail;
+    [s drawInRect:r withAttributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: c, NSParagraphStyleAttributeName: p, NSKernAttributeName: @(kern)}];
+}
 static NSFont *title_font(CGFloat s) { return [NSFont fontWithName:@"Didot-Bold" size:s] ?: [NSFont fontWithName:@"Georgia-Bold" size:s] ?: [NSFont boldSystemFontOfSize:s]; }
 static NSString *user_home(void) { const char *h = getenv("HOME"); return h && *h ? @(h) : NSHomeDirectory(); }   /* $HOME (tests point it elsewhere) */
 static NSString *home_dir(void) { return getenv("SHC_LAUNCHER_HOME") ? @(getenv("SHC_LAUNCHER_HOME")) : [user_home() stringByAppendingPathComponent:@"Games/SurvivalHorrorClassics"]; }
@@ -374,12 +379,14 @@ static int frames_drawn;
     text(@"S U R V I V A L   H O R R O R   ·   C L A S S I C S", type(11, YES), blood(), NSMakeRect(40, 22, 640, 16), NSTextAlignmentLeft);
     NSImage *logo = self.logos[@(gd->id)];
     { NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.85); sh.shadowBlurRadius = 10; [NSGraphicsContext saveGraphicsState]; [sh set];
-      if (logo) { NSSize ls = logo.size; CGFloat lw = 560, lh = lw * ls.height / MAX(1, ls.width); if (lh > 150) { lh = 150; lw = lh * ls.width / MAX(1, ls.height); }
-                  [logo drawInRect:NSMakeRect(40, 44 + (150 - lh) / 2, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}]; }
-      else text(@(gd->title), title_font(46), paper(), NSMakeRect(40, 80, 640, 60), NSTextAlignmentLeft);
+      if (logo) { NSSize ls = logo.size; CGImageRef lc = [logo CGImageForProposedRect:NULL context:nil hints:nil];
+                  CGFloat px = lc ? CGImageGetWidth(lc) : ls.width, lw = MIN(560, px * 0.62), lh = lw * ls.height / MAX(1, ls.width);   /* (at most ~1.6 of its pixels per pixel on Retina: sharp, not a blur) */
+                  if (lh > 150) { lh = 150; lw = lh * ls.width / MAX(1, ls.height); }
+                  [logo drawInRect:NSMakeRect(40, 190 - lh, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}]; }
+      else text(@(gd->title), title_font(52), paper(), NSMakeRect(40, 122, 640, 66), NSTextAlignmentLeft);
       [NSGraphicsContext restoreGraphicsState]; }
     [blood() setFill]; NSRectFill(NSMakeRect(40, 204, 4, 40));
-    text([NSString stringWithFormat:@"%s  ·  %s", gd->tag, gd->year], type(15, YES), paper(), NSMakeRect(54, 204, 620, 20), NSTextAlignmentLeft);
+    ktext([NSString stringWithFormat:@"CAPCOM  ·  %s  ·  %@", gd->year, @(gd->tag).uppercaseString], type(14, YES), paper(), 2.4, NSMakeRect(54, 205, 620, 20), NSTextAlignmentLeft);
     static NSString *const blurbs[] = {@"S.T.A.R.S. Alpha Team flees into a mansion in the Arklay Mountains, and finds Umbrella's secret.",
                                        @"A rookie cop and a student looking for her brother reach Raccoon City the night the dead take it.",
                                        @"Jill Valentine fights her way out of Raccoon City's last days, hunted by the Nemesis.",
@@ -409,7 +416,13 @@ static int frames_drawn;
         text(@(GAMES[k].title), type(sel ? 16 : 15, YES), have ? paper() : ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 116, r.size.width - 16, 22), NSTextAlignmentCenter);
         text([NSString stringWithFormat:@"%s  ·  %s", GAMES[k].tag, GAMES[k].year], type(12, NO), ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 139, r.size.width - 16, 18), NSTextAlignmentCenter);
         NSString *st = !have ? (suite_cfg ? @"Not set up · Play sets it up" : @"Not installed") : !mounted ? [NSString stringWithFormat:@"Insert %@", volume_name(en[@"game"]) ?: @"its drive"] : @"Ready";
-        text(st, type(11, NO), !have ? ash() : !mounted ? rgb(0.95, 0.6, 0.3, 1) : rgb(0.55, 0.75, 0.55, 1), NSMakeRect(r.origin.x + 8, r.origin.y + 161, r.size.width - 16, 16), NSTextAlignmentCenter);
+        NSColor *sc = !have ? ash() : !mounted ? rgb(0.95, 0.6, 0.3, 1) : rgb(0.55, 0.85, 0.55, 1); NSFont *sf = type(11, YES);
+        CGFloat sw = [st.uppercaseString sizeWithAttributes:@{NSFontAttributeName: sf, NSKernAttributeName: @1.6}].width;
+        [sc setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMidX(r) - sw / 2 - 9, r.origin.y + 166, 5, 5)] fill];
+        ktext(st.uppercaseString, sf, sc, 1.6, NSMakeRect(NSMidX(r) - sw / 2 + 1, r.origin.y + 161, sw + 4, 16), NSTextAlignmentLeft);
+        if (sel) { [blood() setFill];                          /* the chosen card: blood-red brackets outside its corners */
+            for (int c = 0; c < 4; c++) { CGFloat x = c % 2 ? NSMaxX(r) + 2 : r.origin.x - 6, y = c / 2 ? NSMaxY(r) + 2 : r.origin.y - 6;
+                NSRectFill(NSMakeRect(c % 2 ? x - 10 : x, y, 14, 4)); NSRectFill(NSMakeRect(x, c / 2 ? y - 10 : y, 4, 14)); } }
     }
     /* the chosen game's versions */
     const GameDef *d = &GAMES[self.game];
@@ -427,18 +440,32 @@ static int frames_drawn;
     for (NSInteger k = 0; k < NTILES; k++) {
         NSRect r = [self tileRect:k]; BOOL hov = self.hover == HIT_OPTIONS + k || (k == 0 && self.open);
         [self glass:r radius:8 tint:rgb(1, 1, 1, hov ? 0.11 : 0.06) edge:hov ? blood() : nil width:1];
-        if (HIT_OPTIONS + k == HIT_MODS && nmods) {   /* how many of the game's mods are on */
-            text(tiles[k], type(14, YES), paper(), NSMakeRect(r.origin.x, r.origin.y + 6, r.size.width, 20), NSTextAlignmentCenter);
-            text([NSString stringWithFormat:@"%lu of %lu on", (unsigned long)onmods, (unsigned long)nmods], type(11, NO), onmods ? blood() : ash(),
-                 NSMakeRect(r.origin.x, r.origin.y + 27, r.size.width, 16), NSTextAlignmentCenter);
-        } else text(tiles[k], type(14, YES), paper(), NSMakeRect(r.origin.x, r.origin.y + 14, r.size.width, 20), NSTextAlignmentCenter);
+        [(hov ? blood() : [blood() colorWithAlphaComponent:0.55]) setFill]; NSRectFill(NSMakeRect(r.origin.x + 10, r.origin.y + 8, 3, r.size.height - 16));
+        NSString *value = k == 0 ? (self.opts.count ? self.opts[0].choices[self.opts[0].index][1] : @"Settings")
+                        : k == 1 ? (nmods ? [NSString stringWithFormat:@"%lu of %lu on", (unsigned long)onmods, (unsigned long)nmods] : @"Add Mods")
+                        : k == 4 ? @"Nightly" : @"Open";
+        ktext([tiles[k] uppercaseString], type(9.5, YES), hov ? rgb(1, 0.45, 0.42, 1) : ash(), 1.6, NSMakeRect(r.origin.x + 19, r.origin.y + 7, r.size.width - 24, 14), NSTextAlignmentLeft);
+        text(value, type(13, YES), k == 1 && onmods ? blood() : paper(), NSMakeRect(r.origin.x + 19, r.origin.y + 22, r.size.width - 24, 20), NSTextAlignmentLeft);
     }
     NSRect q = self.quitRect, p = self.playRect;
     [self glass:q radius:8 tint:rgb(1, 1, 1, self.hover == HIT_QUIT ? 0.11 : 0.06) edge:nil width:1];
-    text(@"Quit", type(16, YES), paper(), NSMakeRect(q.origin.x, q.origin.y + 16, q.size.width, 24), NSTextAlignmentCenter);
-    NSDictionary *en = [self entry:self.game]; BOOL can = en && volume_ok(en[@"game"]);
-    [(can ? (self.hover == HIT_PLAY ? rgb(0.86, 0.12, 0.14, 1) : blood()) : rgb(0.25, 0.1, 0.1, 1)) setFill]; [[NSBezierPath bezierPathWithRoundedRect:p xRadius:8 yRadius:8] fill];
-    text(@"PLAY", title_font(24), can ? paper() : ash(), NSMakeRect(p.origin.x, p.origin.y + 12, p.size.width, 32), NSTextAlignmentCenter);
+    ktext(@"QUIT", type(15, YES), paper(), 3, NSMakeRect(q.origin.x, q.origin.y + 17, q.size.width, 24), NSTextAlignmentCenter);
+    NSDictionary *en = [self entry:self.game]; BOOL can = en && volume_ok(en[@"game"]); BOOL ph = self.hover == HIT_PLAY;
+    {   /* Play: blood-red, lit from above, a play mark, the game it opens */
+        NSBezierPath *pb = [NSBezierPath bezierPathWithRoundedRect:p xRadius:8 yRadius:8];
+        NSShadow *g = [NSShadow new]; g.shadowColor = rgb(0.9, 0.1, 0.12, can ? (ph ? 0.75 : 0.45) : 0); g.shadowBlurRadius = ph ? 20 : 12;
+        [NSGraphicsContext saveGraphicsState]; [g set]; [blood() setFill]; [pb fill]; [NSGraphicsContext restoreGraphicsState];
+        [NSGraphicsContext saveGraphicsState]; [pb addClip];
+        [[[NSGradient alloc] initWithStartingColor:can ? (ph ? rgb(0.95, 0.20, 0.20, 1) : rgb(0.84, 0.13, 0.15, 1)) : rgb(0.30, 0.12, 0.12, 1)
+                                       endingColor:can ? rgb(0.48, 0.03, 0.05, 1) : rgb(0.18, 0.07, 0.07, 1)] drawInRect:p angle:-90];
+        [rgb(1, 1, 1, 0.22) setFill]; NSRectFillUsingOperation(NSMakeRect(p.origin.x, p.origin.y, p.size.width, 1), NSCompositingOperationSourceOver);
+        [NSGraphicsContext restoreGraphicsState];
+        [rgb(1, 0.55, 0.5, can ? 0.7 : 0.2) setStroke]; NSBezierPath *pe = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(p, 0.5, 0.5) xRadius:8 yRadius:8]; pe.lineWidth = 1; [pe stroke];
+        NSBezierPath *tri = [NSBezierPath bezierPath]; CGFloat cx = p.origin.x + 26, cy = p.origin.y + 22;
+        [tri moveToPoint:NSMakePoint(cx - 5, cy - 8)]; [tri lineToPoint:NSMakePoint(cx + 8, cy)]; [tri lineToPoint:NSMakePoint(cx - 5, cy + 8)]; [tri closePath]; [(can ? paper() : ash()) setFill]; [tri fill];
+        ktext(@"PLAY", title_font(24), can ? paper() : ash(), 3, NSMakeRect(p.origin.x + 30, p.origin.y + 6, p.size.width - 36, 32), NSTextAlignmentCenter);
+        ktext(@(gd->title).uppercaseString, type(9.5, YES), rgb(1, 0.85, 0.82, can ? 0.85 : 0.4), 1.4, NSMakeRect(p.origin.x + 8, p.origin.y + 36, p.size.width - 16, 14), NSTextAlignmentCenter);
+    }
     if (self.status.length) text(self.status, type(12, NO), ash(), NSMakeRect(40, 636, b.size.width - 80, 18), NSTextAlignmentLeft);
     /* the options panel */
     if (self.open) {
@@ -511,6 +538,7 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
         if (img) v.art[@(GAMES[k].id)] = img;
         /* the backdrop: the game's title screen (captured at install), else GOG's banner */
         NSImage *bd = [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s-title.png", GAMES[k].id]]]
+                   ?: [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s-shot-1.jpg", GAMES[k].id]]]
                    ?: [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:[NSString stringWithFormat:@"%s-banner.jpg", GAMES[k].id]]];
         if (bd) v.backdrop[@(GAMES[k].id)] = bd;
         {   /* the slides: its title screen, then GOG's screenshots and banner; the box; the title keyed out of the title screen */
@@ -518,8 +546,8 @@ static NSAlert *alert(NSString *m, NSString *i) { NSAlert *a = [NSAlert new]; a.
                 if (getenv("SHC_LAUNCHER_ART")) { NSImage *i = [[NSImage alloc] initWithContentsOfFile:[@(getenv("SHC_LAUNCHER_ART")) stringByAppendingPathComponent:n]]; return i.size.width > 16 ? i : nil; }
                 NSImage *i = [[NSImage alloc] initWithContentsOfFile:[artdir stringByAppendingPathComponent:n]]; return i.size.width > 16 ? i : nil; };
             NSMutableArray *sl = [NSMutableArray array]; NSImage *title = pic([gid stringByAppendingString:@"-title.png"]);
-            if (title) [sl addObject:ready(title, 1400)];
             for (int j = 1; j <= 6; j++) { NSImage *im = ready(pic([NSString stringWithFormat:@"%@-shot-%d.jpg", gid, j]), 1600); if (im) [sl addObject:im]; }
+            if (title && sl.count < 2) [sl insertObject:ready(title, 1400) atIndex:0];   /* (with screenshots, the title screen stays out: its title is the logo above) */
             NSImage *ban = pic([gid stringByAppendingString:@"-banner.jpg"]); if (ban) [sl insertObject:ready(ban, 1600) atIndex:MIN(sl.count, (NSUInteger)2)];
             v.slides[gid] = sl;
             NSImage *box = pic([gid stringByAppendingString:@"-store-portrait.jpg"]) ?: title ?: ban; if (box) v.portraits[gid] = ready(box, 900);
