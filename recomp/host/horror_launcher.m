@@ -139,12 +139,17 @@ static NSImage *frost(NSImage *img, CGFloat soft)
     [edge ?: rgb(1, 1, 1, 0.16) setStroke]; [e stroke];
 }
 - (BOOL)acceptsFirstResponder { return YES; }
-- (NSRect)cardRect:(NSInteger)k { CGFloat w = NG > 4 ? 166 : 200, gap = NG > 4 ? 16 : 22, x0 = (self.bounds.size.width - (NG * w + (NG - 1) * gap)) / 2; return NSMakeRect(x0 + k * (w + gap), 318, w, 186); }
-- (NSRect)verRect:(NSInteger)k of:(NSInteger)n { CGFloat w = 190, gap = 12; return NSMakeRect(40 + k * (w + gap), 262, w, 36); }
-- (NSRect)tileRect:(NSInteger)k { CGFloat w = 106, x0 = 40; return NSMakeRect(x0 + k * (w + 10), 580, w, 48); }
-- (NSRect)playRect { return NSMakeRect(self.bounds.size.width - 40 - 170, 576, 170, 56); }
-- (NSRect)quitRect { return NSMakeRect(self.bounds.size.width - 40 - 170 - 14 - 110, 576, 110, 56); }
-- (NSRect)portraitRect { return NSMakeRect(self.bounds.size.width - 40 - 206, 22, 206, 280); }
+/* the inventory screen: the title and the condition monitor; Examine and the item grid; the item's file and the commands */
+- (NSRect)gridRect { return NSMakeRect(346, 166, 574, 254); }
+- (NSRect)cardRect:(NSInteger)k { NSRect g = self.gridRect; CGFloat w = (g.size.width - 16) / 3, h = (g.size.height - 8) / 2; return NSMakeRect(g.origin.x + (k % 3) * (w + 8), g.origin.y + (k / 3) * (h + 8), w, h); }
+- (NSRect)examineRect { return NSMakeRect(40, 166, 290, 254); }
+- (NSRect)monitorRect { return NSMakeRect(self.bounds.size.width - 40 - 250, 30, 250, 100); }
+- (NSRect)fileRect { return NSMakeRect(40, 436, 590, 140); }
+- (NSRect)verRect:(NSInteger)k of:(NSInteger)n { NSRect f = self.fileRect; return NSMakeRect(f.origin.x + 16 + k * 168, NSMaxY(f) - 36, 160, 26); }
+- (NSRect)tileRect:(NSInteger)k { return NSMakeRect(650, 464 + k * 30, 270, 28); }
+- (NSRect)playRect { return NSMakeRect(470, 592, 160, 50); }
+- (NSRect)quitRect { return NSMakeRect(40, 592, 110, 50); }
+- (NSRect)portraitRect { return NSInsetRect(self.examineRect, 14, 30); }
 - (NSRect)panelRect { CGFloat h = 70 + 58 * (CGFloat)self.opts.count; return NSMakeRect(150, MAX(40, 300 - h / 2), self.bounds.size.width - 300, h); }
 - (NSRect)rowRect:(NSInteger)k { NSRect p = self.panelRect; return NSMakeRect(p.origin.x + 30, p.origin.y + 54 + 58 * k, p.size.width - 60, 50); }
 - (const Version *)version:(NSInteger)g { const GameDef *d = &GAMES[g]; NSInteger v = self->ver[g]; return &d->v[v < d->nv ? v : 0]; }
@@ -312,170 +317,195 @@ static void draw_sprite(NSImage *img, NSPoint c, CGFloat rx, CGFloat ry, CGFloat
     return s;
 }
 static int frames_drawn;
+static double ecg(double ph)   /* one beat of a heart's trace, 0..1 of the beat: the P wave, the spike, the T wave */
+{
+    double p = 0.10 * exp(-pow((ph - 0.18) / 0.035, 2)), q = -0.12 * exp(-pow((ph - 0.30) / 0.010, 2)), r = 1.0 * exp(-pow((ph - 0.32) / 0.012, 2));
+    double s2 = -0.25 * exp(-pow((ph - 0.345) / 0.012, 2)), t = 0.22 * exp(-pow((ph - 0.55) / 0.05, 2)); return p + q + r + s2 + t;
+}
 - (void)drawRect:(NSRect)dirty
 {
     NSRect b = self.bounds; double T = self.t; frames_drawn++;
     if (!self.cache) self.cache = [NSMutableDictionary dictionary];
     if (![self.cache[@"scale"] isEqual:@(self.scale)]) { [self.cache removeAllObjects]; self.cache[@"scale"] = @(self.scale); }
-    [rgb(0.035, 0.03, 0.035, 1) setFill]; NSRectFill(b);
+    if (![self.cache[@"typeGame"] isEqual:@(self.game)]) { self.cache[@"typeGame"] = @(self.game); self.cache[@"typeT"] = @(getenv("SHC_LAUNCHER_SHOT") ? T - 1.6 : T); }   /* (a shot: mid-sentence) */
+    [rgb(0.02, 0.018, 0.02, 1) setFill]; NSRectFill(b);
     BOOL fading = self.fade < 1 && self.prevGame != self.game;
-    if (fading) [self backdrop:self.prevGame alpha:1];
-    [self backdrop:self.game alpha:fading ? self.fade : 1];
-    [self.gradeImage drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationLow)}];
-    /* fog rolling low across the window; a red bloom behind the chosen card, breathing; a light that flickers */
-    NSImage *fog = [self sprite:@"fog" colors:@[rgb(0.55, 0.55, 0.58, 1), rgb(0.45, 0.45, 0.48, 0.4), rgb(0.4, 0.4, 0.42, 0)]];
-    for (int i = 0; i < 8; i++) {
-        double sp = 0.4 + hash01(i * 3.1), y = b.size.height * (0.45 + 0.5 * hash01(i * 7.7)), r = 160 + 160 * hash01(i * 1.3);
-        double x = fmod(hash01(i * 5.9) * (b.size.width + 2 * r) + T * 9 * sp, b.size.width + 2 * r) - r;
-        draw_sprite(fog, NSMakePoint(x, y + 10 * sin(T * 0.2 + i)), r, r * 0.45, 0.07 + 0.03 * sin(T * 0.3 + i));
-    }
-    NSRect cr = [self cardRect:self.game];
-    NSImage *bloom = [self sprite:@"bloom" colors:@[rgb(0.55, 0.04, 0.06, 0.9), rgb(0.2, 0.01, 0.02, 0.3), rgb(0, 0, 0, 0)]];
-    double flick = fmod(T, 7.3) < 0.12 || fmod(T + 2.1, 11.7) < 0.08 ? 0.35 : 1.0;
-    draw_sprite(bloom, NSMakePoint(NSMidX(cr), NSMidY(cr)), 380, 300, (0.30 + 0.12 * (0.5 + 0.5 * sin(T * 1.3))) * flick);
-    [[NSColor colorWithSRGBRed:0.75 green:0.78 blue:0.85 alpha:0.12] setStroke];      /* a cold rain */
-    NSBezierPath *rain = [NSBezierPath bezierPath]; rain.lineWidth = 1;
-    for (int i = 0; i < 70; i++) {
-        double sx = hash01(i * 1.618), sy = hash01(i * 2.414 + 7), sp = 0.7 + 0.6 * hash01(i * 0.577 + 3);
-        double y = fmod(sy * (b.size.height + 40) + T * 380 * sp, b.size.height + 40) - 20, x = fmod(sx * (b.size.width + 60) - T * 40 * sp, b.size.width + 60); if (x < 0) x += b.size.width + 60;
-        [rain moveToPoint:NSMakePoint(x, y)]; [rain lineToPoint:NSMakePoint(x - 2, y + 12)];
-    }
-    [rain stroke];
-    /* the box in its frame (the frame is in the still part) */
-    {
-        NSRect in = NSInsetRect(self.portraitRect, 8, 8);
-        [NSGraphicsContext saveGraphicsState]; NSRectClip(in); [rgb(0, 0, 0, 1) setFill]; NSRectFill(in);
-        NSImage *now = self.portraits[@(GAMES[self.game].id)], *was = fading ? self.portraits[@(GAMES[self.prevGame].id)] : nil;
-        if (was) draw_fill_z(was, in, 1, 1.0, 0.5, 0.4, NSImageInterpolationHigh);
-        draw_fill_z(now, in, was ? self.fade : 1, (CGFloat)(1.02 + 0.02 * sin(T * 0.21)), (CGFloat)(0.5 + 0.015 * sin(T * 0.13)), 0.4, NSImageInterpolationHigh);
-        [[[NSGradient alloc] initWithColorsAndLocations:rgb(0, 0, 0, 0), 0.7, rgb(0.02, 0, 0, 0.9), 1.0, nil] drawInRect:in angle:90];
-        [NSGraphicsContext restoreGraphicsState];
-    }
+    if (fading) [self backdrop:self.prevGame alpha:0.35];
+    [self backdrop:self.game alpha:(fading ? self.fade : 1) * 0.35];      /* the game's own screens, far back in the dark */
+    [rgb(0.02, 0.015, 0.02, 0.55) setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
+    [[[NSGradient alloc] initWithStartingColor:rgb(0, 0, 0, 0) endingColor:rgb(0, 0, 0, 0.85)] drawInRect:b relativeCenterPosition:NSZeroPoint];
     NSString *sig = self.signature;
     if (!self.cache[@"ui"] || ![self.cache[@"uiSig"] isEqual:sig]) { self.cache[@"ui"] = offscreen(b.size, self.scale, ^{ [self drawStill]; }); self.cache[@"uiSig"] = sig; }
     [(NSImage *)self.cache[@"ui"] drawInRect:b fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    if (!self.open) {                                                   /* Play's glow, breathing */
+    double flick = fmod(T, 7.3) < 0.12 || fmod(T + 2.1, 11.7) < 0.08 ? 0.55 : 1.0;   /* a bad bulb */
+    if (!self.open) {   /* Examine: the chosen game, turning slowly in the light */
+        NSRect in = self.portraitRect; NSImage *now = self.portraits[@(GAMES[self.game].id)];
+        double c = cos(T * 0.55); CGFloat sx = (CGFloat)(0.78 + 0.22 * fabs(c)), w = in.size.width * sx;
+        NSRect pr = NSMakeRect(NSMidX(in) - w / 2, in.origin.y, w, in.size.height);
+        NSImage *glow = [self sprite:@"exglow" colors:@[rgb(0.45, 0.05, 0.06, 0.55), rgb(0.15, 0.01, 0.02, 0.2), rgb(0, 0, 0, 0)]];
+        draw_sprite(glow, NSMakePoint(NSMidX(in), NSMidY(in)), 170, 150, 0.6 * flick);
+        if (now) { NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.9); sh.shadowBlurRadius = 14; sh.shadowOffset = NSMakeSize(0, -6);
+                   [NSGraphicsContext saveGraphicsState]; [sh set]; [now drawInRect:pr fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:fading ? self.fade : 1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+                   [NSGraphicsContext restoreGraphicsState];
+                   [NSGraphicsContext saveGraphicsState]; NSRectClip(pr);                  /* the light gliding over it as it turns */
+                   CGFloat lx = pr.origin.x + (CGFloat)((0.5 + 0.5 * sin(T * 0.55)) * pr.size.width);
+                   [[[NSGradient alloc] initWithColors:@[rgb(1, 1, 1, 0), rgb(1, 0.95, 0.9, 0.16), rgb(1, 1, 1, 0)]] drawInRect:NSMakeRect(lx - 50, pr.origin.y, 100, pr.size.height) angle:0];
+                   [rgb(0, 0, 0, 0.35 * (1 - fabs(c))) setFill]; NSRectFillUsingOperation(pr, NSCompositingOperationSourceOver);
+                   [NSGraphicsContext restoreGraphicsState]; }
+    }
+    if (!self.open) {   /* the condition monitor: a heart's trace running across, its head bright, its tail fading */
+        NSRect m = NSInsetRect(self.monitorRect, 10, 30); double bpm = 72, beat = 60 / bpm, span = 2.4;
+        NSBezierPath *tr = [NSBezierPath bezierPath]; tr.lineWidth = 2; tr.lineJoinStyle = NSLineJoinStyleRound;
+        int nseg = 160; NSColor *gc = rgb(0.35, 0.95, 0.40, 1); double head = fmod(T, span);
+        for (int k = 0; k <= nseg; k++) {
+            double u = (double)k / nseg, tt = T - span + u * span, v = ecg(fmod(tt / beat, 1.0));
+            NSPoint pt = NSMakePoint(m.origin.x + fmod(u * m.size.width + head / span * m.size.width, m.size.width), NSMaxY(m) - 6 - v * (m.size.height - 10));
+            if (k == 0 || pt.x < tr.currentPoint.x) [tr moveToPoint:pt]; else [tr lineToPoint:pt];
+        }
+        [NSGraphicsContext saveGraphicsState]; NSRectClip(NSInsetRect(m, -2, -6));
+        NSShadow *gl = [NSShadow new]; gl.shadowColor = [gc colorWithAlphaComponent:0.8]; gl.shadowBlurRadius = 6; [gl set];
+        [[gc colorWithAlphaComponent:0.85] setStroke]; [tr stroke];
+        CGFloat hx = m.origin.x + (CGFloat)(head / span) * m.size.width;   /* the sweep: dark just ahead of the head */
+        [rgb(0.01, 0.04, 0.02, 1) setFill]; NSRectFill(NSMakeRect(hx + 2, m.origin.y - 6, 18, m.size.height + 12));
+        [NSGraphicsContext restoreGraphicsState];
+        double hv = ecg(fmod(T / beat, 1.0)); NSPoint hp = NSMakePoint(hx, NSMaxY(m) - 6 - hv * (m.size.height - 10));
+        draw_sprite([self sprite:@"ecghead" colors:@[rgb(0.7, 1, 0.7, 1), rgb(0.3, 0.9, 0.35, 0.4), rgb(0, 0, 0, 0)]], hp, 8, 8, 1);
+        double pulse = exp(-pow(fmod(T / beat, 1.0) - 0.33, 2) / 0.004);
+        text(@"FINE", type(20, YES), [gc colorWithAlphaComponent:0.7 + 0.3 * pulse], NSMakeRect(NSMaxX(self.monitorRect) - 90, self.monitorRect.origin.y + 6, 78, 26), NSTextAlignmentRight);
+    }
+    if (!self.open) {
+        {   /* the item's file, typed out on the save room's typewriter */
+            static NSString *const blurbs[] = {@"S.T.A.R.S. Alpha Team flees into a mansion in the Arklay Mountains, and finds Umbrella's secret.",
+                                               @"A rookie cop and a student looking for her brother reach Raccoon City the night the dead take it.",
+                                               @"Jill Valentine fights her way out of Raccoon City's last days, hunted by the Nemesis.",
+                                               @"Regina's team lands on Ibis Island to bring back Dr. Kirk, and finds the facility overrun by dinosaurs.",
+                                               @"A rescue team crosses into a jungle out of time to find Edward City's lost research station."};
+            NSString *full = self.game < 5 ? blurbs[self.game] : @""; double tt = T - [self.cache[@"typeT"] doubleValue];
+            NSUInteger n = MIN(full.length, (NSUInteger)MAX(0.0, (tt - 0.25) * 38));
+            NSString *shown = [full substringToIndex:n]; NSRect f = self.fileRect;
+            NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineSpacing = 2;
+            NSDictionary *at = @{NSFontAttributeName: type(13, NO), NSForegroundColorAttributeName: paper(), NSParagraphStyleAttributeName: ps};
+            NSRect tr = NSMakeRect(f.origin.x + 16, f.origin.y + 58, f.size.width - 32, 44);
+            [shown drawWithRect:tr options:NSStringDrawingUsesLineFragmentOrigin attributes:at];
+            if (n < full.length || fmod(T, 1.0) < 0.5) {                      /* the carriage: a block where the next letter lands */
+                NSTextStorage *ts = [[NSTextStorage alloc] initWithString:shown.length ? shown : @" " attributes:at]; NSLayoutManager *lm = [NSLayoutManager new]; NSTextContainer *tc = [[NSTextContainer alloc] initWithSize:NSMakeSize(tr.size.width, 1000)];
+                tc.lineFragmentPadding = 0; [lm addTextContainer:tc]; [ts addLayoutManager:lm];
+                NSRect g = shown.length ? [lm boundingRectForGlyphRange:NSMakeRange(MAX(0, (NSInteger)[lm numberOfGlyphs] - 1), 1) inTextContainer:tc] : NSMakeRect(-8, 0, 0, 17);
+                [rgb(0.76, 0.09, 0.11, 0.9) setFill]; NSRectFill(NSMakeRect(tr.origin.x + NSMaxX(g) + 1, tr.origin.y + g.origin.y + 2, 7, 14));
+            }
+        }
+        {   /* the grid's cursor: brackets breathing round the chosen slot */
+            NSRect r = NSInsetRect([self cardRect:self.game], -4, -4); CGFloat a = (CGFloat)(0.55 + 0.45 * (0.5 + 0.5 * sin(T * 4.2)));
+            [[blood() colorWithAlphaComponent:a] setStroke];
+            for (int k = 0; k < 4; k++) { CGFloat sx = k % 2 ? -1 : 1, sy = k / 2 ? -1 : 1; NSPoint c = NSMakePoint(k % 2 ? NSMaxX(r) : r.origin.x, k / 2 ? NSMaxY(r) : r.origin.y);
+                NSBezierPath *br = [NSBezierPath bezierPath]; br.lineWidth = 3; [br moveToPoint:NSMakePoint(c.x, c.y + sy * 18)]; [br lineToPoint:c]; [br lineToPoint:NSMakePoint(c.x + sx * 18, c.y)]; [br stroke]; }
+        }
         NSRect p = self.playRect; NSImage *pg = [self sprite:@"playglow" colors:@[rgb(0.9, 0.08, 0.1, 0.7), rgb(0.5, 0.02, 0.04, 0.2), rgb(0, 0, 0, 0)]];
         draw_sprite(pg, NSMakePoint(NSMidX(p), NSMidY(p)), p.size.width * 0.8, p.size.height * 1.2, 0.20 + 0.18 * (0.5 + 0.5 * sin(T * 2.0)));
     }
+    if (flick < 1) { [rgb(0, 0, 0, 0.18) setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver); }
+}
+- (void)panelBox:(NSRect)r title:(NSString *)t   /* a box of the inventory: black glass, a fine grey rule, its name on the frame */
+{
+    [rgb(0.03, 0.025, 0.03, 0.88) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);
+    [rgb(0.55, 0.52, 0.50, 0.55) setStroke]; NSBezierPath *e = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 0.5, 0.5)]; e.lineWidth = 1; [e stroke];
+    [rgb(0.55, 0.52, 0.50, 0.25) setStroke]; NSBezierPath *e2 = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 3.5, 3.5)]; e2.lineWidth = 1; [e2 stroke];
+    if (t.length) { NSDictionary *a = @{NSFontAttributeName: type(10.5, YES), NSKernAttributeName: @2.4}; CGFloat w = [t sizeWithAttributes:a].width + 16;
+        [rgb(0.02, 0.018, 0.02, 1) setFill]; NSRectFill(NSMakeRect(r.origin.x + 12, r.origin.y - 7, w, 14));
+        ktext(t, type(10.5, YES), blood(), 2.4, NSMakeRect(r.origin.x + 20, r.origin.y - 8, w, 15), NSTextAlignmentLeft); }
 }
 - (void)drawStill
 {
     NSRect b = self.bounds; const GameDef *gd = &GAMES[self.game];
-    {   /* the box's frame: black, a blood-red hairline, brackets at the corners; its window clear */
-        NSRect pr = self.portraitRect, in = NSInsetRect(pr, 8, 8);
-        NSShadow *ps = [NSShadow new]; ps.shadowColor = rgb(0, 0, 0, 0.85); ps.shadowBlurRadius = 16; ps.shadowOffset = NSMakeSize(0, -5);
-        [NSGraphicsContext saveGraphicsState]; [ps set]; [rgb(0.05, 0.04, 0.045, 1) setFill]; NSRectFill(pr); [NSGraphicsContext restoreGraphicsState];
-        [[blood() colorWithAlphaComponent:0.7] setStroke]; NSBezierPath *e = [NSBezierPath bezierPathWithRect:NSInsetRect(pr, 0.5, 0.5)]; e.lineWidth = 1; [e stroke];
-        NSRectFillUsingOperation(in, NSCompositingOperationClear);
-        [blood() setStroke];
-        for (int k = 0; k < 4; k++) {
-            CGFloat sx = k % 2 ? -1 : 1, sy = k / 2 ? -1 : 1; NSPoint c = NSMakePoint(k % 2 ? NSMaxX(pr) - 3 : pr.origin.x + 3, k / 2 ? NSMaxY(pr) - 3 : pr.origin.y + 3);
-            NSBezierPath *br = [NSBezierPath bezierPath]; br.lineWidth = 2; [br moveToPoint:NSMakePoint(c.x, c.y + sy * 20)]; [br lineToPoint:c]; [br lineToPoint:NSMakePoint(c.x + sx * 20, c.y)]; [br stroke];
-        }
-        text(@(gd->tag).uppercaseString, type(13, YES), paper(), NSMakeRect(in.origin.x, NSMaxY(in) - 24, in.size.width, 18), NSTextAlignmentCenter);
-    }
-    /* the collection's name, small; the chosen game's own title (keyed out of its title screen), else its name */
-    text(@"S U R V I V A L   H O R R O R   ·   C L A S S I C S", type(11, YES), blood(), NSMakeRect(40, 22, 640, 16), NSTextAlignmentLeft);
+    ktext(@"SURVIVAL HORROR  ·  CLASSICS", type(10.5, YES), blood(), 3, NSMakeRect(40, 12, 400, 15), NSTextAlignmentLeft);
     NSImage *logo = self.logos[@(gd->id)];
-    { NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.85); sh.shadowBlurRadius = 10; [NSGraphicsContext saveGraphicsState]; [sh set];
-      if (logo) { NSSize ls = logo.size; CGImageRef lc = [logo CGImageForProposedRect:NULL context:nil hints:nil];
-                  CGFloat px = lc ? CGImageGetWidth(lc) : ls.width, lw = MIN(560, px * 0.62), lh = lw * ls.height / MAX(1, ls.width);   /* (at most ~1.6 of its pixels per pixel on Retina: sharp, not a blur) */
-                  if (lh > 150) { lh = 150; lw = lh * ls.width / MAX(1, ls.height); }
-                  [logo drawInRect:NSMakeRect(40, 190 - lh, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}]; }
-      else text(@(gd->title), title_font(52), paper(), NSMakeRect(40, 122, 640, 66), NSTextAlignmentLeft);
-      [NSGraphicsContext restoreGraphicsState]; }
-    [blood() setFill]; NSRectFill(NSMakeRect(40, 204, 4, 40));
-    ktext([NSString stringWithFormat:@"CAPCOM  ·  %s  ·  %@", gd->year, @(gd->tag).uppercaseString], type(14, YES), paper(), 2.4, NSMakeRect(54, 205, 620, 20), NSTextAlignmentLeft);
-    static NSString *const blurbs[] = {@"S.T.A.R.S. Alpha Team flees into a mansion in the Arklay Mountains, and finds Umbrella's secret.",
-                                       @"A rookie cop and a student looking for her brother reach Raccoon City the night the dead take it.",
-                                       @"Jill Valentine fights her way out of Raccoon City's last days, hunted by the Nemesis.",
-                                       @"Regina's team lands on Ibis Island to bring back Dr. Kirk, and finds the facility overrun by dinosaurs.",
-                                       @"A rescue team crosses into a jungle out of time to find Edward City's lost research station."};
-    text(self.game < 5 ? blurbs[self.game] : @"", type(12, NO), ash(), NSMakeRect(54, 226, 620, 18), NSTextAlignmentLeft);
-    /* the cards */
-    for (NSInteger k = 0; k < NG; k++) {
+    {   NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.85); sh.shadowBlurRadius = 10; [NSGraphicsContext saveGraphicsState]; [sh set];
+        if (logo) { NSSize ls = logo.size; CGImageRef lc = [logo CGImageForProposedRect:NULL context:nil hints:nil];
+                    CGFloat px = lc ? CGImageGetWidth(lc) : ls.width, lw = MIN(520, px * 0.62), lh = lw * ls.height / MAX(1, ls.width);
+                    if (lh > 104) { lh = 104; lw = lh * ls.width / MAX(1, ls.height); }
+                    [logo drawInRect:NSMakeRect(40, 136 - lh, lw, lh) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}]; }
+        else text(@(gd->title), title_font(50), paper(), NSMakeRect(40, 70, 600, 64), NSTextAlignmentLeft);
+        [NSGraphicsContext restoreGraphicsState]; }
+    ktext([NSString stringWithFormat:@"CAPCOM  ·  %s", gd->year], type(11, YES), ash(), 2.4, NSMakeRect(40, 140, 300, 15), NSTextAlignmentLeft);
+    {   /* the monitor's frame (its trace is live) */
+        NSRect m = self.monitorRect; [self panelBox:m title:@"CONDITION"];
+        NSRect g = NSInsetRect(m, 10, 30); [rgb(0.01, 0.04, 0.02, 1) setFill]; NSRectFill(NSInsetRect(g, -2, -6));
+        [rgb(0.2, 0.6, 0.25, 0.18) setFill];
+        for (CGFloat x = g.origin.x; x <= NSMaxX(g); x += 10) NSRectFillUsingOperation(NSMakeRect(x, g.origin.y - 6, 1, g.size.height + 12), NSCompositingOperationSourceOver);
+        for (CGFloat y = g.origin.y - 6; y <= NSMaxY(g) + 6; y += 10) NSRectFillUsingOperation(NSMakeRect(g.origin.x - 2, y, g.size.width + 4, 1), NSCompositingOperationSourceOver);
+        ktext(@"ECG", type(10, YES), ash(), 2, NSMakeRect(m.origin.x + 14, m.origin.y + 12, 60, 14), NSTextAlignmentLeft);
+    }
+    {   /* Examine's frame */
+        NSRect e = self.examineRect; [self panelBox:e title:@"EXAMINE"];
+        ktext(@(gd->tag).uppercaseString, type(12, YES), paper(), 2.4, NSMakeRect(e.origin.x, NSMaxY(e) - 24, e.size.width, 16), NSTextAlignmentCenter);
+    }
+    /* the item grid: each game a slot, its picture, its name, its state; one slot empty, as in the game */
+    [self panelBox:NSInsetRect(self.gridRect, -8, -8) title:@"ITEMS"];
+    for (NSInteger k = 0; k < 6; k++) {
         NSRect r = [self cardRect:k]; BOOL sel = k == self.game, hov = self.hover == HIT_CARD + k;
+        [rgb(0.06, 0.055, 0.06, 1) setFill]; NSRectFill(r);
+        [rgb(0.5, 0.48, 0.46, sel ? 0.9 : hov ? 0.7 : 0.35) setStroke]; NSBezierPath *fr = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 0.5, 0.5)]; fr.lineWidth = 1; [fr stroke];
+        if (k >= NG) { ktext(@"— EMPTY —", type(11, NO), rgb(0.4, 0.38, 0.37, 1), 2, NSMakeRect(r.origin.x, NSMidY(r) - 8, r.size.width, 16), NSTextAlignmentCenter); continue; }
         NSDictionary *en = [self entry:k]; BOOL have = en != nil, mounted = have && volume_ok(en[@"game"]);
-        [self glass:r radius:10 tint:rgb(1, 1, 1, sel ? 0.10 : hov ? 0.08 : 0.05) edge:sel ? blood() : hov ? rgb(0.8, 0.25, 0.25, 0.7) : rgb(1, 1, 1, 0.16) width:sel ? 2 : 1];
-        /* the game's own title screen, framed (its GOG icon when there is none) */
-        NSRect ir = NSMakeRect(r.origin.x + 10, r.origin.y + 10, r.size.width - 20, 100);
-        NSImage *shot = self.backdrop[@(GAMES[k].id)], *icon = self.art[@(GAMES[k].id)];
-        [NSGraphicsContext saveGraphicsState]; [[NSBezierPath bezierPathWithRoundedRect:ir xRadius:6 yRadius:6] addClip];
-        [rgb(0, 0, 0, 0.5) setFill]; NSRectFillUsingOperation(ir, NSCompositingOperationSourceOver);
-        if (shot) draw_fill(shot, ir, have ? (sel ? 1 : 0.8) : 0.3);
-        else if (icon) [icon drawInRect:NSMakeRect(NSMidX(ir) - 60, NSMidY(ir) - 60, 120, 120) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:have ? 1 : 0.3 respectFlipped:YES hints:nil];
-        if (!sel) { [rgb(0, 0, 0, 0.25) setFill]; NSRectFillUsingOperation(ir, NSCompositingOperationSourceOver); }
+        NSRect ir = NSMakeRect(r.origin.x + 6, r.origin.y + 6, r.size.width - 12, r.size.height - 40);
+        NSImage *shot = self.backdrop[@(GAMES[k].id)];
+        [NSGraphicsContext saveGraphicsState]; NSRectClip(ir); [rgb(0, 0, 0, 1) setFill]; NSRectFill(ir);
+        if (shot) draw_fill(shot, ir, have ? (sel ? 1 : 0.75) : 0.3);
+        if (!sel) { [rgb(0, 0, 0, hov ? 0.15 : 0.35) setFill]; NSRectFillUsingOperation(ir, NSCompositingOperationSourceOver); }
         [NSGraphicsContext restoreGraphicsState];
-        [rgb(1, 1, 1, 0.14) setStroke]; [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(ir, 0.5, 0.5) xRadius:6 yRadius:6] stroke];
-        if (GAMES[k].bonus) {                                   /* the bonus game: a ribbon over its picture */
-            NSRect rb = NSMakeRect(NSMaxX(ir) - 62, ir.origin.y + 8, 56, 18);
-            [blood() setFill]; [[NSBezierPath bezierPathWithRoundedRect:rb xRadius:4 yRadius:4] fill];
-            text(@"BONUS", type(11, YES), paper(), NSMakeRect(rb.origin.x, rb.origin.y + 2, rb.size.width, 14), NSTextAlignmentCenter);
+        if (GAMES[k].bonus) { NSRect rb = NSMakeRect(NSMaxX(ir) - 52, ir.origin.y + 6, 46, 15); [blood() setFill]; NSRectFill(rb);
+                              text(@"BONUS", type(9.5, YES), paper(), NSMakeRect(rb.origin.x, rb.origin.y + 1, rb.size.width, 13), NSTextAlignmentCenter); }
+        text(@(GAMES[k].title).uppercaseString, type(11.5, YES), have ? (sel ? paper() : rgb(0.8, 0.77, 0.72, 1)) : ash(), NSMakeRect(r.origin.x + 8, NSMaxY(r) - 31, r.size.width - 70, 16), NSTextAlignmentLeft);
+        NSString *st = !have ? (suite_cfg ? @"SET UP" : @"ABSENT") : !mounted ? @"INSERT" : @"READY";
+        NSColor *sc = !have ? ash() : !mounted ? rgb(0.95, 0.6, 0.3, 1) : rgb(0.45, 0.85, 0.45, 1);
+        [sc setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMaxX(r) - 60, NSMaxY(r) - 25, 5, 5)] fill];
+        ktext(st, type(9.5, YES), sc, 1.4, NSMakeRect(NSMaxX(r) - 52, NSMaxY(r) - 31, 46, 14), NSTextAlignmentRight);
+        text([NSString stringWithFormat:@"%s · %s", GAMES[k].tag, GAMES[k].year], type(9.5, NO), ash(), NSMakeRect(r.origin.x + 8, NSMaxY(r) - 16, r.size.width - 16, 13), NSTextAlignmentLeft);
+    }
+    {   /* the item's file: its name, its place and year; the text is typed live; its versions as the verbs under it */
+        NSRect f = self.fileRect; [self panelBox:f title:@"FILE"];
+        text(@(gd->title), title_font(22), paper(), NSMakeRect(f.origin.x + 16, f.origin.y + 14, f.size.width - 32, 28), NSTextAlignmentLeft);
+        ktext([NSString stringWithFormat:@"%@  ·  %s", @(gd->tag).uppercaseString, gd->year], type(10.5, YES), blood(), 2, NSMakeRect(f.origin.x + 16, f.origin.y + 40, f.size.width - 32, 14), NSTextAlignmentLeft);
+        const GameDef *d = gd;
+        if (d->nv > 1) for (NSInteger k = 0; k < d->nv; k++) {
+            NSRect r = [self verRect:k of:d->nv]; BOOL on = k == self->ver[self.game], hov = self.hover == HIT_VER + k;
+            [(on ? rgb(0.45, 0.04, 0.06, 0.9) : rgb(1, 1, 1, hov ? 0.10 : 0.05)) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);
+            [(on ? blood() : rgb(0.5, 0.48, 0.46, 0.5)) setStroke]; NSBezierPath *vb = [NSBezierPath bezierPathWithRect:NSInsetRect(r, 0.5, 0.5)]; vb.lineWidth = 1; [vb stroke];
+            BOOL have = self.installed[@(d->v[k].id)] != nil;
+            text([(on ? @"▸ " : @"") stringByAppendingString:@(d->v[k].label)], type(12, on), have ? paper() : ash(), NSMakeRect(r.origin.x + 4, r.origin.y + 5, r.size.width - 8, 17), NSTextAlignmentCenter);
         }
-        text(@(GAMES[k].title), type(sel ? 16 : 15, YES), have ? paper() : ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 116, r.size.width - 16, 22), NSTextAlignmentCenter);
-        text([NSString stringWithFormat:@"%s  ·  %s", GAMES[k].tag, GAMES[k].year], type(12, NO), ash(), NSMakeRect(r.origin.x + 8, r.origin.y + 139, r.size.width - 16, 18), NSTextAlignmentCenter);
-        NSString *st = !have ? (suite_cfg ? @"Not set up · Play sets it up" : @"Not installed") : !mounted ? [NSString stringWithFormat:@"Insert %@", volume_name(en[@"game"]) ?: @"its drive"] : @"Ready";
-        NSColor *sc = !have ? ash() : !mounted ? rgb(0.95, 0.6, 0.3, 1) : rgb(0.55, 0.85, 0.55, 1); NSFont *sf = type(11, YES);
-        CGFloat sw = [st.uppercaseString sizeWithAttributes:@{NSFontAttributeName: sf, NSKernAttributeName: @1.6}].width;
-        [sc setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMidX(r) - sw / 2 - 9, r.origin.y + 166, 5, 5)] fill];
-        ktext(st.uppercaseString, sf, sc, 1.6, NSMakeRect(NSMidX(r) - sw / 2 + 1, r.origin.y + 161, sw + 4, 16), NSTextAlignmentLeft);
-        if (sel) { [blood() setFill];                          /* the chosen card: blood-red brackets outside its corners */
-            for (int c = 0; c < 4; c++) { CGFloat x = c % 2 ? NSMaxX(r) + 2 : r.origin.x - 6, y = c / 2 ? NSMaxY(r) + 2 : r.origin.y - 6;
-                NSRectFill(NSMakeRect(c % 2 ? x - 10 : x, y, 14, 4)); NSRectFill(NSMakeRect(x, c / 2 ? y - 10 : y, 4, 14)); } }
     }
-    /* the chosen game's versions */
-    const GameDef *d = &GAMES[self.game];
-    if (d->nv > 1) for (NSInteger k = 0; k < d->nv; k++) {
-        NSRect r = [self verRect:k of:d->nv]; BOOL on = k == self->ver[self.game], hov = self.hover == HIT_VER + k;
-        [self glass:r radius:8 tint:on ? rgb(0.75, 0.06, 0.09, 0.55) : rgb(1, 1, 1, hov ? 0.10 : 0.06) edge:on ? blood() : nil width:1];
-        BOOL have = self.installed[@(d->v[k].id)] != nil;
-        text(@(d->v[k].label), type(15, on), have ? paper() : ash(), NSMakeRect(r.origin.x, r.origin.y + 8, r.size.width, 22), NSTextAlignmentCenter);
-    }
-    else text(@"", type(12, NO), ash(), NSZeroRect, NSTextAlignmentCenter);
-    (void)b;
-    /* tiles and buttons */
-    NSArray *tiles = @[@"Options", @"Mods", @"Saves", @"Game Files", @"Updates"];
+    /* the commands: as the inventory's own list, a cursor at the one under the pointer */
+    NSArray *tiles = @[@"OPTIONS", @"MODS", @"SAVES", @"GAME FILES", @"UPDATES"];
     NSUInteger nmods = 0, onmods = 0; hmods_counts(@(GAMES[self.game].id), &nmods, &onmods);
+    NSRect cl = NSMakeRect(642, 440, 286, 30 * NTILES + 30); [self panelBox:cl title:@"COMMANDS"];
     for (NSInteger k = 0; k < NTILES; k++) {
         NSRect r = [self tileRect:k]; BOOL hov = self.hover == HIT_OPTIONS + k || (k == 0 && self.open);
-        [self glass:r radius:8 tint:rgb(1, 1, 1, hov ? 0.11 : 0.06) edge:hov ? blood() : nil width:1];
-        [(hov ? blood() : [blood() colorWithAlphaComponent:0.55]) setFill]; NSRectFill(NSMakeRect(r.origin.x + 10, r.origin.y + 8, 3, r.size.height - 16));
-        NSString *value = k == 0 ? (self.opts.count ? self.opts[0].choices[self.opts[0].index][1] : @"Settings")
-                        : k == 1 ? (nmods ? [NSString stringWithFormat:@"%lu of %lu on", (unsigned long)onmods, (unsigned long)nmods] : @"Add Mods")
+        if (hov) { [rgb(0.45, 0.04, 0.06, 0.55) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver);
+                   NSBezierPath *ar = [NSBezierPath bezierPath]; [ar moveToPoint:NSMakePoint(r.origin.x + 8, NSMidY(r) - 5)]; [ar lineToPoint:NSMakePoint(r.origin.x + 15, NSMidY(r))]; [ar lineToPoint:NSMakePoint(r.origin.x + 8, NSMidY(r) + 5)]; [ar closePath]; [paper() setFill]; [ar fill]; }
+        ktext(tiles[k], type(12.5, YES), hov ? paper() : rgb(0.8, 0.77, 0.72, 1), 2, NSMakeRect(r.origin.x + 22, r.origin.y + 6, 140, 17), NSTextAlignmentLeft);
+        NSString *value = k == 0 ? (self.opts.count ? self.opts[0].choices[self.opts[0].index][1] : @"") : k == 1 ? (nmods ? [NSString stringWithFormat:@"%lu of %lu on", (unsigned long)onmods, (unsigned long)nmods] : @"Add")
                         : k == 4 ? @"Nightly" : @"Open";
-        ktext([tiles[k] uppercaseString], type(9.5, YES), hov ? rgb(1, 0.45, 0.42, 1) : ash(), 1.6, NSMakeRect(r.origin.x + 19, r.origin.y + 7, r.size.width - 24, 14), NSTextAlignmentLeft);
-        text(value, type(13, YES), k == 1 && onmods ? blood() : paper(), NSMakeRect(r.origin.x + 19, r.origin.y + 22, r.size.width - 24, 20), NSTextAlignmentLeft);
+        text(value, type(11.5, NO), k == 1 && onmods ? blood() : ash(), NSMakeRect(r.origin.x + 150, r.origin.y + 7, r.size.width - 160, 16), NSTextAlignmentRight);
     }
-    NSRect q = self.quitRect, p = self.playRect;
-    [self glass:q radius:8 tint:rgb(1, 1, 1, self.hover == HIT_QUIT ? 0.11 : 0.06) edge:nil width:1];
-    ktext(@"QUIT", type(15, YES), paper(), 3, NSMakeRect(q.origin.x, q.origin.y + 17, q.size.width, 24), NSTextAlignmentCenter);
-    NSDictionary *en = [self entry:self.game]; BOOL can = en && volume_ok(en[@"game"]); BOOL ph = self.hover == HIT_PLAY;
-    {   /* Play: blood-red, lit from above, a play mark, the game it opens */
-        NSBezierPath *pb = [NSBezierPath bezierPathWithRoundedRect:p xRadius:8 yRadius:8];
-        NSShadow *g = [NSShadow new]; g.shadowColor = rgb(0.9, 0.1, 0.12, can ? (ph ? 0.75 : 0.45) : 0); g.shadowBlurRadius = ph ? 20 : 12;
-        [NSGraphicsContext saveGraphicsState]; [g set]; [blood() setFill]; [pb fill]; [NSGraphicsContext restoreGraphicsState];
-        [NSGraphicsContext saveGraphicsState]; [pb addClip];
-        [[[NSGradient alloc] initWithStartingColor:can ? (ph ? rgb(0.95, 0.20, 0.20, 1) : rgb(0.84, 0.13, 0.15, 1)) : rgb(0.30, 0.12, 0.12, 1)
-                                       endingColor:can ? rgb(0.48, 0.03, 0.05, 1) : rgb(0.18, 0.07, 0.07, 1)] drawInRect:p angle:-90];
-        [rgb(1, 1, 1, 0.22) setFill]; NSRectFillUsingOperation(NSMakeRect(p.origin.x, p.origin.y, p.size.width, 1), NSCompositingOperationSourceOver);
-        [NSGraphicsContext restoreGraphicsState];
-        [rgb(1, 0.55, 0.5, can ? 0.7 : 0.2) setStroke]; NSBezierPath *pe = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(p, 0.5, 0.5) xRadius:8 yRadius:8]; pe.lineWidth = 1; [pe stroke];
-        NSBezierPath *tri = [NSBezierPath bezierPath]; CGFloat cx = p.origin.x + 26, cy = p.origin.y + 22;
-        [tri moveToPoint:NSMakePoint(cx - 5, cy - 8)]; [tri lineToPoint:NSMakePoint(cx + 8, cy)]; [tri lineToPoint:NSMakePoint(cx - 5, cy + 8)]; [tri closePath]; [(can ? paper() : ash()) setFill]; [tri fill];
-        ktext(@"PLAY", title_font(24), can ? paper() : ash(), 3, NSMakeRect(p.origin.x + 30, p.origin.y + 6, p.size.width - 36, 32), NSTextAlignmentCenter);
-        ktext(@(gd->title).uppercaseString, type(9.5, YES), rgb(1, 0.85, 0.82, can ? 0.85 : 0.4), 1.4, NSMakeRect(p.origin.x + 8, p.origin.y + 36, p.size.width - 16, 14), NSTextAlignmentCenter);
+    {   /* Exit and Use */
+        NSRect q = self.quitRect, p = self.playRect; NSDictionary *en = [self entry:self.game]; BOOL can = en && volume_ok(en[@"game"]), ph = self.hover == HIT_PLAY;
+        [self panelBox:q title:nil]; ktext(@"EXIT", type(15, YES), self.hover == HIT_QUIT ? paper() : rgb(0.8, 0.77, 0.72, 1), 3, NSMakeRect(q.origin.x, q.origin.y + 16, q.size.width, 20), NSTextAlignmentCenter);
+        [[[NSGradient alloc] initWithStartingColor:can ? (ph ? rgb(0.95, 0.20, 0.20, 1) : rgb(0.80, 0.11, 0.13, 1)) : rgb(0.28, 0.11, 0.11, 1) endingColor:can ? rgb(0.42, 0.03, 0.05, 1) : rgb(0.16, 0.06, 0.06, 1)] drawInRect:p angle:-90];
+        [rgb(1, 0.55, 0.5, can ? 0.75 : 0.2) setStroke]; NSBezierPath *pe = [NSBezierPath bezierPathWithRect:NSInsetRect(p, 0.5, 0.5)]; pe.lineWidth = 1; [pe stroke];
+        ktext(@"USE", title_font(24), can ? paper() : ash(), 4, NSMakeRect(p.origin.x, p.origin.y + 4, p.size.width, 30), NSTextAlignmentCenter);
+        ktext(@(gd->title).uppercaseString, type(9, YES), rgb(1, 0.85, 0.82, can ? 0.85 : 0.4), 1.2, NSMakeRect(p.origin.x + 6, p.origin.y + 32, p.size.width - 12, 13), NSTextAlignmentCenter);
+        NSString *hint = self.status.length ? self.status : @"←→ choose  ·  ↑↓ version  ·  Return uses  ·  Esc exits";
+        text(hint, type(11, NO), ash(), NSMakeRect(NSMaxX(q) + 14, q.origin.y + 17, NSMinX(p) - NSMaxX(q) - 28, 16), NSTextAlignmentCenter);
     }
-    if (self.status.length) text(self.status, type(12, NO), ash(), NSMakeRect(40, 636, b.size.width - 80, 18), NSTextAlignmentLeft);
-    /* the options panel */
+    (void)b;
     if (self.open) {
-        [rgb(0, 0, 0, 0.6) setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
-        NSRect pr = self.panelRect; [self glass:pr radius:14 tint:rgb(0.05, 0.04, 0.05, 0.55) edge:rgb(0.76, 0.09, 0.11, 0.8) width:1.5];
-        text(@"OPTIONS", type(16, YES), blood(), NSMakeRect(pr.origin.x, pr.origin.y + 18, pr.size.width, 22), NSTextAlignmentCenter);
+        [rgb(0, 0, 0, 0.7) setFill]; NSRectFillUsingOperation(b, NSCompositingOperationSourceOver);
+        NSRect pr = self.panelRect; [self panelBox:pr title:@"OPTIONS"];
         for (NSInteger k = 0; k < (NSInteger)self.opts.count; k++) {
             Opt *o = self.opts[k]; NSRect r = [self rowRect:k]; BOOL hov = self.hover == HIT_ROW + k;
-            if (hov) { [rgb(0.3, 0.05, 0.07, 0.35) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver); }
-            text(o.title, type(15, YES), paper(), NSMakeRect(r.origin.x + 12, r.origin.y + 4, 220, 22), NSTextAlignmentLeft);
+            if (hov) { [rgb(0.45, 0.04, 0.06, 0.45) setFill]; NSRectFillUsingOperation(r, NSCompositingOperationSourceOver); }
+            ktext(o.title.uppercaseString, type(13, YES), paper(), 1.6, NSMakeRect(r.origin.x + 12, r.origin.y + 5, 260, 20), NSTextAlignmentLeft);
             text(o.choices[o.index][1], type(15, YES), blood(), NSMakeRect(r.origin.x + 240, r.origin.y + 4, r.size.width - 252, 22), NSTextAlignmentRight);
             text(o.choices[o.index][2], type(11, NO), ash(), NSMakeRect(r.origin.x + 12, r.origin.y + 28, r.size.width - 24, 16), NSTextAlignmentLeft);
         }
