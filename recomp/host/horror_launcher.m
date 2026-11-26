@@ -340,18 +340,18 @@ static double ecg(double ph)   /* one beat of a heart's trace, 0..1 of the beat:
     double flick = fmod(T, 7.3) < 0.12 || fmod(T + 2.1, 11.7) < 0.08 ? 0.55 : 1.0;   /* a bad bulb */
     if (!self.open) {   /* Examine: the chosen game, turning slowly in the light */
         NSRect in = self.portraitRect; NSImage *now = self.portraits[@(GAMES[self.game].id)];
-        double c = cos(T * 0.55); CGFloat sx = (CGFloat)(0.78 + 0.22 * fabs(c)), w = in.size.width * sx;
-        NSRect pr = NSMakeRect(NSMidX(in) - w / 2, in.origin.y, w, in.size.height);
         NSImage *glow = [self sprite:@"exglow" colors:@[rgb(0.45, 0.05, 0.06, 0.55), rgb(0.15, 0.01, 0.02, 0.2), rgb(0, 0, 0, 0)]];
         draw_sprite(glow, NSMakePoint(NSMidX(in), NSMidY(in)), 170, 150, 0.6 * flick);
-        if (now) { NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.9); sh.shadowBlurRadius = 14; sh.shadowOffset = NSMakeSize(0, -6);
-                   [NSGraphicsContext saveGraphicsState]; [sh set]; [now drawInRect:pr fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:fading ? self.fade : 1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
-                   [NSGraphicsContext restoreGraphicsState];
-                   [NSGraphicsContext saveGraphicsState]; NSRectClip(pr);                  /* the light gliding over it as it turns */
-                   CGFloat lx = pr.origin.x + (CGFloat)((0.5 + 0.5 * sin(T * 0.55)) * pr.size.width);
-                   [[[NSGradient alloc] initWithColors:@[rgb(1, 1, 1, 0), rgb(1, 0.95, 0.9, 0.16), rgb(1, 1, 1, 0)]] drawInRect:NSMakeRect(lx - 50, pr.origin.y, 100, pr.size.height) angle:0];
-                   [rgb(0, 0, 0, 0.35 * (1 - fabs(c))) setFill]; NSRectFillUsingOperation(pr, NSCompositingOperationSourceOver);
-                   [NSGraphicsContext restoreGraphicsState]; }
+        if (now) {   /* its own shape kept: fitted whole in the frame, drifting a little closer and back, a light gliding over it */
+            NSSize is = now.size; CGFloat k = MIN(in.size.width / MAX(1, is.width), in.size.height / MAX(1, is.height)) * (CGFloat)(0.97 + 0.03 * sin(T * 0.4));
+            NSRect pr = NSMakeRect(NSMidX(in) - is.width * k / 2, NSMidY(in) - is.height * k / 2, is.width * k, is.height * k);
+            NSShadow *sh = [NSShadow new]; sh.shadowColor = rgb(0, 0, 0, 0.9); sh.shadowBlurRadius = 14; sh.shadowOffset = NSMakeSize(0, -6);
+            [NSGraphicsContext saveGraphicsState]; [sh set]; [now drawInRect:pr fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:fading ? self.fade : 1 respectFlipped:YES hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+            [NSGraphicsContext restoreGraphicsState];
+            [NSGraphicsContext saveGraphicsState]; NSRectClip(pr);
+            CGFloat lx = pr.origin.x + (CGFloat)((0.5 + 0.5 * sin(T * 0.45)) * pr.size.width);
+            [[[NSGradient alloc] initWithColors:@[rgb(1, 1, 1, 0), rgb(1, 0.95, 0.9, 0.14), rgb(1, 1, 1, 0)]] drawInRect:NSMakeRect(lx - 50, pr.origin.y, 100, pr.size.height) angle:0];
+            [NSGraphicsContext restoreGraphicsState]; }
     }
     if (!self.open) {   /* the condition monitor: a heart's trace running across, its head bright, its tail fading */
         NSRect m = NSInsetRect(self.monitorRect, 10, 30); double bpm = 72, beat = 60 / bpm, span = 2.4;
